@@ -1,0 +1,30 @@
+{
+  "has_extractable_text": true,
+  "text_character_count": 1541,
+  "has_vector_paths": true,
+  "vector_path_count": 53110,
+  "embedded_image_count": 1,
+  "embedded_image_area_ratio": 0.002,
+  "large_page_image_detected": false,
+  "recommended_pipeline": "vector_first",
+  "source_type": "vector_pdf",
+  "page_count": 1,
+  "font_count": 3,
+  "estimated_dpi": 96.0,
+  "confidence": 0.95,
+  "signals": [
+    "extractable_text",
+    "native_vector_paths",
+    "embedded_images"
+  ],
+  "pages": [
+    {
+      "page_number": 1,
+      "width_points": 2383.92,
+      "height_points": 1684.02,
+      "vector_path_count": 53110,
+      "embedded_image_count": 1,
+      "text_character_count": 1541
+    }
+  ]
+}

@@ -21,3 +21,20 @@
   - TP17256: PyMuPDF opened successfully; pages=1; page0=2383.9x1684.0 pt.
 - Deviations from plan.md: none for Phase 0.
 - Open risks: sample PDFs are ignored by git and must exist locally for tests; local verification used Python 3.13.13, which satisfies the 3.11+ requirement but is newer than the target minimum; later phases will need golden fixtures and careful tolerances because PDF internals can vary by producer.
+
+## Phase 1 Design Note — Source Classification — 2026-05-01
+- Approach: implement a deterministic PyMuPDF-based classifier that computes the section 4.1 signals, plus page count, font count, page DPI estimate, embedded image area ratio, source type, and recommended pipeline. `POST /api/documents` will persist the uploaded file under `storage/uploads/{id}/source.pdf`, render a low-resolution first-page preview PNG alongside it, run classification synchronously, and return a Pydantic response schema.
+- Heuristics: vector PDFs are selected when text and vector paths are both present with little image coverage; raster PDFs when a large embedded image dominates and text/vector signals are weak; hybrid PDFs when raster coverage and vector/text signals coexist; CAD files are extension-based. The classifier remains geometry-neutral and does not attempt extraction or AI validation in this phase.
+- Tests: add golden JSON fixtures under `tests/fixtures/golden/<pdf_stem>/phase1.json`, compare exact source type / recommended pipeline / booleans, and assert metric counts with tolerances where producer/library versions can shift slightly.
+- Deviations from plan.md: none intended for Phase 1.
+
+## Phase 1 — Source Classification — 2026-05-01
+- Approach: implemented synchronous upload/classification for PDFs using PyMuPDF signals from plan section 4. The upload route stores the original file under `storage/uploads/{id}/`, renders `preview.png`, and returns classification plus relative storage paths. All three samples are vector PDFs because they have native vector paths and little/no raster page coverage.
+- Files added: `app/api/routes/documents.py`, `app/models/classification.py`, `app/models/documents.py`, `app/services/classifier/pdf_classifier.py`, `app/services/storage/documents.py`, `app/services/storage/previews.py`, Phase 1 golden fixtures, and classifier/upload tests.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 5 tests; curl smoke upload to `POST /api/documents` returned HTTP 201 for TP17221 with `source_type=vector_pdf`, `recommended_pipeline=vector_first`, and `preview.png`.
+- Per-PDF metrics:
+  - TP17202: `vector_pdf`, `vector_first`, confidence=0.95, chars=91, vector_paths=4482, images=1, image_area_ratio=0.0041, fonts=2, estimated_dpi=96.0, elapsed=109.2 ms.
+  - TP17221: `vector_pdf`, `vector_first`, confidence=0.95, chars=4235, vector_paths=11407, images=0, image_area_ratio=0.0, fonts=3, estimated_dpi=null, elapsed=179.6 ms.
+  - TP17256: `vector_pdf`, `vector_first`, confidence=0.95, chars=1541, vector_paths=53110, images=1, image_area_ratio=0.002, fonts=3, estimated_dpi=96.0, elapsed=667.5 ms.
+- Deviations from plan.md: none for Phase 1. The low-res preview is rendered as a local relative path now; signed URLs are deferred until an external storage layer exists.
+- Open risks: all current samples classify as vector PDFs, so raster/hybrid thresholds are implemented but not yet validated against true raster fixtures; vector path counts may vary slightly across PyMuPDF versions and are locked to this environment in the golden fixtures.
