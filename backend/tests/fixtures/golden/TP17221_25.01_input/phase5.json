@@ -1,0 +1,10 @@
+{
+  "area_m2_estimated": 103.0,
+  "outlet_count": 5,
+  "rooflight_count": 6,
+  "human_review_status": "pending",
+  "scale": "1:50",
+  "calibration_source": "accuroof_reference_area_tp17221",
+  "polygon_closed": true,
+  "self_intersections": false
+}

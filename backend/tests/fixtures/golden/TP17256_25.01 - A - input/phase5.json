@@ -1,0 +1,10 @@
+{
+  "area_m2_estimated": 3.238,
+  "outlet_count": 0,
+  "rooflight_count": 0,
+  "human_review_status": "required",
+  "scale": "1:125",
+  "calibration_source": "detected_scale_text",
+  "polygon_closed": true,
+  "self_intersections": false
+}

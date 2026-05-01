@@ -26,10 +26,13 @@ def main() -> None:
         candidates_response.raise_for_status()
         validation_response = client.post(f"/api/documents/{data['document_id']}/validate")
         validation_response.raise_for_status()
+        export_response = client.post(f"/api/documents/{data['document_id']}/export")
+        export_response.raise_for_status()
 
     vector_data = vector_response.json()
     candidates_data = candidates_response.json()
     validation_data = validation_response.json()
+    export_data = export_response.json()
     print(
         json.dumps(
             {
@@ -44,6 +47,8 @@ def main() -> None:
                 "top_candidate_score": candidates_data["summary"]["top_candidate_score"],
                 "selected_candidate_id": validation_data["validation"]["selected_candidate_id"],
                 "validation_confidence": validation_data["validation"]["confidence"],
+                "area_m2": export_data["production_schema"]["target_area"]["area_m2_estimated"],
+                "exports": export_data["exports"],
                 "preview": data["preview_png_path"],
             },
             separators=(",", ":"),

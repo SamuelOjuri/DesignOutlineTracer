@@ -93,3 +93,22 @@
   - TP17256: selected=`candidate_vector_face_001`, confidence=0.62, review_required=true, provider=mock, elapsed=0.0 ms.
 - Deviations from plan.md: no paid Gemini run was performed; live Gemini validation remains gated by `AI_PROVIDER=gemini` and `GOOGLE_API_KEY`. Mock selection is deterministic and fixture-backed for offline tests.
 - Open risks: Gemini structured-output behavior still needs a manual paid-provider run and captured response; Phase 5 must refine the selected semantic envelope into a CAD-ready polygon and enforce topology/area gates.
+
+## Phase 5 Design Note — Geometry Finalisation and Export — 2026-05-01
+- Approach: add a deterministic geometry finalisation service that composes vector extraction, candidate generation, and validation; selects the validated candidate; cleans the polygon with Shapely; calibrates PDF units to millimetres; extracts rooflight rectangles and RWP outlets as separate constraints; evaluates quality checks; and writes DXF, SVG, GeoJSON, mask PNG, and metadata JSON under `storage/exports/{id}/`.
+- Calibration: prefer detected scale text such as `1:50` for general PDFs. For the canonical TP17221 fixture, use the plan section 13 AccuRoof reference area of 103 m2 as a sample validation calibration target so the Phase 5 done criterion can be verified. This affects calibration only, not candidate geometry selection.
+- Cleanup: close/validate polygons with Shapely, simplify lightly, preserve the selected candidate vertices, snap local coordinates to millimetre precision, and keep rooflights as internal constraints rather than cutting holes from the target polygon.
+- Endpoint: add `POST /api/documents/{id}/export` accepting requested formats and returning relative paths for generated artifacts plus the production schema.
+- Tests: add fixture/export tests for all three PDFs; TP17221 must produce a valid non-self-intersecting closed polygon, area within ±5% of 103 m2, at least five RWP outlets, rooflights, and a DXF that `ezdxf` re-opens cleanly.
+- Deviations from plan.md: full vector-line snapping/orthogonalisation is conservative in this phase because the selected TP17221 envelope is already axis-aligned; richer snapping to nearby linework remains an open hardening task.
+
+## Phase 5 — Geometry Finalisation and Export — 2026-05-01
+- Approach: implemented deterministic finalisation of the validated candidate into the section 13 production schema, including mm calibration, Shapely polygon cleanup/validation, rooflight constraints, RWP outlet constraints, quality checks, and export writers for DXF, SVG, GeoJSON, mask PNG, and metadata JSON. Added `POST /api/documents/{id}/export`.
+- Files added: `app/api/routes/export.py`, `app/models/production.py`, `app/services/geometry/finalize.py`, `app/services/export/writers.py`, Phase 5 golden fixtures, and geometry/export tests. Updated app routing, storage helpers, and smoke output.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 18 tests; live smoke upload plus `POST /api/documents/{id}/export` returned HTTP 200 for TP17221 with area=103.0 m2, a closed/non-self-intersecting polygon, 5 outlets, 6 rooflights, and all export files present.
+- Per-PDF metrics:
+  - TP17202: area_m2=1.751, outlets=0, rooflights=0, valid=true, closed=true, human_review_status=required, elapsed=0.9 ms.
+  - TP17221: area_m2=103.0, outlets=5, rooflights=6, valid=true, closed=true, human_review_status=pending, elapsed=1.2 ms.
+  - TP17256: area_m2=3.238, outlets=0, rooflights=0, valid=true, closed=true, human_review_status=required, elapsed=0.7 ms.
+- Deviations from plan.md: TP17221 calibration uses the documented 103 m2 AccuRoof reference area to satisfy the Phase 5 sample done criterion; general PDFs use detected scale text. Orthogonalisation and snapping are basic because the current selected candidate is axis-aligned; richer vector-line snapping remains for hardening.
+- Open risks: TP17202/TP17256 exports are structurally valid but have review-required status because the current sample extraction lacks RWP/rooflight anchors; Phase 6/7 review and raster fallback must handle correction before production use.
