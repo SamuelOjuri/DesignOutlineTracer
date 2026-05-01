@@ -1,0 +1,105 @@
+{
+  "summary": {
+    "candidate_count": 31,
+    "top_candidate_id": "candidate_semantic_roof_scope_01",
+    "top_candidate_score": 0.924,
+    "roof_scope_candidate_rank": 1
+  },
+  "top_candidates": [
+    {
+      "id": "candidate_semantic_roof_scope_01",
+      "rank": 1,
+      "geometry_source": "semantic_roof_scope_envelope",
+      "score": 0.924,
+      "area_pdf_units": 2017737.57,
+      "features": {
+        "contains_rooflights": true,
+        "rooflight_count": 6,
+        "contains_rwp_labels": true,
+        "rwp_label_count": 5,
+        "near_tapered_insulation_note": true,
+        "near_fall_arrows": true,
+        "overlaps_title_block": false,
+        "overlaps_pv_array": false,
+        "geometry_valid": true,
+        "plausible_area": true
+      }
+    },
+    {
+      "id": "candidate_vector_face_002",
+      "rank": 2,
+      "geometry_source": "vector_polygonized_face",
+      "score": 0.62,
+      "area_pdf_units": 20082.777,
+      "features": {
+        "contains_rooflights": false,
+        "rooflight_count": 0,
+        "contains_rwp_labels": true,
+        "rwp_label_count": 1,
+        "near_tapered_insulation_note": false,
+        "near_fall_arrows": false,
+        "overlaps_title_block": false,
+        "overlaps_pv_array": false,
+        "geometry_valid": true,
+        "plausible_area": true
+      }
+    },
+    {
+      "id": "candidate_vector_face_010",
+      "rank": 3,
+      "geometry_source": "vector_polygonized_face",
+      "score": 0.62,
+      "area_pdf_units": 10294.34,
+      "features": {
+        "contains_rooflights": false,
+        "rooflight_count": 0,
+        "contains_rwp_labels": true,
+        "rwp_label_count": 1,
+        "near_tapered_insulation_note": false,
+        "near_fall_arrows": false,
+        "overlaps_title_block": false,
+        "overlaps_pv_array": false,
+        "geometry_valid": true,
+        "plausible_area": true
+      }
+    },
+    {
+      "id": "candidate_vector_face_017",
+      "rank": 4,
+      "geometry_source": "vector_polygonized_face",
+      "score": 0.62,
+      "area_pdf_units": 6987.158,
+      "features": {
+        "contains_rooflights": false,
+        "rooflight_count": 0,
+        "contains_rwp_labels": true,
+        "rwp_label_count": 1,
+        "near_tapered_insulation_note": false,
+        "near_fall_arrows": false,
+        "overlaps_title_block": false,
+        "overlaps_pv_array": false,
+        "geometry_valid": true,
+        "plausible_area": true
+      }
+    },
+    {
+      "id": "candidate_vector_face_004",
+      "rank": 5,
+      "geometry_source": "vector_polygonized_face",
+      "score": 0.59,
+      "area_pdf_units": 10901.25,
+      "features": {
+        "contains_rooflights": false,
+        "rooflight_count": 0,
+        "contains_rwp_labels": false,
+        "rwp_label_count": 0,
+        "near_tapered_insulation_note": false,
+        "near_fall_arrows": false,
+        "overlaps_title_block": false,
+        "overlaps_pv_array": false,
+        "geometry_valid": true,
+        "plausible_area": true
+      }
+    }
+  ]
+}

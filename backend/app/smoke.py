@@ -22,8 +22,11 @@ def main() -> None:
     with TestClient(app) as client:
         vector_response = client.get(f"/api/documents/{data['document_id']}/vector")
         vector_response.raise_for_status()
+        candidates_response = client.get(f"/api/documents/{data['document_id']}/candidates")
+        candidates_response.raise_for_status()
 
     vector_data = vector_response.json()
+    candidates_data = candidates_response.json()
     print(
         json.dumps(
             {
@@ -34,6 +37,8 @@ def main() -> None:
                 "text_blocks": vector_data["summary"]["text_block_count"],
                 "rwp_labels": vector_data["summary"]["rwp_labels"],
                 "rooflight_rectangles": vector_data["summary"]["rooflight_rectangle_count"],
+                "top_candidate_id": candidates_data["summary"]["top_candidate_id"],
+                "top_candidate_score": candidates_data["summary"]["top_candidate_score"],
                 "preview": data["preview_png_path"],
             },
             separators=(",", ":"),

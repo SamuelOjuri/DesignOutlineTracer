@@ -56,3 +56,21 @@
   - TP17256: text_blocks=53, vector_primitives=58348, sheet_regions=3, rwp_labels=0, rooflight_rectangles=0, elapsed=1574.1 ms.
 - Deviations from plan.md: Gemini refinement is not implemented yet; Phase 2 keeps classification behind the mock AI provider until Phase 4 introduces Gemini. Rooflight rectangle detection is heuristic vector linework detection gated by rooflight text.
 - Open risks: sheet region detection is intentionally coarse and may need refinement when Phase 3 candidate polygons depend on viewport exclusion; TP17256 has high primitive volume, so later graph construction needs filtering before polygonization.
+
+## Phase 3 Design Note — Candidate Polygon Generation — 2026-05-01
+- Approach: build candidates from Phase 2 vector output without using AI coordinates. The primary path polygonizes filtered vector line segments inside the drawing viewport using Shapely; for TP17221-style drawings, a semantic envelope candidate is also generated from rooflight rectangles plus RWP label anchors and fall-path notes so the flat-roof scope is represented even when CAD linework is fragmented by annotations/hatches.
+- Feature flags: compute the section 6.5 features per candidate, including rooflight containment, RWP label containment/proximity, tapered/fall note proximity, title-block overlap, PV text overlap, geometry validity, and plausible area. Title block, notes, and annotation regions are excluded from polygonization.
+- Scoring: add `services/scoring/` with the section 9 weighted profile. Vector candidates get higher linework/validity weight; semantic-envelope candidates are allowed but scored lower on linework agreement. Title block/PV/existing pitched roof overlap is penalized heavily so metadata regions cannot outrank roof-scope candidates.
+- Tests: golden count fixtures for all three PDFs plus TP17221 assertions that a roof-scope candidate with rooflights and all five RWP labels appears in the top three, while title-block-overlapping candidates never outrank it.
+- Deviations from plan.md: near-closed graph repair is conservative in this phase; candidate generation favors deterministic linework polygonization plus semantic envelope candidates over complex topology repair until Phase 5 cleanup.
+
+## Phase 3 — Candidate Polygon Generation — 2026-05-01
+- Approach: implemented Shapely-based candidate generation from filtered axis-aligned vector linework, plus a deterministic roof-scope envelope candidate from rooflight rectangles, RWP labels, and fall/tapered notes. Added weighted scoring from plan section 9 and feature flags from section 6.5.
+- Files added: `app/api/routes/candidates.py`, `app/models/candidates.py`, `app/services/geometry/candidates.py`, `app/services/scoring/candidate_scoring.py`, Phase 3 golden fixtures, and candidate generation/endpoint tests. Updated app routing and smoke output.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 11 tests; live smoke upload plus `GET /api/documents/{id}/candidates` returned HTTP 200 for TP17221 with 31 candidates, top candidate `candidate_semantic_roof_scope_01`, score=0.924, RWP count=5, rooflight count=6.
+- Per-PDF metrics:
+  - TP17202: candidates=30, top=`candidate_vector_face_001`, score=0.59, roof_scope_rank=null, top_area=1399.323 pdf units, top_rwp=0, top_rooflights=0, elapsed=24.5 ms.
+  - TP17221: candidates=31, top=`candidate_semantic_roof_scope_01`, score=0.924, roof_scope_rank=1, top_area=2017737.57 pdf units, top_rwp=5, top_rooflights=6, elapsed=176.8 ms.
+  - TP17256: candidates=8, top=`candidate_vector_face_001`, score=0.54, roof_scope_rank=null, top_area=1665.15 pdf units, top_rwp=0, top_rooflights=0, elapsed=35.0 ms.
+- Deviations from plan.md: near-closed graph repair is limited; the canonical TP17221 roof-scope candidate is an anchor-derived vector semantic envelope rather than a pure closed-face result because the PDF linework is fragmented by hatches/annotations. Final coordinates remain geometry-derived and will be cleaned/snap-refined in Phase 5.
+- Open risks: the semantic envelope is intentionally generous and must be refined by Phase 4 validation and Phase 5 geometry cleanup; TP17202/TP17256 lack RWP/rooflight semantic anchors in the current extraction, so their top candidates are linework faces only.
