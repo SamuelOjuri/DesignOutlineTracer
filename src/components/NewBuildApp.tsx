@@ -7,6 +7,17 @@ import { NewBuildOutletCanvas } from "./newbuild/NewBuildOutletCanvas";
 import { NewBuildSidebar } from "./newbuild/NewBuildSidebar";
 import { RoofIllustrationCanvas } from "./newbuild/RoofIllustrationCanvas";
 import { ProjectDetailsForm } from "./ProjectDetailsForm";
+import { useToast } from "@/hooks/use-toast";
+import {
+  BackendProductionSchema,
+  checkBackendHealth,
+  runAutomatedExtraction,
+} from "@/integrations/backend/client";
+import {
+  backendCandidateToCanvasOutline,
+  backendOutletsToCanvas,
+  backendRooflightsToCanvasHoles,
+} from "@/integrations/backend/coords";
 import {
   NewBuildStep,
   Outlet,
@@ -16,7 +27,7 @@ import {
   DrawingScale,
   DrainageEdge,
 } from "@/types/roof";
-import { FileUp } from "lucide-react";
+import { FileUp, Loader2, Wand2 } from "lucide-react";
 
 const PAPER_SIZES_MM: Record<string, { w: number; h: number }> = {
   A0: { w: 841, h: 1189 },
@@ -51,8 +62,11 @@ function scalePoints(points: Point[], factor: number): Point[] {
 }
 
 export const NewBuildApp = () => {
+  const backendEnabled = import.meta.env.VITE_ENABLE_BACKEND === "1" || import.meta.env.VITE_ENABLE_BACKEND === "true";
+  const { toast } = useToast();
   const [currentStep, setCurrentStep] = useState<NewBuildStep>("upload");
   const [pdfCanvas, setPdfCanvas] = useState<HTMLCanvasElement | null>(null);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [roofOutlines, setRoofOutlines] = useState<Point[][]>([]);
   const [interiorHoles, setInteriorHoles] = useState<Point[][]>([]);
   const [drawingScale, setDrawingScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
@@ -63,6 +77,8 @@ export const NewBuildApp = () => {
   const [drainageEdges, setDrainageEdges] = useState<DrainageEdge[]>([]);
   const [outletMode, setOutletMode] = useState<'add-outlets' | 'drainage-edge'>('add-outlets');
   const [showAdditionalUpload, setShowAdditionalUpload] = useState(false);
+  const [isExtracting, setIsExtracting] = useState(false);
+  const [backendExtraction, setBackendExtraction] = useState<BackendProductionSchema | null>(null);
   const savedOutlinesRef = useRef<Point[][]>([]);
   const savedHolesRef = useRef<Point[][]>([]);
   const savedOutletsRef = useRef<Outlet[]>([]);
@@ -86,6 +102,7 @@ export const NewBuildApp = () => {
 
   const handlePdfRendered = (canvas: HTMLCanvasElement) => {
     setPdfCanvas(canvas);
+    setBackendExtraction(null);
     if (!baseDrawingScale) {
       setBaseDrawingScale({ ...drawingScale });
       setBasePdfCanvas(canvas);
@@ -166,7 +183,59 @@ export const NewBuildApp = () => {
       polygonPoints: points,
     }));
 
-  const stepOrder: NewBuildStep[] = ["upload", "paint", "outlets", "details"];
+  const stepOrder: NewBuildStep[] = backendEnabled
+    ? ["upload", "classify", "paint", "outlets", "details"]
+    : ["upload", "paint", "outlets", "details"];
+
+  const continueManually = () => {
+    setBackendExtraction(null);
+    setCurrentStep("paint");
+  };
+
+  const handleAutomatedExtraction = async () => {
+    if (!pdfFile || !pdfCanvas) return;
+
+    setIsExtracting(true);
+    try {
+      const backendReachable = await checkBackendHealth();
+      if (!backendReachable) {
+        toast({
+          title: "Backend unavailable",
+          description: "Continuing with manual roof area selection.",
+        });
+        continueManually();
+        return;
+      }
+
+      const result = await runAutomatedExtraction(pdfFile);
+      const schema = result.exportResult.production_schema;
+      const outline = backendCandidateToCanvasOutline(result.candidate, pdfCanvas, schema);
+      const holes = backendRooflightsToCanvasHoles(result.candidate, pdfCanvas, schema);
+      const extractedOutlets = backendOutletsToCanvas(result.candidate, pdfCanvas, schema);
+
+      setRoofOutlines(outline.length > 2 ? [outline] : []);
+      setInteriorHoles(holes);
+      setOutlets(extractedOutlets);
+      setDrainageEdges([]);
+      setBackendExtraction(schema);
+      setCurrentStep("paint");
+
+      toast({
+        title: "Automated extraction complete",
+        description: `Loaded ${extractedOutlets.length} outlets and ${holes.length} rooflights for review.`,
+      });
+    } catch (error) {
+      console.error("Automated extraction failed:", error);
+      toast({
+        title: "Automated extraction failed",
+        description: "Continuing with the existing manual workflow.",
+        variant: "destructive",
+      });
+      continueManually();
+    } finally {
+      setIsExtracting(false);
+    }
+  };
 
   const handleNext = () => {
     const idx = stepOrder.indexOf(currentStep);
@@ -249,6 +318,8 @@ export const NewBuildApp = () => {
     switch (currentStep) {
       case "upload":
         return pdfCanvas !== null;
+      case "classify":
+        return true;
       case "paint":
         return roofOutlines.length > 0 && roofOutlines.some((o) => o.length > 2);
       case "outlets":
@@ -264,6 +335,46 @@ export const NewBuildApp = () => {
     switch (currentStep) {
       case "upload":
         return null;
+      case "classify":
+        return (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="max-w-xl text-center space-y-4">
+              <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
+                <Wand2 className="w-6 h-6 text-primary" />
+              </div>
+              <div>
+                <h3 className="text-xl font-semibold">Automated roof extraction</h3>
+                <p className="text-sm text-muted-foreground mt-2">
+                  Use the backend pipeline to extract the roof outline, rooflights, and RWP outlets,
+                  then review and adjust them in the existing tools.
+                </p>
+              </div>
+              {backendExtraction && (
+                <div className="p-3 bg-muted rounded-lg text-sm text-muted-foreground">
+                  Last automated result: {backendExtraction.target_area.area_m2_estimated}m²,
+                  review status {backendExtraction.quality_checks.human_review_status}.
+                </div>
+              )}
+              <div className="flex gap-3 justify-center">
+                <Button
+                  onClick={handleAutomatedExtraction}
+                  disabled={!pdfFile || !pdfCanvas || isExtracting}
+                >
+                  {isExtracting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  Use Automated Extraction
+                </Button>
+                <Button variant="outline" onClick={continueManually} disabled={isExtracting}>
+                  Continue Manually
+                </Button>
+              </div>
+              {!backendEnabled && (
+                <p className="text-xs text-muted-foreground">
+                  Backend integration is disabled. Set VITE_ENABLE_BACKEND=1 to enable it.
+                </p>
+              )}
+            </div>
+          </div>
+        );
       case "paint":
         return pdfCanvas ? (
           <PaintBucketCanvas
@@ -294,7 +405,6 @@ export const NewBuildApp = () => {
             </div>
           );
         }
-      case "outlets":
         return pdfCanvas ? (
           <NewBuildOutletCanvas
             pdfCanvas={pdfCanvas}
@@ -319,7 +429,14 @@ export const NewBuildApp = () => {
 
   const renderSidebar = () => {
     if (currentStep === "upload") {
-      return <PdfUpload onPdfRendered={handlePdfRendered} drawingScale={drawingScale} onDrawingScaleChange={setDrawingScale} />;
+      return (
+        <PdfUpload
+          onPdfRendered={handlePdfRendered}
+          drawingScale={drawingScale}
+          onDrawingScaleChange={setDrawingScale}
+          onPdfFileSelected={setPdfFile}
+        />
+      );
     }
     if (currentStep === "details") {
       return (
@@ -330,6 +447,7 @@ export const NewBuildApp = () => {
           outline={buildOutlines()}
           outlets={outlets}
           penetrations={[]}
+          backendExtraction={backendExtraction}
         />
       );
     }
@@ -410,7 +528,7 @@ export const NewBuildApp = () => {
               Upload a PDF to get started
             </p>
           )}
-          {(currentStep === "paint" || currentStep === "outlets") &&
+          {(currentStep === "classify" || currentStep === "paint" || currentStep === "outlets") &&
             renderMainContent()}
           {currentStep === "details" && (
             <RoofIllustrationCanvas

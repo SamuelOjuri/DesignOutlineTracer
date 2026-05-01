@@ -4,12 +4,23 @@ interface NewBuildStepHeaderProps {
   currentStep: NewBuildStep;
 }
 
-const steps = [
-  { key: 'upload', label: 'Step 1: Upload Roof Plan', number: 1 },
-  { key: 'paint', label: 'Step 2: Define Roof Area', number: 2 },
-  { key: 'outlets', label: 'Step 3: Place Outlets', number: 3 },
-  { key: 'details', label: 'Step 4: Project Details', number: 4 },
-];
+const backendEnabled =
+  import.meta.env.VITE_ENABLE_BACKEND === "1" || import.meta.env.VITE_ENABLE_BACKEND === "true";
+
+const steps = backendEnabled
+  ? [
+      { key: "upload", label: "Step 1: Upload Roof Plan", number: 1 },
+      { key: "classify", label: "Step 2: Extract or Manual", number: 2 },
+      { key: "paint", label: "Step 3: Define Roof Area", number: 3 },
+      { key: "outlets", label: "Step 4: Place Outlets", number: 4 },
+      { key: "details", label: "Step 5: Project Details", number: 5 },
+    ]
+  : [
+      { key: "upload", label: "Step 1: Upload Roof Plan", number: 1 },
+      { key: "paint", label: "Step 2: Define Roof Area", number: 2 },
+      { key: "outlets", label: "Step 3: Place Outlets", number: 3 },
+      { key: "details", label: "Step 4: Project Details", number: 4 },
+    ];
 
 export const NewBuildStepHeader = ({ currentStep }: NewBuildStepHeaderProps) => {
   return (
@@ -35,7 +46,7 @@ export const NewBuildStepHeader = ({ currentStep }: NewBuildStepHeaderProps) => 
               className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
                 step.key === currentStep
                   ? 'bg-primary text-primary-foreground'
-                  : step.number < steps.find(s => s.key === currentStep)?.number!
+                  : step.number < (steps.find(s => s.key === currentStep)?.number ?? 0)
                   ? 'bg-accent text-accent-foreground'
                   : 'bg-muted text-muted-foreground'
               }`}

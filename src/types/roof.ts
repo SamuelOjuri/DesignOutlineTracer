@@ -63,7 +63,7 @@ export interface Point {
   
   export type DrawingStep = 'outline' | 'outlets' | 'penetrations' | 'details';
   
-  export type NewBuildStep = 'upload' | 'paint' | 'outlets' | 'details';
+  export type NewBuildStep = 'upload' | 'classify' | 'paint' | 'outlets' | 'details';
   
   export interface DrainageEdge {
     outlineIndex: number;

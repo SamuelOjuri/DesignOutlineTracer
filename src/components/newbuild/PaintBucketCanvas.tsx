@@ -508,8 +508,8 @@ export const PaintBucketCanvas = ({
     if (activeTool === "adjust") {
       const drag = adjustDragRef.current;
       if (drag) {
-        let dx = pos.x - drag.startX;
-        let dy = pos.y - drag.startY;
+        const dx = pos.x - drag.startX;
+        const dy = pos.y - drag.startY;
 
         if (drag.type === "vertex") {
           let newX = drag.originalOutlines[drag.outlineIndex][drag.vertexIndex!].x + dx;
@@ -837,7 +837,7 @@ export const PaintBucketCanvas = ({
     }
   }, []);
 
-  const hasAnyFill = fillCount > 0;
+  const hasAnyFill = fillCount > 0 || roofOutlines.some((outline) => outline.length > 2);
   const canUndo = maskHistoryRef.current.length > 0;
 
   return (
@@ -926,7 +926,7 @@ export const PaintBucketCanvas = ({
       <div
         ref={containerRef}
         className="flex-1 overflow-auto border border-border rounded-lg bg-muted/30"
-        onWheel={handleWheel as any}
+        onWheel={handleWheel}
       >
         <div className="min-w-fit min-h-fit p-2 relative">
           <canvas ref={canvasRef} className="block mx-auto" />

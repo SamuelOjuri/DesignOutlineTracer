@@ -100,3 +100,25 @@ def test_export_endpoint_writes_all_formats_and_dxf_round_trips(
     ezdxf.readfile(tmp_path / exports["dxf"])  # type: ignore[attr-defined]
     assert data["production_schema"]["target_area"]["area_m2_estimated"] == 103.0
     assert data["production_schema"]["quality_checks"]["self_intersections"] is False
+
+
+def test_export_endpoint_uses_original_pdf_after_validation_overlay(
+    tp17221_pdf: Path,
+    tmp_path: Path,
+) -> None:
+    app = create_app(Settings(storage_root=tmp_path, ai_provider="mock"))
+
+    with TestClient(app) as client, tp17221_pdf.open("rb") as upload:
+        upload_response = client.post(
+            "/api/documents",
+            files={"file": (tp17221_pdf.name, upload, "application/pdf")},
+        )
+        document_id = upload_response.json()["document_id"]
+        validation_response = client.post(f"/api/documents/{document_id}/validate")
+        export_response = client.post(f"/api/documents/{document_id}/export")
+
+    assert validation_response.status_code == 200
+    assert export_response.status_code == 200
+    data = export_response.json()
+    assert data["production_schema"]["document"]["source_file"] == tp17221_pdf.name
+    assert data["production_schema"]["target_area"]["area_m2_estimated"] == 103.0

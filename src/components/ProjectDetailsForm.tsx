@@ -4,18 +4,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ProjectDetails } from "@/types/roof";
+import { Outlet, Penetration, ProjectDetails, RoofOutline } from "@/types/roof";
+import { BackendProductionSchema } from "@/integrations/backend/client";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
-import { supabase } from "@/integrations/supabase/client";
 
 interface ProjectDetailsFormProps {
   projectDetails: ProjectDetails;
   onProjectDetailsChange: (details: ProjectDetails) => void;
   onSubmit: () => void;
-  outline: any;
-  outlets: any[];
-  penetrations: any[];
+  outline: RoofOutline[];
+  outlets: Outlet[];
+  penetrations: Penetration[];
+  backendExtraction?: BackendProductionSchema | null;
 }
 
 export const ProjectDetailsForm = ({
@@ -25,6 +26,7 @@ export const ProjectDetailsForm = ({
   outline,
   outlets,
   penetrations,
+  backendExtraction,
 }: ProjectDetailsFormProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
@@ -51,7 +53,7 @@ export const ProjectDetailsForm = ({
     setIsSubmitting(true);
     
     try {
-      console.log('Sending project data:', { outline, outlets, penetrations, projectDetails });
+      console.log('Sending project data:', { outline, outlets, penetrations, projectDetails, backendExtraction });
       
       const response = await fetch(`https://nispvuhrvlvjsvfcelsp.supabase.co/functions/v1/send-project-email`, {
         method: 'POST',
@@ -64,7 +66,8 @@ export const ProjectDetailsForm = ({
           outline,
           outlets,
           penetrations,
-          projectDetails
+          projectDetails,
+          ...(backendExtraction ? { backendExtraction } : {}),
         })
       });
 

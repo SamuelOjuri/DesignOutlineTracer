@@ -31,9 +31,15 @@ interface PdfUploadProps {
   onPdfRendered: (imageData: HTMLCanvasElement) => void;
   drawingScale: DrawingScale;
   onDrawingScaleChange: (scale: DrawingScale) => void;
+  onPdfFileSelected?: (file: File) => void;
 }
 
-export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }: PdfUploadProps) => {
+export const PdfUpload = ({
+  onPdfRendered,
+  drawingScale,
+  onDrawingScaleChange,
+  onPdfFileSelected,
+}: PdfUploadProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -41,12 +47,30 @@ export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }:
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
+  const renderPage = useCallback(async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number) => {
+    const page = await pdf.getPage(pageNum);
+    const scale = 2; // Higher resolution
+    const viewport = page.getViewport({ scale });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d")!;
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    // Create preview URL
+    setPreviewUrl(canvas.toDataURL());
+    onPdfRendered(canvas);
+  }, [onPdfRendered]);
+
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || file.type !== "application/pdf") return;
 
     setIsLoading(true);
     setFileName(file.name);
+    onPdfFileSelected?.(file);
 
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -62,24 +86,7 @@ export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }:
     } finally {
       setIsLoading(false);
     }
-  }, []);
-
-  const renderPage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number) => {
-    const page = await pdf.getPage(pageNum);
-    const scale = 2; // Higher resolution
-    const viewport = page.getViewport({ scale });
-
-    const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext("2d")!;
-
-    await page.render({ canvasContext: ctx, viewport }).promise;
-
-    // Create preview URL
-    setPreviewUrl(canvas.toDataURL());
-    onPdfRendered(canvas);
-  };
+  }, [onPdfFileSelected, renderPage]);
 
   const handlePageChange = async (pageNum: number) => {
     if (!pdfDoc || pageNum < 1 || pageNum > pageCount) return;
