@@ -1,0 +1,9 @@
+{
+  "selected_candidate_id": "candidate_semantic_roof_scope_01",
+  "reason": "Selected deterministic roof-scope candidate because it contains rooflight geometry, 5 RWP labels, and fall/tapered notes while excluding title-block metadata.",
+  "confidence": 0.92,
+  "review_required": false,
+  "provider": "mock",
+  "model": "mock-deterministic-v1",
+  "escalation_used": false
+}

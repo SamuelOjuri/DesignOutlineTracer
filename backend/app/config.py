@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     storage_root: Path = Path("storage")
     ai_provider: str = "mock"
+    gemini_validation_model: str = "gemini-2.5-flash"
+    gemini_pro_model: str = "gemini-2.5-pro"
 
     google_api_key: str | None = None
     openai_api_key: str | None = None

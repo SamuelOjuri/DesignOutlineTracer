@@ -24,9 +24,12 @@ def main() -> None:
         vector_response.raise_for_status()
         candidates_response = client.get(f"/api/documents/{data['document_id']}/candidates")
         candidates_response.raise_for_status()
+        validation_response = client.post(f"/api/documents/{data['document_id']}/validate")
+        validation_response.raise_for_status()
 
     vector_data = vector_response.json()
     candidates_data = candidates_response.json()
+    validation_data = validation_response.json()
     print(
         json.dumps(
             {
@@ -39,6 +42,8 @@ def main() -> None:
                 "rooflight_rectangles": vector_data["summary"]["rooflight_rectangle_count"],
                 "top_candidate_id": candidates_data["summary"]["top_candidate_id"],
                 "top_candidate_score": candidates_data["summary"]["top_candidate_score"],
+                "selected_candidate_id": validation_data["validation"]["selected_candidate_id"],
+                "validation_confidence": validation_data["validation"]["confidence"],
                 "preview": data["preview_png_path"],
             },
             separators=(",", ":"),

@@ -23,7 +23,7 @@ async def get_candidate_document(request: Request, document_id: str) -> Candidat
         vector_document = extract_vector_document(
             source_path,
             document_id=document_id,
-            ai_provider=get_ai_provider(settings.ai_provider),
+            ai_provider=get_ai_provider(settings.ai_provider, settings),
         )
         return generate_candidate_document(vector_document)
     except Exception as exc:

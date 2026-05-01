@@ -4,7 +4,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import candidates, documents, extraction, health
+from app.api.routes import candidates, documents, extraction, health, validation
 from app.config import Settings, get_settings
 from app.logging import configure_logging
 
@@ -37,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(documents.router, prefix=resolved_settings.api_prefix)
     app.include_router(extraction.router, prefix=resolved_settings.api_prefix)
     app.include_router(candidates.router, prefix=resolved_settings.api_prefix)
+    app.include_router(validation.router, prefix=resolved_settings.api_prefix)
     return app
 
 

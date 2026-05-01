@@ -1,5 +1,7 @@
 import re
 
+from app.models.candidates import CandidateDocument, CandidateRegion
+from app.models.validation import SemanticValidationResult
 from app.models.vector import ClassifiedTextBlock, TextBlock, TextBlockClass
 from app.services.ai.provider import AiProvider
 
@@ -21,6 +23,28 @@ class MockProvider(AiProvider):
             )
             for text_block in text_blocks
         ]
+
+    def validate_candidates(
+        self,
+        *,
+        candidate_document: CandidateDocument,
+        text_blocks: list[TextBlock],
+        overlay_png_path: str | None,
+    ) -> SemanticValidationResult:
+        selected = _select_mock_candidate(candidate_document)
+        has_semantic_scope = selected.geometry_source == "semantic_roof_scope_envelope"
+        confidence = 0.92 if has_semantic_scope else 0.62
+        review_required = not has_semantic_scope
+        reason = _mock_reason(selected, has_semantic_scope)
+        return SemanticValidationResult(
+            selected_candidate_id=selected.id,
+            reason=reason,
+            confidence=confidence,
+            review_required=review_required,
+            provider=self.name,
+            model="mock-deterministic-v1",
+            escalation_used=False,
+        )
 
 
 def _classify_text(text: str) -> TextBlockClass:
@@ -49,3 +73,30 @@ def _classify_text(text: str) -> TextBlockClass:
     if len(normalized) > 40:
         return "general_note"
     return "other"
+
+
+def _select_mock_candidate(candidate_document: CandidateDocument) -> CandidateRegion:
+    semantic_candidate = next(
+        (
+            candidate
+            for candidate in candidate_document.candidate_regions
+            if candidate.geometry_source == "semantic_roof_scope_envelope"
+        ),
+        None,
+    )
+    if semantic_candidate is not None:
+        return semantic_candidate
+    return candidate_document.candidate_regions[0]
+
+
+def _mock_reason(candidate: CandidateRegion, has_semantic_scope: bool) -> str:
+    if has_semantic_scope:
+        return (
+            "Selected deterministic roof-scope candidate because it contains rooflight "
+            f"geometry, {candidate.features.rwp_label_count} RWP labels, and fall/tapered notes "
+            "while excluding title-block metadata."
+        )
+    return (
+        "Selected top-ranked vector candidate, but semantic roof-scope anchors were incomplete; "
+        "human review is required before geometry finalisation."
+    )

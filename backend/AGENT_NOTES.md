@@ -74,3 +74,22 @@
   - TP17256: candidates=8, top=`candidate_vector_face_001`, score=0.54, roof_scope_rank=null, top_area=1665.15 pdf units, top_rwp=0, top_rooflights=0, elapsed=35.0 ms.
 - Deviations from plan.md: near-closed graph repair is limited; the canonical TP17221 roof-scope candidate is an anchor-derived vector semantic envelope rather than a pure closed-face result because the PDF linework is fragmented by hatches/annotations. Final coordinates remain geometry-derived and will be cleaned/snap-refined in Phase 5.
 - Open risks: the semantic envelope is intentionally generous and must be refined by Phase 4 validation and Phase 5 geometry cleanup; TP17202/TP17256 lack RWP/rooflight semantic anchors in the current extraction, so their top candidates are linework faces only.
+
+## Phase 4 Design Note — AI Semantic Validation — 2026-05-01
+- Approach: add a semantic validation layer that selects among existing geometry candidates only. The provider receives candidate JSON, classified text blocks, and a rendered overlay PNG of the top candidates; it returns structured JSON with `selected_candidate_id`, `reason`, `confidence`, and `review_required`. It never returns final coordinates.
+- Providers: extend the AI provider protocol with `validate_candidates(...)`. `MockProvider` remains the default and is deterministic for offline tests: it selects the semantic roof-scope candidate when present, otherwise the current top-ranked candidate and marks review required. `GeminiProvider` is implemented behind `AI_PROVIDER=gemini` with Flash as default and a Pro escalation hook when confidence is below 0.75 or candidates conflict, but it is not called by tests or smoke.
+- Overlay artifact: render the uploaded PDF page and draw the top candidates in ranked colors under `storage/uploads/{id}/candidate_overlay.png`; this is input evidence for the provider and useful for audit/debugging.
+- Endpoint: add `POST /api/documents/{id}/validate`, composing existing vector extraction and candidate generation services, rendering the overlay, and returning the structured validation response.
+- Tests: add golden Phase 4 fixtures for all three PDFs using `AI_PROVIDER=mock`, assert TP17221 selects `candidate_semantic_roof_scope_01` with high confidence, and assert lower-confidence review-required outputs where only linework faces exist.
+- Deviations from plan.md: manual Gemini live run is not performed in automated verification because it would call a paid API; the implementation path is present and gated by config.
+
+## Phase 4 — AI Semantic Validation — 2026-05-01
+- Approach: implemented candidate validation as a provider-backed selector over existing geometry candidates. `POST /api/documents/{id}/validate` runs vector extraction, candidate generation, renders a top-candidate overlay PNG, and returns structured validation JSON. Mock validation is deterministic and offline; Gemini validation is implemented behind `AI_PROVIDER=gemini` with Flash default and Pro escalation when confidence is low.
+- Files added: `app/api/routes/validation.py`, `app/models/validation.py`, `app/services/ai/gemini.py`, `app/services/geometry/overlays.py`, Phase 4 golden fixtures, and validation/overlay/endpoint tests. Updated provider protocol, AI factory, `MockProvider`, config/env docs, app routing, and smoke output.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 15 tests; live smoke upload plus `POST /api/documents/{id}/validate` returned HTTP 200 for TP17221 with selected candidate `candidate_semantic_roof_scope_01`, confidence=0.92, `review_required=false`, provider=`mock`, and an overlay path.
+- Per-PDF metrics:
+  - TP17202: selected=`candidate_vector_face_001`, confidence=0.62, review_required=true, provider=mock, elapsed=0.0 ms.
+  - TP17221: selected=`candidate_semantic_roof_scope_01`, confidence=0.92, review_required=false, provider=mock, elapsed=0.0 ms.
+  - TP17256: selected=`candidate_vector_face_001`, confidence=0.62, review_required=true, provider=mock, elapsed=0.0 ms.
+- Deviations from plan.md: no paid Gemini run was performed; live Gemini validation remains gated by `AI_PROVIDER=gemini` and `GOOGLE_API_KEY`. Mock selection is deterministic and fixture-backed for offline tests.
+- Open risks: Gemini structured-output behavior still needs a manual paid-provider run and captured response; Phase 5 must refine the selected semantic envelope into a CAD-ready polygon and enforce topology/area gates.

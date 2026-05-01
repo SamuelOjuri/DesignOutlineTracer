@@ -1,0 +1,9 @@
+{
+  "selected_candidate_id": "candidate_vector_face_001",
+  "reason": "Selected top-ranked vector candidate, but semantic roof-scope anchors were incomplete; human review is required before geometry finalisation.",
+  "confidence": 0.62,
+  "review_required": true,
+  "provider": "mock",
+  "model": "mock-deterministic-v1",
+  "escalation_used": false
+}

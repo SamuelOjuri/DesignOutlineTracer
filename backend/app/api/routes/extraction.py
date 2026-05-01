@@ -22,7 +22,7 @@ async def get_vector_document(request: Request, document_id: str) -> VectorDocum
         return extract_vector_document(
             source_path,
             document_id=document_id,
-            ai_provider=get_ai_provider(settings.ai_provider),
+            ai_provider=get_ai_provider(settings.ai_provider, settings),
         )
     except Exception as exc:
         raise HTTPException(
