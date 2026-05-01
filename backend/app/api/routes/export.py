@@ -7,6 +7,9 @@ from app.services.ai.factory import get_ai_provider
 from app.services.export.writers import write_exports
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.finalize import build_production_schema
+from app.services.raster_pipeline.approval import is_approved
+from app.services.raster_pipeline.errors import RasterApprovalRequired
+from app.services.raster_pipeline.pipeline import load_raster_production_schema
 from app.services.storage.documents import (
     export_dir,
     find_uploaded_source,
@@ -33,25 +36,36 @@ async def export_document(
         )
 
     try:
-        provider = get_ai_provider(settings.ai_provider, settings)
-        vector_document = extract_vector_document(
-            source_path,
-            document_id=document_id,
-            ai_provider=provider,
-        )
-        candidate_document = generate_candidate_document(vector_document)
-        validation = provider.validate_candidates(
-            candidate_document=candidate_document,
-            text_blocks=vector_document.text_blocks,
-            overlay_png_path=None,
-        )
-        production_schema = build_production_schema(
-            document_id=document_id,
-            source_file=source_path.name,
-            vector_document=vector_document,
-            candidate_document=candidate_document,
-            validation=validation,
-        )
+        if export_request.pipeline == "raster":
+            approved = is_approved(settings.storage_path, document_id)
+            if "dxf" in export_request.formats and not approved:
+                raise RasterApprovalRequired("Raster-derived DXF export requires review approval")
+            production_schema = load_raster_production_schema(settings.storage_path, document_id)
+            if production_schema is None:
+                raise ValueError("Raster pipeline has not been run for this document")
+            if approved:
+                production_schema.quality_checks.human_review_status = "approved"
+                production_schema.target_area.review_required = False
+        else:
+            provider = get_ai_provider(settings.ai_provider, settings)
+            vector_document = extract_vector_document(
+                source_path,
+                document_id=document_id,
+                ai_provider=provider,
+            )
+            candidate_document = generate_candidate_document(vector_document)
+            validation = provider.validate_candidates(
+                candidate_document=candidate_document,
+                text_blocks=vector_document.text_blocks,
+                overlay_png_path=None,
+            )
+            production_schema = build_production_schema(
+                document_id=document_id,
+                source_file=source_path.name,
+                vector_document=vector_document,
+                candidate_document=candidate_document,
+                validation=validation,
+            )
         output_dir = export_dir(settings.storage_path, document_id)
         written = write_exports(
             production_schema=production_schema,
@@ -59,6 +73,8 @@ async def export_document(
             formats=export_request.formats,
         )
     except Exception as exc:
+        if isinstance(exc, RasterApprovalRequired):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"failed to export document: {exc}",

@@ -355,6 +355,13 @@ export const NewBuildApp = () => {
                   review status {backendExtraction.quality_checks.human_review_status}.
                 </div>
               )}
+              {backendExtraction?.document.source_type === "rasterized_pdf" ||
+              backendExtraction?.quality_checks.human_review_status === "required" ? (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900">
+                  Raster pipeline — human review required. Adjust the outline, rooflights,
+                  outlets, and scale before requesting CAD/DXF export.
+                </div>
+              ) : null}
               <div className="flex gap-3 justify-center">
                 <Button
                   onClick={handleAutomatedExtraction}

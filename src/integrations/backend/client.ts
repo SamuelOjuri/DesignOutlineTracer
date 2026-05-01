@@ -81,6 +81,10 @@ export interface BackendProductionSchema {
       polygon_mm: number[][];
       confidence: number;
     }>;
+    excluded_regions?: Array<{
+      type: string;
+      reason: string;
+    }>;
   };
   quality_checks: {
     human_review_status: string;
@@ -93,6 +97,14 @@ export interface BackendExportResponse {
   document_id: string;
   production_schema: BackendProductionSchema;
   exports: Record<string, string | null>;
+}
+
+export interface BackendRasterExtractionResponse {
+  document_id: string;
+  pipeline: "raster_first";
+  human_review_status: "required";
+  production_schema: BackendProductionSchema;
+  warnings: Array<{ code: string; message: string }>;
 }
 
 export interface AutomatedExtractionResult {
@@ -143,6 +155,36 @@ export function validateDocument(documentId: string): Promise<BackendValidationR
 export function exportDocument(documentId: string): Promise<BackendExportResponse> {
   return backendFetch<BackendExportResponse>(`/api/documents/${documentId}/export`, {
     method: "POST",
+  });
+}
+
+export function extractRasterDocument(documentId: string): Promise<BackendRasterExtractionResponse> {
+  return backendFetch<BackendRasterExtractionResponse>(`/api/documents/${documentId}/extract`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force_pipeline: "raster_first" }),
+  });
+}
+
+export function approveDocument(schema: BackendProductionSchema): Promise<{
+  document_id: string;
+  approval_status: string;
+  approved_at: string;
+  export_unlocked: boolean;
+}> {
+  return backendFetch(`/api/documents/${schema.document.document_id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      approved_by: "frontend_user",
+      source: "frontend_review",
+      target_area: {
+        outer_polygon_mm: schema.target_area.outer_polygon_mm,
+        holes: [],
+      },
+      constraints: schema.constraints,
+      notes: "User reviewed raster-derived outline in New Build flow.",
+    }),
   });
 }
 

@@ -3,10 +3,12 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 ExportFormat = Literal["dxf", "svg", "geojson", "mask_png", "metadata_json"]
+ExportPipeline = Literal["vector", "raster"]
 
 
 class ExportRequest(BaseModel):
     formats: list[ExportFormat] = ["dxf", "svg", "geojson", "mask_png", "metadata_json"]
+    pipeline: ExportPipeline = "vector"
 
 
 class DocumentInfo(BaseModel):

@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Outlet, Penetration, ProjectDetails, RoofOutline } from "@/types/roof";
-import { BackendProductionSchema } from "@/integrations/backend/client";
+import { approveDocument, BackendProductionSchema } from "@/integrations/backend/client";
 import { useState } from "react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -54,6 +54,12 @@ export const ProjectDetailsForm = ({
     
     try {
       console.log('Sending project data:', { outline, outlets, penetrations, projectDetails, backendExtraction });
+      if (
+        backendExtraction?.document.source_type === "rasterized_pdf" ||
+        backendExtraction?.quality_checks.human_review_status === "required"
+      ) {
+        await approveDocument(backendExtraction);
+      }
       
       const response = await fetch(`https://nispvuhrvlvjsvfcelsp.supabase.co/functions/v1/send-project-email`, {
         method: 'POST',

@@ -22,11 +22,26 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     mistralai_api_key: str | None = None
 
-    raster_ocr_provider: str = "gemini"
+    raster_ocr_provider: str = "mock"
+    raster_preview_dpi: int = 125
     gemini_ocr_model: str = "gemini-2.5-flash"
-    raster_render_dpi: int = 400
+    raster_render_dpi: int = 300
+    raster_max_render_pixels: int = 80_000_000
+    raster_max_tile_pixels: int = 5_000_000
     ocr_cache_dir: Path = Path("storage/cache/ocr")
+    ocr_tile_size_px: int = 2048
+    ocr_tile_overlap_px: int = 256
     ocr_max_tiles: int = 12
+    allow_live_ai_calls: bool = False
+    allow_gemini_pro_escalation: bool = False
+    gemini_pro_escalation_confidence_threshold: float = 0.75
+    segmentation_provider: str = "noop"
+    falcon_perception_base_url: str | None = None
+    falcon_perception_timeout_seconds: int = 60
+    falcon_perception_max_image_dimension: int = 1024
+    falcon_perception_min_image_dimension: int = 256
+    falcon_perception_max_prompts: int = 4
+    falcon_perception_cache_dir: Path = Path("storage/cache/segmentation")
 
     model_config = SettingsConfigDict(
         env_file=(REPO_ROOT / ".env", BACKEND_ROOT / ".env"),

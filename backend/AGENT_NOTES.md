@@ -131,3 +131,28 @@
   - TP17256: backend production schema remains review-required with 1 linework candidate, 0 outlets, 0 rooflights; UI can fall back to manual adjustment.
 - Deviations from plan.md: no browser file-picker smoke was performed in this environment; verification used production TypeScript builds and live backend endpoint sequencing. Full `npm run lint` still reports unrelated pre-existing repo-wide lint errors outside the Phase 6 touch set.
 - Open risks: mapped constraints depend on the Phase 5 candidate bbox origin and `mm_per_pdf_unit`; Phase 7 raster fallback and later hardening should improve non-TP17221 extraction before relying on automated output without manual review.
+
+## Phase 7 Design Note — Raster Fallback — 2026-05-01
+- Approach: implement a raster-first pipeline that is explicit about approximate provenance and always requires human review. The default path is fully offline: PyMuPDF rendering, OpenCV/scikit-image preprocessing and image-derived geometry, deterministic `MockOcrProvider`, `NoopSegmenter`, raster candidate scoring, mock validation, and production-schema output with `human_review_status=required`.
+- Live AI/segmentation gates: Gemini OCR runs only when `RASTER_OCR_PROVIDER=gemini`, `ALLOW_LIVE_AI_CALLS=1`, and `GOOGLE_API_KEY` is present. Gemini Pro escalation remains gated by `ALLOW_GEMINI_PRO_ESCALATION=1`. Falcon Perception is implemented only as a `Segmenter` abstraction with noop/mock/self-hosted modes; the main backend will not import Torch, transformers, CUDA, MLX, Falcon weights, or Hugging Face Inference Provider clients.
+- Endpoints: add forced raster extraction through `POST /api/documents/{id}/extract`, approval through `POST /api/documents/{id}/approve`, and raster-aware export gating. Raster DXF export is blocked until approval; preview/metadata exports can remain available.
+- Testing: create rasterized TP17221 fixtures during test setup, cover rendering limits, viewport detection, OCR tiling/merge/provider, image-derived primitive tagging, segmentation contracts, self-hosted Falcon HTTP contract with mocked responses, raster candidates/scoring, approval gate, and forced-raster TP17221 output. Default `pytest -q` must perform zero live Gemini/Falcon calls.
+- Deviations from plan.md: the first raster candidate generator is deliberately conservative and uses OpenCV/semantic-anchor geometry rather than attempting deep mask segmentation; Falcon remains optional and externally hosted.
+
+## Phase 7 — Raster fallback — 2026-05-01
+- Approach: implemented an offline-safe raster fallback with PyMuPDF rendering, OpenCV preprocessing/geometry, deterministic mock OCR, OCR tiling/merge, Falcon segmentation abstractions (`NoopSegmenter`, `MockSegmenter`, `SelfHostedFalconSegmenter`, `FutureManagedApiSegmenter` stub), forced raster extraction, review-required production schema output, approval storage, and raster DXF export gating.
+- Files added: `app/models/raster.py`, `app/services/raster_pipeline/*`, `app/api/routes/approval.py`, Phase 7 raster tests, generated-test raster fixture support in `tests/conftest.py`.
+- Files modified: config/env defaults, extraction/export routes, app routing, production/export models, frontend backend client and New Build raster review banner.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 35 tests; `npm run build` and `VITE_ENABLE_BACKEND=1 npm run build` passed. Live smoke forced TP17221 through raster extraction, confirmed DXF export blocked with HTTP 409 before approval, approved the document, then exported DXF/metadata successfully.
+- Per-PDF metrics:
+  - TP17202: candidates=1, image_primitives=81, ocr_blocks=10, area_m2=0.903, outlets=5, human_review_status=required.
+  - TP17221: candidates=1, image_primitives=81, ocr_blocks=10, area_m2=3.633, outlets=5, human_review_status=required.
+  - TP17256: candidates=1, image_primitives=82, ocr_blocks=10, area_m2=3.63, outlets=5, human_review_status=required.
+  - TP17221_raster_clean: candidates=1, image_primitives=85, ocr_blocks=10, area_m2=2.87, outlets=5, human_review_status=required.
+  - TP17221_raster_lowres_noisy: candidates=1, image_primitives=93, ocr_blocks=10, area_m2=2.87, outlets=5, human_review_status=required.
+- OCR metrics: default provider=`mock`, tile_count=1 for mock full-image OCR, live_calls=0, cache_hits=0, cache_misses=0. OCR tiling budget is unit-tested separately and raises `RasterOcrBudgetExceeded`.
+- Falcon/segmentation metrics: default provider=`noop`, live_calls=0. Mock and self-hosted Falcon client contracts are covered with mocked responses; no Hugging Face provider or local model runtime is used.
+- Candidate metrics: forced raster TP17221 produces `raster_candidate_01`, closed/non-self-intersecting, source/provenance `raster_contour_polygonisation` with image-derived primitives tagged `source=image_derived`.
+- Quality-gate results: every raster output sets `target_area.review_required=true` and `quality_checks.human_review_status=required`; raster DXF export is blocked until `POST /api/documents/{id}/approve` succeeds.
+- Deviations from plan.md: live Gemini OCR and Gemini Pro escalation are wired but not exercised; default mock OCR uses deterministic relative anchors, so raster areas are approximate and not yet comparable to the Phase 5 vector area threshold. The OpenCV candidate is intentionally conservative and requires review.
+- Open risks: mock OCR creates useful offline coverage but overstates OCR quality on non-TP17221 drawings; real Gemini OCR/Falcon deployment needs live marked tests, captured audit responses, and stronger candidate IoU evaluation before production reliance.
