@@ -1,0 +1,399 @@
+import re
+from pathlib import Path
+
+import fitz
+
+from app.models.vector import (
+    ClassifiedTextBlock,
+    PageMetadata,
+    RooflightRectangle,
+    SheetRegion,
+    TextBlock,
+    VectorDocument,
+    VectorExtractionSummary,
+    VectorPrimitive,
+)
+from app.services.ai.provider import AiProvider
+
+AXIS_TOLERANCE = 0.8
+RECTANGLE_TOLERANCE = 1.0
+
+
+def extract_vector_document(
+    path: Path,
+    document_id: str,
+    ai_provider: AiProvider,
+) -> VectorDocument:
+    with fitz.open(path) as document:
+        page_metadata: list[PageMetadata] = []
+        text_blocks: list[TextBlock] = []
+        vector_primitives: list[VectorPrimitive] = []
+        rooflight_rectangles: list[RooflightRectangle] = []
+        sheet_regions: list[SheetRegion] = []
+
+        for page_index, page in enumerate(document):
+            page_number = page_index + 1
+            page_metadata.append(_extract_page_metadata(page, page_number))
+            page_text_blocks = _extract_text_blocks(page, page_number, len(text_blocks))
+            text_blocks.extend(page_text_blocks)
+            vector_primitives.extend(
+                _extract_vector_primitives(page, page_number, len(vector_primitives))
+            )
+            sheet_regions.extend(_detect_sheet_regions(page, page_number, page_text_blocks))
+            rooflight_rectangles.extend(
+                _detect_rooflight_rectangles(page, page_number, len(rooflight_rectangles))
+            )
+
+    classified_blocks = ai_provider.classify_text_blocks(text_blocks)
+    classifications_by_id = {block.id: block for block in classified_blocks}
+    text_blocks = [_apply_classification(block, classifications_by_id) for block in text_blocks]
+
+    rwp_labels = _extract_rwp_labels(text_blocks)
+
+    return VectorDocument(
+        document_id=document_id,
+        source_file=path.name,
+        page_metadata=page_metadata,
+        text_blocks=text_blocks,
+        classified_text_blocks=classified_blocks,
+        vector_primitives=vector_primitives,
+        sheet_regions=sheet_regions,
+        rooflight_rectangles=rooflight_rectangles,
+        summary=VectorExtractionSummary(
+            text_block_count=len(text_blocks),
+            classified_text_block_count=len(classified_blocks),
+            vector_primitive_count=len(vector_primitives),
+            sheet_region_count=len(sheet_regions),
+            rwp_label_count=len(rwp_labels),
+            rwp_labels=rwp_labels,
+            rooflight_rectangle_count=len(rooflight_rectangles),
+        ),
+    )
+
+
+def _extract_page_metadata(page: fitz.Page, page_number: int) -> PageMetadata:
+    return PageMetadata(
+        page_number=page_number,
+        page_width=round(page.rect.width, 3),
+        page_height=round(page.rect.height, 3),
+        rotation=page.rotation,
+        media_box=_rect_to_list(page.mediabox),
+        crop_box=_rect_to_list(page.cropbox),
+    )
+
+
+def _extract_text_blocks(page: fitz.Page, page_number: int, offset: int) -> list[TextBlock]:
+    blocks: list[TextBlock] = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        lines: list[str] = []
+        for line in block.get("lines", []):
+            text = "".join(str(span.get("text", "")) for span in line.get("spans", [])).strip()
+            if text:
+                lines.append(text)
+        joined_text = "\n".join(lines).strip()
+        if not joined_text:
+            continue
+        blocks.append(
+            TextBlock(
+                id=f"txt_{offset + len(blocks) + 1:05d}",
+                page_number=page_number,
+                text=joined_text,
+                bbox_pdf=_bbox_to_list(block["bbox"]),
+            )
+        )
+    return blocks
+
+
+def _extract_vector_primitives(
+    page: fitz.Page,
+    page_number: int,
+    offset: int,
+) -> list[VectorPrimitive]:
+    primitives: list[VectorPrimitive] = []
+    for drawing in page.get_drawings():
+        stroke_width = float(drawing.get("width") or 0)
+        stroke_colour = _colour_to_list(drawing.get("color"))
+        fill_colour = _colour_to_list(drawing.get("fill"))
+        dash = str(drawing.get("dashes")) if drawing.get("dashes") else None
+
+        for item in drawing.get("items", []):
+            primitive = _primitive_from_item(
+                item=item,
+                primitive_id=f"v_{offset + len(primitives) + 1:06d}",
+                page_number=page_number,
+                stroke_width=stroke_width,
+                stroke_colour=stroke_colour,
+                fill_colour=fill_colour,
+                dash=dash,
+            )
+            if primitive is not None:
+                primitives.append(primitive)
+    return primitives
+
+
+def _primitive_from_item(
+    *,
+    item: tuple[object, ...],
+    primitive_id: str,
+    page_number: int,
+    stroke_width: float,
+    stroke_colour: list[float] | None,
+    fill_colour: list[float] | None,
+    dash: str | None,
+) -> VectorPrimitive | None:
+    item_type = item[0]
+    if item_type == "l":
+        start = item[1]
+        end = item[2]
+        if not isinstance(start, fitz.Point) or not isinstance(end, fitz.Point):
+            return None
+        return VectorPrimitive(
+            id=primitive_id,
+            page_number=page_number,
+            type="line",
+            bbox_pdf=_points_bbox([start, end]),
+            start_pdf=_point_to_list(start),
+            end_pdf=_point_to_list(end),
+            stroke_width=stroke_width,
+            stroke_colour=stroke_colour,
+            fill_colour=fill_colour,
+            dash=dash,
+        )
+    if item_type == "re":
+        rect = item[1]
+        if not isinstance(rect, fitz.Rect):
+            return None
+        return VectorPrimitive(
+            id=primitive_id,
+            page_number=page_number,
+            type="rect",
+            bbox_pdf=_rect_to_list(rect),
+            stroke_width=stroke_width,
+            stroke_colour=stroke_colour,
+            fill_colour=fill_colour,
+            dash=dash,
+        )
+    if item_type in {"c", "qu"}:
+        points = [value for value in item[1:] if isinstance(value, fitz.Point)]
+        return VectorPrimitive(
+            id=primitive_id,
+            page_number=page_number,
+            type="curve" if item_type == "c" else "quad",
+            bbox_pdf=_points_bbox(points),
+            stroke_width=stroke_width,
+            stroke_colour=stroke_colour,
+            fill_colour=fill_colour,
+            dash=dash,
+        )
+    return None
+
+
+def _detect_sheet_regions(
+    page: fitz.Page,
+    page_number: int,
+    text_blocks: list[TextBlock],
+) -> list[SheetRegion]:
+    width = page.rect.width
+    height = page.rect.height
+    title_candidates = [
+        block.bbox_pdf
+        for block in text_blocks
+        if block.bbox_pdf[0] >= width * 0.50 and block.bbox_pdf[1] >= height * 0.65
+    ]
+    if not title_candidates:
+        title_candidates = [
+            block.bbox_pdf
+            for block in text_blocks
+            if block.bbox_pdf[0] >= width * 0.75 or block.bbox_pdf[1] >= height * 0.88
+        ]
+
+    regions: list[SheetRegion] = []
+    if title_candidates:
+        title_bbox = _union_bboxes(title_candidates, padding=8, page_rect=page.rect)
+        regions.append(
+            SheetRegion(
+                type="title_block",
+                page_number=page_number,
+                bbox_pdf=title_bbox,
+                confidence=0.78,
+            )
+        )
+        viewport_right = max(0.0, title_bbox[0] - 12)
+        regions.append(
+            SheetRegion(
+                type="drawing_viewport",
+                page_number=page_number,
+                bbox_pdf=[0.0, 0.0, round(viewport_right, 3), round(height, 3)],
+                confidence=0.72,
+            )
+        )
+    else:
+        regions.append(
+            SheetRegion(
+                type="drawing_viewport",
+                page_number=page_number,
+                bbox_pdf=[0.0, 0.0, round(width, 3), round(height, 3)],
+                confidence=0.55,
+            )
+        )
+
+    notes_candidates = [
+        block.bbox_pdf
+        for block in text_blocks
+        if block.bbox_pdf[0] >= width * 0.70 and block.bbox_pdf[1] < height * 0.65
+    ]
+    if notes_candidates:
+        regions.append(
+            SheetRegion(
+                type="notes",
+                page_number=page_number,
+                bbox_pdf=_union_bboxes(notes_candidates, padding=8, page_rect=page.rect),
+                confidence=0.65,
+            )
+        )
+    return regions
+
+
+def _detect_rooflight_rectangles(
+    page: fitz.Page,
+    page_number: int,
+    offset: int,
+) -> list[RooflightRectangle]:
+    if "roof light" not in (page.get_text("text") or "").lower():
+        return []
+
+    horizontal: list[tuple[float, float, float]] = []
+    vertical: list[tuple[float, float, float]] = []
+    viewport_right = page.rect.width * 0.78
+    viewport_bottom = page.rect.height * 0.90
+
+    for drawing in page.get_drawings():
+        for item in drawing.get("items", []):
+            if item[0] != "l":
+                continue
+            start = item[1]
+            end = item[2]
+            if not isinstance(start, fitz.Point) or not isinstance(end, fitz.Point):
+                continue
+            if max(start.x, end.x) > viewport_right or max(start.y, end.y) > viewport_bottom:
+                continue
+
+            if abs(start.y - end.y) < AXIS_TOLERANCE and abs(start.x - end.x) > 8:
+                x0, x1 = sorted((start.x, end.x))
+                horizontal.append((round(start.y, 1), round(x0, 1), round(x1, 1)))
+            elif abs(start.x - end.x) < AXIS_TOLERANCE and abs(start.y - end.y) > 8:
+                y0, y1 = sorted((start.y, end.y))
+                vertical.append((round(start.x, 1), round(y0, 1), round(y1, 1)))
+
+    rectangles: list[tuple[float, float, float, float]] = []
+    for y0, x0, x1 in horizontal:
+        for y1, other_x0, other_x1 in horizontal:
+            if y1 <= y0 + 8:
+                continue
+            if abs(x0 - other_x0) > RECTANGLE_TOLERANCE:
+                continue
+            if abs(x1 - other_x1) > RECTANGLE_TOLERANCE:
+                continue
+            width = x1 - x0
+            height = y1 - y0
+            if not (25 <= width <= 220 and 25 <= height <= 180):
+                continue
+            has_left = any(
+                abs(x - x0) <= RECTANGLE_TOLERANCE and top <= y0 + 1 and bottom >= y1 - 1
+                for x, top, bottom in vertical
+            )
+            has_right = any(
+                abs(x - x1) <= RECTANGLE_TOLERANCE and top <= y0 + 1 and bottom >= y1 - 1
+                for x, top, bottom in vertical
+            )
+            if has_left and has_right:
+                rectangles.append((x0, y0, x1, y1))
+
+    deduped: list[tuple[float, float, float, float]] = []
+    for rectangle in rectangles:
+        if not any(_same_rectangle(rectangle, existing) for existing in deduped):
+            deduped.append(rectangle)
+
+    return [
+        RooflightRectangle(
+            id=f"rooflight_rect_{offset + index + 1:03d}",
+            page_number=page_number,
+            bbox_pdf=[round(value, 3) for value in rectangle],
+            source="axis_aligned_vector_linework",
+            confidence=0.74,
+        )
+        for index, rectangle in enumerate(deduped)
+    ]
+
+
+def _apply_classification(
+    text_block: TextBlock,
+    classifications_by_id: dict[str, ClassifiedTextBlock],
+) -> TextBlock:
+    classification = classifications_by_id.get(text_block.id)
+    if classification is None:
+        return text_block
+    return text_block.model_copy(
+        update={
+            "text_class": classification.text_class,
+            "semantic_confidence": classification.semantic_confidence,
+        }
+    )
+
+
+def _same_rectangle(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+) -> bool:
+    return all(abs(left[index] - right[index]) <= 2 for index in range(4))
+
+
+def _extract_rwp_labels(text_blocks: list[TextBlock]) -> list[str]:
+    labels: set[str] = set()
+    for block in text_blocks:
+        for match in re.finditer(r"\brwp\.?\s*(\d+)\b", block.text, flags=re.IGNORECASE):
+            labels.add(f"rwp.{match.group(1)}")
+    return sorted(labels, key=lambda label: int(label.split(".")[1]))
+
+
+def _rect_to_list(rect: fitz.Rect) -> list[float]:
+    return [round(rect.x0, 3), round(rect.y0, 3), round(rect.x1, 3), round(rect.y1, 3)]
+
+
+def _bbox_to_list(bbox: tuple[float, float, float, float]) -> list[float]:
+    return [round(value, 3) for value in bbox]
+
+
+def _point_to_list(point: fitz.Point) -> list[float]:
+    return [round(point.x, 3), round(point.y, 3)]
+
+
+def _points_bbox(points: list[fitz.Point]) -> list[float]:
+    if not points:
+        return [0.0, 0.0, 0.0, 0.0]
+    xs = [point.x for point in points]
+    ys = [point.y for point in points]
+    return [round(min(xs), 3), round(min(ys), 3), round(max(xs), 3), round(max(ys), 3)]
+
+
+def _colour_to_list(colour: object) -> list[float] | None:
+    if colour is None:
+        return None
+    if not isinstance(colour, tuple | list):
+        return None
+    return [round(float(channel), 4) for channel in colour]
+
+
+def _union_bboxes(
+    bboxes: list[list[float]],
+    *,
+    padding: float,
+    page_rect: fitz.Rect,
+) -> list[float]:
+    x0 = max(0.0, min(bbox[0] for bbox in bboxes) - padding)
+    y0 = max(0.0, min(bbox[1] for bbox in bboxes) - padding)
+    x1 = min(page_rect.width, max(bbox[2] for bbox in bboxes) + padding)
+    y1 = min(page_rect.height, max(bbox[3] for bbox in bboxes) + padding)
+    return [round(x0, 3), round(y0, 3), round(x1, 3), round(y1, 3)]

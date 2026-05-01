@@ -38,3 +38,21 @@
   - TP17256: `vector_pdf`, `vector_first`, confidence=0.95, chars=1541, vector_paths=53110, images=1, image_area_ratio=0.002, fonts=3, estimated_dpi=96.0, elapsed=667.5 ms.
 - Deviations from plan.md: none for Phase 1. The low-res preview is rendered as a local relative path now; signed URLs are deferred until an external storage layer exists.
 - Open risks: all current samples classify as vector PDFs, so raster/hybrid thresholds are implemented but not yet validated against true raster fixtures; vector path counts may vary slightly across PyMuPDF versions and are locked to this environment in the golden fixtures.
+
+## Phase 2 Design Note — Vector-First Extraction — 2026-05-01
+- Approach: build a PyMuPDF vector extraction service for plan section 6 that returns page metadata, raw text blocks with PDF bounding boxes, deterministic mock-classified text blocks, vector primitives from `page.get_drawings()`, and heuristic sheet regions. The endpoint will locate the uploaded source file under `storage/uploads/{id}/` and return the structured document at `GET /api/documents/{id}/vector`.
+- Text classification: keep AI behind the existing provider abstraction, with `MockProvider` applying deterministic keyword rules for classes such as `drawing_title`, `scale_text`, `drawing_number`, `revision`, `rwp_label`, `rooflight_label`, `roof_build_up_note`, and `general_note`. No paid API calls are introduced in this phase.
+- Sheet-region heuristics: detect a title block from dense text on the right side / bottom-right of the sheet, notes from large right-side text clusters, and a drawing viewport as the complement-like bounding region that excludes the title block. These heuristics are intentionally conservative until Phase 3 candidate geometry uses them.
+- Tests: add golden count fixtures for all three PDFs and explicit TP17221 assertions for title-block text (`Roof Plan`, `1:50`, drawing number, revision), at least five RWP labels, rooflight labels/rectangles, and title-block exclusion from the drawing viewport.
+- Deviations from plan.md: none intended for Phase 2.
+
+## Phase 2 — Vector-First Extraction — 2026-05-01
+- Approach: implemented a PyMuPDF vector extraction service with page metadata, raw text blocks, mock-classified semantic text blocks, vector primitives, heuristic sheet regions, and rooflight rectangle detection from axis-aligned vector linework. Added `GET /api/documents/{id}/vector` over uploaded documents.
+- Files added: `app/api/routes/extraction.py`, `app/models/vector.py`, `app/services/ai/factory.py`, `app/services/vector_pipeline/extractor.py`, Phase 2 golden fixtures, and vector extraction/endpoint tests. Updated `MockProvider`, storage lookup helpers, app routing, and smoke output.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 8 tests; live smoke upload plus `GET /api/documents/{id}/vector` returned HTTP 200 for TP17221 with 90 text blocks, 21463 vector primitives, 5 RWP labels, 6 rooflight rectangles, and 3 sheet regions.
+- Per-PDF metrics:
+  - TP17202: text_blocks=7, vector_primitives=4491, sheet_regions=2, rwp_labels=0, rooflight_rectangles=0, elapsed=139.8 ms.
+  - TP17221: text_blocks=90, vector_primitives=21463, sheet_regions=3, rwp_labels=5 (`rwp.1`..`rwp.5`), rooflight_rectangles=6, elapsed=591.5 ms.
+  - TP17256: text_blocks=53, vector_primitives=58348, sheet_regions=3, rwp_labels=0, rooflight_rectangles=0, elapsed=1574.1 ms.
+- Deviations from plan.md: Gemini refinement is not implemented yet; Phase 2 keeps classification behind the mock AI provider until Phase 4 introduces Gemini. Rooflight rectangle detection is heuristic vector linework detection gated by rooflight text.
+- Open risks: sheet region detection is intentionally coarse and may need refinement when Phase 3 candidate polygons depend on viewport exclusion; TP17256 has high primitive volume, so later graph construction needs filtering before polygonization.

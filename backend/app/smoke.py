@@ -19,6 +19,11 @@ def main() -> None:
         upload_response.raise_for_status()
 
     data = upload_response.json()
+    with TestClient(app) as client:
+        vector_response = client.get(f"/api/documents/{data['document_id']}/vector")
+        vector_response.raise_for_status()
+
+    vector_data = vector_response.json()
     print(
         json.dumps(
             {
@@ -26,6 +31,9 @@ def main() -> None:
                 "source_type": data["classification"]["source_type"],
                 "recommended_pipeline": data["classification"]["recommended_pipeline"],
                 "vector_path_count": data["classification"]["vector_path_count"],
+                "text_blocks": vector_data["summary"]["text_block_count"],
+                "rwp_labels": vector_data["summary"]["rwp_labels"],
+                "rooflight_rectangles": vector_data["summary"]["rooflight_rectangle_count"],
                 "preview": data["preview_png_path"],
             },
             separators=(",", ":"),

@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "text_block_count": 90,
+    "classified_text_block_count": 90,
+    "vector_primitive_count": 21463,
+    "sheet_region_count": 3,
+    "rwp_label_count": 5,
+    "rwp_labels": [
+      "rwp.1",
+      "rwp.2",
+      "rwp.3",
+      "rwp.4",
+      "rwp.5"
+    ],
+    "rooflight_rectangle_count": 6
+  },
+  "page_metadata": {
+    "page_number": 1,
+    "page_width": 2384.0,
+    "page_height": 1684.0,
+    "rotation": 0,
+    "media_box": [
+      0.0,
+      0.0,
+      2384.0,
+      1684.0
+    ],
+    "crop_box": [
+      0.0,
+      0.0,
+      2384.0,
+      1684.0
+    ]
+  },
+  "sheet_regions": [
+    {
+      "type": "title_block",
+      "page_number": 1,
+      "bbox_pdf": [
+        1241.92,
+        1092.209,
+        2335.868,
+        1660.721
+      ],
+      "confidence": 0.78
+    },
+    {
+      "type": "drawing_viewport",
+      "page_number": 1,
+      "bbox_pdf": [
+        0.0,
+        0.0,
+        1229.92,
+        1684.0
+      ],
+      "confidence": 0.72
+    },
+    {
+      "type": "notes",
+      "page_number": 1,
+      "bbox_pdf": [
+        1830.769,
+        62.665,
+        2321.364,
+        1288.56
+      ],
+      "confidence": 0.65
+    }
+  ],
+  "class_counts": {
+    "drawing_number": 5,
+    "drawing_status": 2,
+    "drawing_title": 2,
+    "fall_path_note": 3,
+    "general_note": 15,
+    "other": 42,
+    "revision": 1,
+    "roof_build_up_note": 2,
+    "rooflight_label": 1,
+    "rwp_label": 3,
+    "scale_text": 8,
+    "title_block_text": 6
+  }
+}
