@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import approval, candidates, documents, export, extraction, health, validation
 from app.config import Settings, get_settings
-from app.logging import configure_logging
+from app.logging import configure_logging, request_id_middleware
 
 
 def build_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
@@ -32,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.middleware("http")(request_id_middleware)
 
     app.include_router(health.router)
     app.include_router(documents.router, prefix=resolved_settings.api_prefix)

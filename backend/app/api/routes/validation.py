@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.models.validation import ValidationRequest, ValidationResponse
 from app.services.ai.factory import get_ai_provider
+from app.services.audit import record_audit_event
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.overlays import render_candidate_overlay
 from app.services.storage.documents import find_uploaded_source, storage_relative_path, upload_dir
@@ -50,9 +51,23 @@ async def validate_document_candidates(
             detail=f"failed to validate candidates: {exc}",
         ) from exc
 
-    return ValidationResponse(
+    response = ValidationResponse(
         document_id=document_id,
         source_file=source_path.name,
         overlay_png_path=storage_relative_path(settings.storage_path, overlay_path),
         validation=validation,
     )
+    record_audit_event(
+        storage_path=settings.storage_path,
+        document_id=document_id,
+        event_type="candidates_validated",
+        payload={
+            "selected_candidate_id": validation.selected_candidate_id,
+            "confidence": validation.confidence,
+            "review_required": validation.review_required,
+            "provider": validation.provider,
+            "overlay_png_path": response.overlay_png_path,
+        },
+        request=request,
+    )
+    return response

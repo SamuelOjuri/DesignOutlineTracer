@@ -156,3 +156,25 @@
 - Quality-gate results: every raster output sets `target_area.review_required=true` and `quality_checks.human_review_status=required`; raster DXF export is blocked until `POST /api/documents/{id}/approve` succeeds.
 - Deviations from plan.md: live Gemini OCR and Gemini Pro escalation are wired but not exercised; default mock OCR uses deterministic relative anchors, so raster areas are approximate and not yet comparable to the Phase 5 vector area threshold. The OpenCV candidate is intentionally conservative and requires review.
 - Open risks: mock OCR creates useful offline coverage but overstates OCR quality on non-TP17221 drawings; real Gemini OCR/Falcon deployment needs live marked tests, captured audit responses, and stronger candidate IoU evaluation before production reliance.
+
+## Phase 8 Design Note — Hardening — 2026-05-02
+- Approach: enforce the section 14 quality gates before CAD/DXF export, add request IDs and structured request logging, persist per-document audit JSON for upload/extract/candidate/validation/export/approval events, and add the required TP17221 end-to-end integration test.
+- Quality gates: DXF export is allowed only when the final polygon is closed, non-self-intersecting, scale-calibrated, excludes title/legend, and is either approved or not review-required. Vector TP17221 must also contain/border at least five RWP outlets before DXF export.
+- Audit: persist append-only `audit.json` beside uploaded documents under `storage/uploads/{id}/` so each API operation records request id, event type, timestamp, and key metrics/paths. This is a local filesystem implementation that can be abstracted later for S3/object storage.
+- Request IDs: add middleware that accepts `X-Request-ID` or generates one, stores it on request state, emits it in response headers, and logs request completion with structured key/value fields.
+- Docs/tests: expand `backend/README.md` with curl and PowerShell examples for every endpoint and add `tests/integration/test_e2e_TP17221.py` covering upload → vector → candidates → validate → export, asserting area, topology, RWP count, DXF round-trip, and audit persistence.
+- Deviations from plan.md: request logging is structured key/value text rather than a JSON logger to stay lightweight; it can be swapped for JSON logging in deployment hardening without changing route behavior.
+
+## Phase 8 — Hardening — 2026-05-02
+- Approach: implemented request ID middleware, structured request-completion logging, per-document `audit.json`, DXF export quality gates, endpoint documentation, and the required TP17221 e2e integration test.
+- Files added: `app/services/audit.py`, `app/services/geometry/quality.py`, `tests/integration/test_e2e_TP17221.py`.
+- Files modified: upload/vector/extract/candidates/validate/export/approval routes, storage source lookup, `README.md`, `AGENT_NOTES.md`, app logging/main wiring.
+- Test results: `python -m ruff check .` passed; `python -m mypy app tests` passed; `python -m pytest -q` passed with 36 tests; `npm run build` and `VITE_ENABLE_BACKEND=1 npm run build` passed. Manual smoke completed upload → vector → candidates → validate → export for TP17221 with audit persistence.
+- Per-PDF metrics:
+  - TP17202: covered by existing classifier/vector/candidate/finalisation/raster tests; vector DXF quality gate would block if required constraints are missing.
+  - TP17221: e2e vector smoke area=103.0 m2, RWP count=5, selected=`candidate_semantic_roof_scope_01`, polygon valid/closed, DXF round-trip covered by tests, audit JSON written.
+  - TP17256: covered by existing classifier/vector/candidate/finalisation/raster tests; vector DXF quality gate would block if required constraints are missing.
+- Audit metrics: upload, vector extraction, candidate generation, validation, export, raster extraction, and approval events are appended locally with request IDs and event payloads.
+- Quality-gate results: vector/raster DXF export now enforces closed polygon, no self-intersections, scale calibration, title/legend exclusion, review/approval status, and TP17221 RWP constraints.
+- Deviations from plan.md: structured request logs are key/value log lines rather than JSON; this keeps the implementation dependency-free while preserving request IDs and endpoint timing.
+- Open risks: audit persistence is local filesystem only; production deployment should back it with durable object storage and central JSON logging.

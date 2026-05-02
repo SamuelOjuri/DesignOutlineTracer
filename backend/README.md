@@ -145,6 +145,128 @@ The production response shape follows `docs/plan.md` section 13:
 }
 ```
 
+## Endpoint Examples
+
+Run the server first:
+
+```powershell
+uvicorn app.main:app --reload --port 8000
+```
+
+Health:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Upload and classify:
+
+```powershell
+$upload = curl.exe -s -X POST `
+  -F "file=@../docs/TP17221_25.01_input.pdf;type=application/pdf" `
+  http://127.0.0.1:8000/api/documents | ConvertFrom-Json
+$upload.classification
+```
+
+```bash
+curl -X POST \
+  -F "file=@../docs/TP17221_25.01_input.pdf;type=application/pdf" \
+  http://127.0.0.1:8000/api/documents
+```
+
+Vector extraction:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/documents/$($upload.document_id)/vector"
+```
+
+```bash
+curl "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/vector"
+```
+
+Candidate generation:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/documents/$($upload.document_id)/candidates"
+```
+
+```bash
+curl "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/candidates"
+```
+
+Semantic validation:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/validate"
+```
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/validate"
+```
+
+Vector export:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"formats":["dxf","svg","geojson","mask_png","metadata_json"]}' `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/export"
+```
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"formats":["dxf","svg","geojson","mask_png","metadata_json"]}' \
+  "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/export"
+```
+
+Forced raster extraction:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"force_pipeline":"raster_first"}' `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/extract"
+```
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"force_pipeline":"raster_first"}' \
+  "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/extract"
+```
+
+Raster approval gate:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"pipeline":"raster","formats":["dxf"]}' `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/export"
+# Returns 409 until approved.
+
+Invoke-RestMethod `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body '{"approved_by":"user","target_area":{"outer_polygon_mm":[[0,0],[1,0],[1,1]],"holes":[]},"constraints":{"rainwater_outlets":[],"rooflights":[],"excluded_regions":[]}}' `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/approve"
+```
+
+Audit logs are written locally to:
+
+```text
+storage/uploads/<document_id>/audit.json
+```
+
 ## Phase Mapping
 
 - Phase 0: bootstrap, health, settings, sample fixture smoke tests.

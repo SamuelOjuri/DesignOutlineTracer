@@ -4,9 +4,11 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app.models.production import ExportPaths, ExportRequest, ExportResponse
 from app.services.ai.factory import get_ai_provider
+from app.services.audit import record_audit_event
 from app.services.export.writers import write_exports
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.finalize import build_production_schema
+from app.services.geometry.quality import QualityGateError, enforce_export_quality_gates
 from app.services.raster_pipeline.approval import is_approved
 from app.services.raster_pipeline.errors import RasterApprovalRequired
 from app.services.raster_pipeline.pipeline import load_raster_production_schema
@@ -66,6 +68,10 @@ async def export_document(
                 candidate_document=candidate_document,
                 validation=validation,
             )
+        enforce_export_quality_gates(
+            production_schema=production_schema,
+            requested_formats=export_request.formats,
+        )
         output_dir = export_dir(settings.storage_path, document_id)
         written = write_exports(
             production_schema=production_schema,
@@ -75,6 +81,8 @@ async def export_document(
     except Exception as exc:
         if isinstance(exc, RasterApprovalRequired):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        if isinstance(exc, QualityGateError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"failed to export document: {exc}",
@@ -82,6 +90,18 @@ async def export_document(
 
     relative_exports = _relative_export_paths(settings.storage_path, output_dir, written)
     production_schema.exports = relative_exports
+    record_audit_event(
+        storage_path=settings.storage_path,
+        document_id=document_id,
+        event_type="document_exported",
+        payload={
+            "pipeline": export_request.pipeline,
+            "formats": export_request.formats,
+            "exports": relative_exports.model_dump(mode="json"),
+            "quality_checks": production_schema.quality_checks.model_dump(mode="json"),
+        },
+        request=request,
+    )
     return ExportResponse(
         document_id=document_id,
         production_schema=production_schema,

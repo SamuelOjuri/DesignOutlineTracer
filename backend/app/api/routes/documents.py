@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, status
 
 from app.models.documents import DocumentUploadResponse
+from app.services.audit import record_audit_event
 from app.services.classifier.pdf_classifier import classify_source
 from app.services.storage.documents import (
     new_document_id,
@@ -50,7 +51,7 @@ async def upload_document(
             detail=f"failed to classify document: {exc}",
         ) from exc
 
-    return DocumentUploadResponse(
+    response = DocumentUploadResponse(
         document_id=document_id,
         original_filename=file.filename,
         stored_path=storage_relative_path(settings.storage_path, source_path),
@@ -59,3 +60,17 @@ async def upload_document(
         ),
         classification=classification,
     )
+    record_audit_event(
+        storage_path=settings.storage_path,
+        document_id=document_id,
+        event_type="document_uploaded",
+        payload={
+            "original_filename": file.filename,
+            "bytes_written": bytes_written,
+            "source_type": classification.source_type,
+            "recommended_pipeline": classification.recommended_pipeline,
+            "preview_png_path": response.preview_png_path,
+        },
+        request=request,
+    )
+    return response
