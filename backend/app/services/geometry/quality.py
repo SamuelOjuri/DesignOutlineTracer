@@ -27,15 +27,20 @@ def enforce_export_quality_gates(
         failures.append("legend_not_excluded")
     if not checks.scale_calibrated:
         failures.append("scale_not_calibrated")
+    if not checks.cad_candidate_exportable:
+        failures.append("candidate_not_cad_exportable")
+    if checks.calibration_confidence < 0.85 and checks.human_review_status != "approved":
+        failures.append("scale_requires_confirmation")
+    if checks.outlet_geometry_confidence < 0.7 and checks.human_review_status != "approved":
+        failures.append("outlet_geometry_requires_review")
     if production_schema.target_area.review_required and checks.human_review_status != "approved":
         failures.append("human_review_required")
 
     if production_schema.document.source_type == "vector_pdf":
         if not checks.contains_or_borders_rwp:
             failures.append("missing_rwp_constraints")
-        is_tp17221 = production_schema.document.source_file.startswith("TP17221")
-        if len(production_schema.constraints.rainwater_outlets) < 5 and is_tp17221:
-            failures.append("expected_rwp_count_below_5")
+        if not production_schema.constraints.rainwater_outlets:
+            failures.append("missing_rwp_outlets")
 
     if failures:
         raise QualityGateError("DXF export quality gates failed: " + ", ".join(failures))

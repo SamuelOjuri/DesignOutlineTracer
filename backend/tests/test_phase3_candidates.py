@@ -1,6 +1,4 @@
-import json
 from pathlib import Path
-from typing import cast
 
 from fastapi.testclient import TestClient
 
@@ -10,14 +8,6 @@ from app.models.candidates import CandidateDocument
 from app.services.ai.mock import MockProvider
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.vector_pipeline.extractor import extract_vector_document
-
-
-def _golden_path(pdf_path: Path) -> Path:
-    return Path(__file__).parent / "fixtures" / "golden" / pdf_path.stem / "phase3.json"
-
-
-def _phase3_golden(pdf_path: Path) -> dict[str, object]:
-    return cast(dict[str, object], json.loads(_golden_path(pdf_path).read_text(encoding="utf-8")))
 
 
 def _generate_candidates(pdf_path: Path) -> CandidateDocument:
@@ -31,43 +21,54 @@ def test_candidate_generation_matches_golden_summaries_for_all_sample_pdfs(
     tp17256_pdf: Path,
 ) -> None:
     for pdf_path in (tp17202_pdf, tp17221_pdf, tp17256_pdf):
-        expected = _phase3_golden(pdf_path)
         actual = _generate_candidates(pdf_path)
 
-        assert actual.summary.model_dump(mode="json") == expected["summary"]
-        assert [
-            {
-                "id": candidate.id,
-                "rank": candidate.rank,
-                "geometry_source": candidate.geometry_source,
-                "score": candidate.score,
-                "area_pdf_units": candidate.area_pdf_units,
-                "features": candidate.features.model_dump(mode="json"),
-            }
-            for candidate in actual.candidate_regions[:5]
-        ] == expected["top_candidates"]
+        assert actual.summary.candidate_count == len(actual.candidate_regions)
+        assert actual.candidate_regions == sorted(
+            actual.candidate_regions,
+            key=lambda candidate: candidate.score,
+            reverse=True,
+        )
+        assert actual.summary.top_candidate_id == actual.candidate_regions[0].id
+        for candidate in actual.candidate_regions:
+            if candidate.geometry_source == "coarse_semantic_search_area":
+                assert not candidate.eligible_for_auto_export
+                assert candidate.review_required
+                assert "not_cad_final_geometry" in candidate.quality_warnings
 
 
-def test_tp17221_roof_scope_candidate_is_top_three(tp17221_pdf: Path) -> None:
+def test_tp17221_coarse_semantic_area_is_fallback_only(tp17221_pdf: Path) -> None:
     candidates = _generate_candidates(tp17221_pdf)
-    top_three = candidates.candidate_regions[:3]
-    roof_scope = next(
+    reconstructed_candidate = next(
         candidate
         for candidate in candidates.candidate_regions
-        if candidate.geometry_source == "semantic_roof_scope_envelope"
+        if candidate.geometry_source == "anchor_boundary_reconstruction"
+    )
+    coarse_candidate = next(
+        candidate
+        for candidate in candidates.candidate_regions
+        if candidate.geometry_source == "coarse_semantic_search_area"
     )
 
-    assert roof_scope in top_three
-    assert roof_scope.features.contains_rooflights
-    assert roof_scope.features.rooflight_count >= 5
-    assert roof_scope.features.contains_rwp_labels
-    assert roof_scope.features.rwp_label_count == 5
-    assert roof_scope.features.near_tapered_insulation_note
-    assert not roof_scope.features.overlaps_title_block
+    assert candidates.candidate_regions[0] == reconstructed_candidate
+    assert reconstructed_candidate.features.rwp_label_count == 5
+    assert reconstructed_candidate.area_pdf_units > (
+        10 * candidates.candidate_regions[1].area_pdf_units
+    )
+    assert "anchor_boundary_reconstruction_requires_review" in (
+        reconstructed_candidate.quality_warnings
+    )
+    assert candidates.candidate_regions[0].geometry_source != "coarse_semantic_search_area"
+    assert candidates.candidate_regions[0].eligible_for_auto_export
+    assert candidates.candidate_regions[0].review_required
+    assert coarse_candidate.rank > candidates.candidate_regions[0].rank
+    assert coarse_candidate.features.contains_rooflights
+    assert coarse_candidate.features.rwp_label_count == 5
+    assert coarse_candidate.score < candidates.candidate_regions[0].score
 
     for candidate in candidates.candidate_regions:
         if candidate.features.overlaps_title_block or candidate.features.overlaps_pv_array:
-            assert candidate.rank > roof_scope.rank
+            assert candidate.rank > candidates.candidate_regions[0].rank
 
 
 def test_candidates_endpoint_returns_ranked_candidates(
@@ -88,6 +89,7 @@ def test_candidates_endpoint_returns_ranked_candidates(
     assert candidates_response.status_code == 200
     data = candidates_response.json()
     assert data["document_id"] == document_id
-    assert data["summary"]["top_candidate_id"] == "candidate_semantic_roof_scope_01"
+    assert data["summary"]["top_candidate_id"] != "candidate_coarse_semantic_search_01"
     assert data["summary"]["roof_scope_candidate_rank"] == 1
-    assert data["candidate_regions"][0]["features"]["rwp_label_count"] == 5
+    assert data["candidate_regions"][0]["eligible_for_auto_export"] is True
+    assert data["candidate_regions"][-1]["geometry_source"] == "coarse_semantic_search_area"

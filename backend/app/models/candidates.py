@@ -4,7 +4,11 @@ from pydantic import BaseModel, Field
 
 CandidateGeometrySource = Literal[
     "vector_polygonized_face",
-    "semantic_roof_scope_envelope",
+    "vector_composite_region",
+    "anchor_boundary_reconstruction",
+    "linework_snapped_semantic_region",
+    "coarse_semantic_search_area",
+    "raster_contour_polygonisation",
 ]
 
 PipelineProfile = Literal["vector", "raster"]
@@ -41,6 +45,9 @@ class CandidateRegion(BaseModel):
     area_pdf_units: float
     geometry_source: CandidateGeometrySource
     geometry_confidence: float = Field(ge=0, le=1)
+    eligible_for_auto_export: bool = True
+    review_required: bool = False
+    quality_warnings: list[str] = Field(default_factory=list)
     features: CandidateFeatures
     scores: CandidateScores
     score: float = Field(ge=0, le=1)

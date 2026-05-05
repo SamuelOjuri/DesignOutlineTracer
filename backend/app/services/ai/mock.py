@@ -32,10 +32,10 @@ class MockProvider(AiProvider):
         overlay_png_path: str | None,
     ) -> SemanticValidationResult:
         selected = _select_mock_candidate(candidate_document)
-        has_semantic_scope = selected.geometry_source == "semantic_roof_scope_envelope"
-        confidence = 0.92 if has_semantic_scope else 0.62
-        review_required = not has_semantic_scope
-        reason = _mock_reason(selected, has_semantic_scope)
+        is_coarse_fallback = selected.geometry_source == "coarse_semantic_search_area"
+        confidence = _mock_confidence(selected, is_coarse_fallback)
+        review_required = selected.review_required or is_coarse_fallback or confidence < 0.75
+        reason = _mock_reason(selected, is_coarse_fallback, review_required)
         return SemanticValidationResult(
             selected_candidate_id=selected.id,
             reason=reason,
@@ -76,27 +76,52 @@ def _classify_text(text: str) -> TextBlockClass:
 
 
 def _select_mock_candidate(candidate_document: CandidateDocument) -> CandidateRegion:
-    semantic_candidate = next(
+    exportable_candidate = next(
         (
             candidate
             for candidate in candidate_document.candidate_regions
-            if candidate.geometry_source == "semantic_roof_scope_envelope"
+            if candidate.eligible_for_auto_export
+            and candidate.geometry_source != "coarse_semantic_search_area"
         ),
         None,
     )
-    if semantic_candidate is not None:
-        return semantic_candidate
+    if exportable_candidate is not None:
+        return exportable_candidate
     return candidate_document.candidate_regions[0]
 
 
-def _mock_reason(candidate: CandidateRegion, has_semantic_scope: bool) -> str:
-    if has_semantic_scope:
+def _mock_confidence(candidate: CandidateRegion, is_coarse_fallback: bool) -> float:
+    if is_coarse_fallback:
+        return min(0.58, candidate.score)
+    semantic_support = 0.0
+    if candidate.features.contains_rooflights:
+        semantic_support += 0.08
+    if candidate.features.contains_rwp_labels:
+        semantic_support += 0.08
+    if candidate.features.near_tapered_insulation_note:
+        semantic_support += 0.05
+    confidence = max(candidate.score, candidate.geometry_confidence) + semantic_support
+    if candidate.review_required or candidate.score < 0.75:
+        confidence = min(confidence, 0.7)
+    return round(max(0.45, min(0.9, confidence)), 2)
+
+
+def _mock_reason(
+    candidate: CandidateRegion,
+    is_coarse_fallback: bool,
+    review_required: bool,
+) -> str:
+    if is_coarse_fallback:
         return (
-            "Selected deterministic roof-scope candidate because it contains rooflight "
-            f"geometry, {candidate.features.rwp_label_count} RWP labels, and fall/tapered notes "
-            "while excluding title-block metadata."
+            "Only a coarse semantic search area was available; it is not CAD-final geometry and "
+            "requires human review before export."
+        )
+    if review_required:
+        return (
+            f"Selected {candidate.id} as the best available linework-derived candidate, but "
+            "quality warnings or incomplete semantic anchors require human review before export."
         )
     return (
-        "Selected top-ranked vector candidate, but semantic roof-scope anchors were incomplete; "
-        "human review is required before geometry finalisation."
+        f"Selected {candidate.id} because it is linework-derived, exportable, and has the "
+        "strongest combination of geometry validity and semantic roof-scope evidence."
     )

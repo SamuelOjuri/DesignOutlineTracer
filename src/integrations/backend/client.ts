@@ -9,6 +9,9 @@ export interface BackendCandidate {
   bbox_pdf: number[];
   area_pdf_units: number;
   geometry_source: string;
+  eligible_for_auto_export?: boolean;
+  review_required?: boolean;
+  quality_warnings?: string[];
   score: number;
   features: {
     rooflight_count: number;
@@ -62,6 +65,8 @@ export interface BackendProductionSchema {
       scale: string;
       calibration_source: string;
       mm_per_pdf_unit: number;
+      calibration_confidence?: number;
+      requires_user_confirmation?: boolean;
     };
   };
   target_area: {
@@ -152,9 +157,18 @@ export function validateDocument(documentId: string): Promise<BackendValidationR
   });
 }
 
-export function exportDocument(documentId: string): Promise<BackendExportResponse> {
+export function exportDocument(
+  documentId: string,
+  formats?: string[],
+): Promise<BackendExportResponse> {
   return backendFetch<BackendExportResponse>(`/api/documents/${documentId}/export`, {
     method: "POST",
+    ...(formats
+      ? {
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ formats }),
+        }
+      : {}),
   });
 }
 
@@ -190,10 +204,15 @@ export function approveDocument(schema: BackendProductionSchema): Promise<{
 
 export async function runAutomatedExtraction(file: File): Promise<AutomatedExtractionResult> {
   const upload = await uploadDocument(file);
-  const [candidates, validation, exportResult] = await Promise.all([
+  const [candidates, validation] = await Promise.all([
     getCandidates(upload.document_id),
     validateDocument(upload.document_id),
-    exportDocument(upload.document_id),
+  ]);
+  const exportResult = await exportDocument(upload.document_id, [
+    "svg",
+    "geojson",
+    "mask_png",
+    "metadata_json",
   ]);
   const selectedId = validation.validation.selected_candidate_id || candidates.summary.top_candidate_id;
   const candidate = candidates.candidate_regions.find((item) => item.id === selectedId);

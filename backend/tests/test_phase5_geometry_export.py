@@ -1,8 +1,5 @@
-import json
 from pathlib import Path
-from typing import cast
 
-import ezdxf
 from fastapi.testclient import TestClient
 from shapely.geometry import Polygon
 
@@ -13,14 +10,6 @@ from app.services.ai.mock import MockProvider
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.finalize import build_production_schema
 from app.services.vector_pipeline.extractor import extract_vector_document
-
-
-def _golden_path(pdf_path: Path) -> Path:
-    return Path(__file__).parent / "fixtures" / "golden" / pdf_path.stem / "phase5.json"
-
-
-def _phase5_golden(pdf_path: Path) -> dict[str, object]:
-    return cast(dict[str, object], json.loads(_golden_path(pdf_path).read_text(encoding="utf-8")))
 
 
 def _build_schema(pdf_path: Path) -> ProductionSchema:
@@ -48,34 +37,32 @@ def test_finalized_schema_matches_golden_for_all_sample_pdfs(
 ) -> None:
     for pdf_path in (tp17202_pdf, tp17221_pdf, tp17256_pdf):
         schema = _build_schema(pdf_path)
-        actual = {
-            "area_m2_estimated": schema.target_area.area_m2_estimated,
-            "outlet_count": len(schema.constraints.rainwater_outlets),
-            "rooflight_count": len(schema.constraints.rooflights),
-            "human_review_status": schema.quality_checks.human_review_status,
-            "scale": schema.coordinate_systems.cad.scale,
-            "calibration_source": schema.coordinate_systems.cad.calibration_source,
-            "polygon_closed": schema.quality_checks.polygon_closed,
-            "self_intersections": schema.quality_checks.self_intersections,
-        }
-        assert actual == _phase5_golden(pdf_path)
+
+        assert schema.target_area.area_m2_estimated > 0
+        assert schema.quality_checks.human_review_status == "required"
+        assert schema.target_area.review_required
+        assert schema.coordinate_systems.cad.calibration_source != "accuroof_reference_area_tp17221"
+        assert schema.coordinate_systems.cad.requires_user_confirmation
+        assert schema.quality_checks.polygon_closed
+        assert schema.quality_checks.self_intersections is False
 
 
-def test_tp17221_finalized_geometry_meets_quality_gates(tp17221_pdf: Path) -> None:
+def test_tp17221_finalized_geometry_requires_review(tp17221_pdf: Path) -> None:
     schema = _build_schema(tp17221_pdf)
     polygon = Polygon(schema.target_area.outer_polygon_mm)
 
     assert polygon.is_valid
     assert polygon.exterior.is_ring
     assert schema.quality_checks.self_intersections is False
-    assert schema.quality_checks.contains_rooflights
-    assert schema.quality_checks.contains_or_borders_rwp
     assert len(schema.constraints.rainwater_outlets) >= 5
     assert len(schema.constraints.rooflights) >= 5
-    assert abs(schema.target_area.area_m2_estimated - 103.0) / 103.0 <= 0.05
+    assert schema.target_area.area_m2_estimated != 103.0
+    assert schema.coordinate_systems.cad.calibration_source == "detected_scale_text"
+    assert schema.quality_checks.human_review_status == "required"
+    assert "scale_requires_user_confirmation" in schema.quality_checks.warnings
 
 
-def test_export_endpoint_writes_all_formats_and_dxf_round_trips(
+def test_export_endpoint_blocks_dxf_until_review(
     tp17221_pdf: Path,
     tmp_path: Path,
 ) -> None:
@@ -90,16 +77,37 @@ def test_export_endpoint_writes_all_formats_and_dxf_round_trips(
         export_response = client.post(f"/api/documents/{document_id}/export")
 
     assert upload_response.status_code == 201
+    assert export_response.status_code == 409
+    assert "human_review_required" in export_response.text
+    assert "scale_requires_confirmation" in export_response.text
+
+
+def test_export_endpoint_writes_review_preview_formats(
+    tp17221_pdf: Path,
+    tmp_path: Path,
+) -> None:
+    app = create_app(Settings(storage_root=tmp_path, ai_provider="mock"))
+
+    with TestClient(app) as client, tp17221_pdf.open("rb") as upload:
+        upload_response = client.post(
+            "/api/documents",
+            files={"file": (tp17221_pdf.name, upload, "application/pdf")},
+        )
+        document_id = upload_response.json()["document_id"]
+        export_response = client.post(
+            f"/api/documents/{document_id}/export",
+            json={"formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+        )
+
+    assert upload_response.status_code == 201
     assert export_response.status_code == 200
     data = export_response.json()
     exports = data["exports"]
-    for key in ("dxf", "svg", "geojson", "mask_png", "metadata_json"):
+    assert exports["dxf"] is None
+    for key in ("svg", "geojson", "mask_png", "metadata_json"):
         assert exports[key]
         assert (tmp_path / exports[key]).exists()
-
-    ezdxf.readfile(tmp_path / exports["dxf"])  # type: ignore[attr-defined]
-    assert data["production_schema"]["target_area"]["area_m2_estimated"] == 103.0
-    assert data["production_schema"]["quality_checks"]["self_intersections"] is False
+    assert data["production_schema"]["target_area"]["review_required"] is True
 
 
 def test_export_endpoint_uses_original_pdf_after_validation_overlay(
@@ -115,10 +123,15 @@ def test_export_endpoint_uses_original_pdf_after_validation_overlay(
         )
         document_id = upload_response.json()["document_id"]
         validation_response = client.post(f"/api/documents/{document_id}/validate")
-        export_response = client.post(f"/api/documents/{document_id}/export")
+        export_response = client.post(
+            f"/api/documents/{document_id}/export",
+            json={"formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+        )
 
     assert validation_response.status_code == 200
     assert export_response.status_code == 200
     data = export_response.json()
     assert data["production_schema"]["document"]["source_file"] == tp17221_pdf.name
-    assert data["production_schema"]["target_area"]["area_m2_estimated"] == 103.0
+    assert data["production_schema"]["coordinate_systems"]["cad"]["calibration_source"] != (
+        "accuroof_reference_area_tp17221"
+    )

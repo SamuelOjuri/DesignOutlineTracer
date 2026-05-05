@@ -18,6 +18,21 @@ TextBlockClass = Literal[
 ]
 
 VectorPrimitiveType = Literal["line", "curve", "quad", "rect", "other"]
+VectorPrimitiveRole = Literal[
+    "roof_perimeter",
+    "parapet_or_wall",
+    "rooflight",
+    "hatch",
+    "dimension_line",
+    "leader_line",
+    "fall_arrow",
+    "pv_array",
+    "title_block",
+    "legend",
+    "notes",
+    "drainage_symbol",
+    "unknown",
+]
 SheetRegionType = Literal["drawing_viewport", "title_block", "legend", "notes"]
 
 
@@ -63,6 +78,7 @@ class VectorPrimitive(BaseModel):
     fill_colour: list[float] | None = None
     dash: str | None = None
     source: str = "pymupdf_get_drawings"
+    semantic_role: VectorPrimitiveRole = "unknown"
 
 
 class SheetRegion(BaseModel):

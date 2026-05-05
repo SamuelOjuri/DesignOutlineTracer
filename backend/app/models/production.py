@@ -29,6 +29,8 @@ class CadCoordinateSystem(BaseModel):
     scale: str
     calibration_source: str
     mm_per_pdf_unit: float
+    calibration_confidence: float = Field(default=0.0, ge=0, le=1)
+    requires_user_confirmation: bool = False
 
 
 class CoordinateSystems(BaseModel):
@@ -92,6 +94,10 @@ class QualityChecks(BaseModel):
     excludes_title_block: bool
     excludes_legend: bool
     scale_calibrated: bool
+    cad_candidate_exportable: bool = True
+    calibration_confidence: float = Field(default=0.0, ge=0, le=1)
+    outlet_geometry_confidence: float = Field(default=0.0, ge=0, le=1)
+    warnings: list[str] = Field(default_factory=list)
     human_review_status: str
 
 

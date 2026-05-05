@@ -12,6 +12,7 @@ from app.models.vector import (
     VectorDocument,
     VectorExtractionSummary,
     VectorPrimitive,
+    VectorPrimitiveRole,
 )
 from app.services.ai.provider import AiProvider
 
@@ -47,6 +48,12 @@ def extract_vector_document(
     classified_blocks = ai_provider.classify_text_blocks(text_blocks)
     classifications_by_id = {block.id: block for block in classified_blocks}
     text_blocks = [_apply_classification(block, classifications_by_id) for block in text_blocks]
+    vector_primitives = _apply_primitive_roles(
+        vector_primitives=vector_primitives,
+        sheet_regions=sheet_regions,
+        text_blocks=text_blocks,
+        rooflight_rectangles=rooflight_rectangles,
+    )
 
     rwp_labels = _extract_rwp_labels(text_blocks)
 
@@ -341,6 +348,132 @@ def _apply_classification(
             "semantic_confidence": classification.semantic_confidence,
         }
     )
+
+
+def _apply_primitive_roles(
+    *,
+    vector_primitives: list[VectorPrimitive],
+    sheet_regions: list[SheetRegion],
+    text_blocks: list[TextBlock],
+    rooflight_rectangles: list[RooflightRectangle],
+) -> list[VectorPrimitive]:
+    return [
+        primitive.model_copy(
+            update={
+                "semantic_role": _classify_primitive_role(
+                    primitive=primitive,
+                    sheet_regions=sheet_regions,
+                    text_blocks=text_blocks,
+                    rooflight_rectangles=rooflight_rectangles,
+                )
+            }
+        )
+        for primitive in vector_primitives
+    ]
+
+
+def _classify_primitive_role(
+    *,
+    primitive: VectorPrimitive,
+    sheet_regions: list[SheetRegion],
+    text_blocks: list[TextBlock],
+    rooflight_rectangles: list[RooflightRectangle],
+) -> VectorPrimitiveRole:
+    bbox = primitive.bbox_pdf
+    if any(
+        region.type in {"title_block", "legend"}
+        and _bbox_overlap_ratio(bbox, region.bbox_pdf) > 0.05
+        for region in sheet_regions
+    ):
+        return "title_block"
+    if any(
+        region.type == "notes" and _bbox_overlap_ratio(bbox, region.bbox_pdf) > 0.05
+        for region in sheet_regions
+    ):
+        return "notes"
+    if any(
+        _bbox_overlap_ratio(bbox, rooflight.bbox_pdf) > 0.35
+        for rooflight in rooflight_rectangles
+    ):
+        return "rooflight"
+    if _near_text_class(primitive, text_blocks, {"rwp_label"}, tolerance=90) and (
+        primitive.type in {"curve", "rect"} or _primitive_length(primitive) <= 140
+    ):
+        return "drainage_symbol"
+    if _near_text_class(primitive, text_blocks, {"fall_path_note"}, tolerance=120):
+        return "fall_arrow"
+    if _near_text_class(
+        primitive,
+        text_blocks,
+        {"roof_build_up_note", "general_note"},
+        tolerance=60,
+    ):
+        return "leader_line"
+
+    length = _primitive_length(primitive)
+    is_axis_aligned = bool(
+        primitive.start_pdf
+        and primitive.end_pdf
+        and (
+            abs(primitive.start_pdf[0] - primitive.end_pdf[0]) < AXIS_TOLERANCE
+            or abs(primitive.start_pdf[1] - primitive.end_pdf[1]) < AXIS_TOLERANCE
+        )
+    )
+    if primitive.type == "line" and is_axis_aligned and length >= 80:
+        if primitive.stroke_width >= 0.2:
+            return "roof_perimeter"
+        if primitive.stroke_width <= 0.05:
+            return "hatch"
+        return "parapet_or_wall"
+    if primitive.type == "line" and length < 80:
+        return "hatch"
+    return "unknown"
+
+
+def _near_text_class(
+    primitive: VectorPrimitive,
+    text_blocks: list[TextBlock],
+    text_classes: set[str],
+    *,
+    tolerance: float,
+) -> bool:
+    center_x, center_y = _bbox_center(primitive.bbox_pdf)
+    for block in text_blocks:
+        if block.text_class not in text_classes:
+            continue
+        block_x, block_y = _bbox_center(block.bbox_pdf)
+        if ((center_x - block_x) ** 2 + (center_y - block_y) ** 2) ** 0.5 <= tolerance:
+            return True
+    return False
+
+
+def _primitive_length(primitive: VectorPrimitive) -> float:
+    if primitive.start_pdf is None or primitive.end_pdf is None:
+        x0, y0, x1, y1 = primitive.bbox_pdf
+        return float(max(x1 - x0, y1 - y0))
+    return float(
+        (
+            (primitive.start_pdf[0] - primitive.end_pdf[0]) ** 2
+            + (primitive.start_pdf[1] - primitive.end_pdf[1]) ** 2
+        )
+        ** 0.5
+    )
+
+
+def _bbox_center(bbox: list[float]) -> tuple[float, float]:
+    return (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+
+
+def _bbox_overlap_ratio(left: list[float], right: list[float]) -> float:
+    x0 = max(left[0], right[0])
+    y0 = max(left[1], right[1])
+    x1 = min(left[2], right[2])
+    y1 = min(left[3], right[3])
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    overlap = (x1 - x0) * (y1 - y0)
+    left_area = max((left[2] - left[0]) * (left[3] - left[1]), 1.0)
+    return overlap / left_area
 
 
 def _same_rectangle(
