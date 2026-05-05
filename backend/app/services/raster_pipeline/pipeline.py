@@ -125,6 +125,7 @@ def run_raster_pipeline(
         render_result=render,
         text_blocks=text_blocks,
         primitives=primitives,
+        segmentation_candidates=segmentation_candidates,
     )
     production_schema = _production_schema(
         document_id=document_id,

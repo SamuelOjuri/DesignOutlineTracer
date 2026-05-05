@@ -3,23 +3,29 @@ from typing import cast
 from app.models.candidates import CandidateScores, PipelineProfile
 
 VECTOR_WEIGHTS: dict[str, float] = {
-    "geometric_validity": 0.30,
-    "agreement_with_vector_linework": 0.20,
-    "contains_expected_rooflights": 0.15,
-    "contains_expected_rwp_points": 0.15,
-    "proximity_to_tapered_insulation_notes": 0.10,
-    "excludes_title_block_legend_pv": 0.05,
-    "plausible_area_and_dimensions": 0.05,
+    "geometric_validity": 0.24,
+    "agreement_with_vector_linework": 0.16,
+    "contains_expected_rooflights": 0.12,
+    "contains_expected_rwp_points": 0.13,
+    "proximity_to_tapered_insulation_notes": 0.08,
+    "excludes_title_block_legend_pv": 0.04,
+    "plausible_area_and_dimensions": 0.04,
+    "boundary_evidence_quality": 0.10,
+    "semantic_scope_alignment": 0.06,
+    "excludes_detected_exclusions": 0.03,
 }
 
 RASTER_WEIGHTS: dict[str, float] = {
-    "geometric_validity": 0.25,
-    "agreement_with_vector_linework": 0.10,
-    "contains_expected_rooflights": 0.15,
-    "contains_expected_rwp_points": 0.15,
-    "proximity_to_tapered_insulation_notes": 0.10,
-    "excludes_title_block_legend_pv": 0.10,
-    "plausible_area_and_dimensions": 0.15,
+    "geometric_validity": 0.20,
+    "agreement_with_vector_linework": 0.08,
+    "contains_expected_rooflights": 0.12,
+    "contains_expected_rwp_points": 0.13,
+    "proximity_to_tapered_insulation_notes": 0.08,
+    "excludes_title_block_legend_pv": 0.08,
+    "plausible_area_and_dimensions": 0.12,
+    "boundary_evidence_quality": 0.08,
+    "semantic_scope_alignment": 0.07,
+    "excludes_detected_exclusions": 0.04,
 }
 
 

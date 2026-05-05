@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     storage_root: Path = Path("storage")
     ai_provider: str = "gemini"
-    gemini_validation_model: str = "gemini-2.5-flash"
-    gemini_pro_model: str = "gemini-2.5-pro"
+    gemini_validation_model: str = "gemini-3-flash-preview"
+    gemini_pro_model: str = "gemini-3.1-pro-preview"
 
     google_api_key: str | None = None
     openai_api_key: str | None = None
@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     raster_ocr_provider: str = "gemini"
     raster_preview_dpi: int = 125
-    gemini_ocr_model: str = "gemini-2.5-flash"
+    gemini_ocr_model: str = "gemini-3-flash-preview"
     raster_render_dpi: int = 300
     raster_max_render_pixels: int = 80_000_000
     raster_max_tile_pixels: int = 5_000_000

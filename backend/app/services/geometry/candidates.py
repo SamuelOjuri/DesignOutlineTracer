@@ -1,20 +1,31 @@
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
 
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
 
 from app.models.candidates import (
+    CandidateBoundaryMetrics,
     CandidateDocument,
     CandidateFeatures,
     CandidateGeometrySource,
     CandidateRegion,
     CandidateScores,
     CandidateSummary,
+    OpenCvRefinementMetrics,
     PipelineProfile,
+    SemanticZone,
+    SemanticZoneType,
+    TargetScopeIntent,
 )
-from app.models.vector import TextBlock, VectorDocument
+from app.models.vector import TextBlock, VectorDocument, VectorPrimitive
+from app.services.geometry.rooflights import (
+    detect_scoped_rooflight_rectangles,
+    rooflights_expected,
+)
 from app.services.scoring.candidate_scoring import score_candidate
 
 MAX_POLYGONIZED_SEGMENTS = 2500
@@ -33,7 +44,15 @@ AUTO_EXPORT_GEOMETRY_SOURCES: set[CandidateGeometrySource] = {
     "vector_polygonized_face",
     "vector_composite_region",
     "linework_snapped_semantic_region",
+    "opencv_refined_vector_candidate",
     "raster_contour_polygonisation",
+}
+SELECTION_BLOCKING_QUALITY_WARNINGS = {
+    "candidate_area_too_broad",
+    "candidate_overunion_risk",
+    "low_boundary_linework_agreement",
+    "opencv_boundary_support_low",
+    "opencv_refined_from_coarse_candidate",
 }
 RECONSTRUCTION_EXCLUDED_ROLES = {
     "dimension_line",
@@ -66,6 +85,8 @@ def generate_candidate_document(
     vector_document: VectorDocument,
     *,
     pipeline_profile: PipelineProfile = "vector",
+    source_path: Path | None = None,
+    refinement_render_dpi: int = 160,
 ) -> CandidateDocument:
     rwp_anchors = _rwp_anchors(vector_document.text_blocks)
     note_anchors = _note_anchors(vector_document.text_blocks)
@@ -76,9 +97,19 @@ def generate_candidate_document(
     primitive_anchors = _primitive_anchors(vector_document)
     title_regions = _title_regions(vector_document)
     pv_regions = _pv_regions(vector_document.text_blocks)
+    target_scope_intent = _target_scope_intent(vector_document.text_blocks)
+    semantic_zones = _semantic_zones(vector_document)
 
     candidates: list[CandidateRegion] = []
-    semantic_polygon = _semantic_envelope_candidate(rwp_anchors, rooflight_anchors, vector_document)
+    scope_rooflight_anchors = _scope_rooflight_anchors(
+        rwp_anchors=rwp_anchors,
+        rooflight_anchors=rooflight_anchors,
+    )
+    semantic_polygon = _semantic_envelope_candidate(
+        rwp_anchors,
+        scope_rooflight_anchors,
+        vector_document,
+    )
     face_polygons = _polygonized_face_candidates(vector_document)
 
     for index, polygon in enumerate(
@@ -102,6 +133,7 @@ def generate_candidate_document(
                 note_anchors=note_anchors,
                 title_regions=title_regions,
                 pv_regions=pv_regions,
+                semantic_zones=semantic_zones,
                 pipeline_profile=pipeline_profile,
             )
         )
@@ -133,8 +165,11 @@ def generate_candidate_document(
                 note_anchors=note_anchors,
                 title_regions=title_regions,
                 pv_regions=pv_regions,
+                semantic_zones=semantic_zones,
                 pipeline_profile=pipeline_profile,
                 quality_warnings=warnings,
+                bridge_count=reconstruction.bridge_count,
+                search_boundary_touch_ratio=reconstruction.search_boundary_touch_ratio,
             )
         )
 
@@ -153,6 +188,7 @@ def generate_candidate_document(
                     note_anchors=note_anchors,
                     title_regions=title_regions,
                     pv_regions=pv_regions,
+                    semantic_zones=semantic_zones,
                     pipeline_profile=pipeline_profile,
                 )
             )
@@ -170,31 +206,47 @@ def generate_candidate_document(
                 note_anchors=note_anchors,
                 title_regions=title_regions,
                 pv_regions=pv_regions,
+                semantic_zones=semantic_zones,
                 pipeline_profile=pipeline_profile,
             )
         )
 
     if semantic_polygon is not None:
-        candidates.append(
-            _build_candidate(
-                candidate_id="candidate_coarse_semantic_search_01",
-                polygon=semantic_polygon,
-                geometry_source=COARSE_GEOMETRY_SOURCE,
-                geometry_confidence=0.35,
-                vector_document=vector_document,
-                rwp_anchors=rwp_anchors,
-                rooflight_anchors=rooflight_anchors,
-                note_anchors=note_anchors,
-                title_regions=title_regions,
-                pv_regions=pv_regions,
-                pipeline_profile=pipeline_profile,
-                eligible_for_auto_export=False,
-                quality_warnings=[
-                    "coarse_semantic_search_area",
-                    "not_cad_final_geometry",
-                ],
-            )
+        coarse_candidate = _build_candidate(
+            candidate_id="candidate_coarse_semantic_search_01",
+            polygon=semantic_polygon,
+            geometry_source=COARSE_GEOMETRY_SOURCE,
+            geometry_confidence=0.35,
+            vector_document=vector_document,
+            rwp_anchors=rwp_anchors,
+            rooflight_anchors=rooflight_anchors,
+            note_anchors=note_anchors,
+            title_regions=title_regions,
+            pv_regions=pv_regions,
+            semantic_zones=semantic_zones,
+            pipeline_profile=pipeline_profile,
+            eligible_for_auto_export=False,
+            quality_warnings=[
+                "coarse_semantic_search_area",
+                "not_cad_final_geometry",
+            ],
         )
+        refined_candidate = _opencv_refined_semantic_candidate(
+            source_path=source_path,
+            vector_document=vector_document,
+            source_candidate=_opencv_refinement_seed(candidates, coarse_candidate),
+            rwp_anchors=rwp_anchors,
+            rooflight_anchors=rooflight_anchors,
+            note_anchors=note_anchors,
+            title_regions=title_regions,
+            pv_regions=pv_regions,
+            semantic_zones=semantic_zones,
+            pipeline_profile=pipeline_profile,
+            render_dpi=refinement_render_dpi,
+        )
+        if refined_candidate is not None:
+            candidates.append(refined_candidate)
+        candidates.append(coarse_candidate)
 
     if not candidates:
         candidates.append(
@@ -209,6 +261,7 @@ def generate_candidate_document(
                 note_anchors=note_anchors,
                 title_regions=title_regions,
                 pv_regions=pv_regions,
+                semantic_zones=semantic_zones,
                 pipeline_profile=pipeline_profile,
                 eligible_for_auto_export=False,
                 quality_warnings=[
@@ -244,6 +297,8 @@ def generate_candidate_document(
             top_candidate_score=ranked_candidates[0].score if ranked_candidates else None,
             roof_scope_candidate_rank=roof_scope_rank,
         ),
+        target_scope_intent=target_scope_intent,
+        semantic_zones=semantic_zones,
     )
 
 
@@ -259,12 +314,33 @@ def _build_candidate(
     note_anchors: list[Anchor],
     title_regions: list[Polygon],
     pv_regions: list[Polygon],
+    semantic_zones: list[SemanticZone],
     pipeline_profile: PipelineProfile,
     eligible_for_auto_export: bool | None = None,
     quality_warnings: list[str] | None = None,
+    bridge_count: int = 0,
+    search_boundary_touch_ratio: float = 0.0,
+    source_candidate_id: str | None = None,
+    source_geometry_source: CandidateGeometrySource | None = None,
+    opencv_refinement: OpenCvRefinementMetrics | None = None,
 ) -> CandidateRegion:
     polygon = _clean_polygon(polygon)
-    rooflight_count = sum(1 for anchor in rooflight_anchors if polygon.contains(anchor.point))
+    fall_anchors = _fall_anchors(vector_document)
+    rooflight_anchor_count = sum(
+        1 for anchor in rooflight_anchors if polygon.contains(anchor.point)
+    )
+    scoped_rooflight_count = len(
+        detect_scoped_rooflight_rectangles(
+            vector_document=vector_document,
+            target_polygon_pdf=polygon,
+            semantic_zones=semantic_zones,
+        )
+    )
+    rooflight_count = max(rooflight_anchor_count, scoped_rooflight_count)
+    expected_rooflight_count = max(len(rooflight_anchors), scoped_rooflight_count)
+    if rooflights_expected(vector_document):
+        expected_rooflight_count = max(expected_rooflight_count, 1)
+    rooflight_coverage = _ratio(rooflight_count, expected_rooflight_count)
     rwp_count = sum(
         1
         for anchor in rwp_anchors
@@ -273,9 +349,39 @@ def _build_candidate(
     near_notes = any(
         polygon.distance(anchor.point) <= NOTE_PROXIMITY_TOLERANCE for anchor in note_anchors
     )
+    fall_count = sum(
+        1
+        for anchor in fall_anchors
+        if polygon.contains(anchor.point) or polygon.distance(anchor.point) <= PROXIMITY_TOLERANCE
+    )
     overlaps_title = any(_overlaps_meaningfully(polygon, region) for region in title_regions)
     overlaps_pv = any(_overlaps_meaningfully(polygon, region) for region in pv_regions)
+    excluded_overlap_ratio = _excluded_zone_overlap_ratio(polygon, semantic_zones)
+    overlaps_exclusion = excluded_overlap_ratio > 0.02
     area = polygon.area
+    positive_anchor_ratio = _positive_anchor_coverage(
+        polygon=polygon,
+        rwp_anchors=rwp_anchors,
+        rooflight_anchors=rooflight_anchors,
+        note_anchors=note_anchors,
+        fall_anchors=fall_anchors,
+        rooflights_expected=rooflights_expected(vector_document),
+        rooflight_constraint_coverage=rooflight_coverage,
+    )
+    positive_anchor_count = rwp_count + rooflight_count + fall_count + (1 if near_notes else 0)
+    vector_linework_agreement = _linework_agreement(polygon, vector_document, geometry_source)
+    boundary_metrics = _candidate_boundary_metrics(
+        polygon=polygon,
+        area=area,
+        vector_document=vector_document,
+        geometry_source=geometry_source,
+        boundary_supported_ratio=vector_linework_agreement,
+        bridge_count=bridge_count,
+        search_boundary_touch_ratio=search_boundary_touch_ratio,
+        positive_anchor_ratio=positive_anchor_ratio,
+        excluded_overlap_ratio=excluded_overlap_ratio,
+        internal_constraint_coverage=rooflight_coverage,
+    )
 
     features = CandidateFeatures(
         contains_rooflights=rooflight_count > 0,
@@ -283,38 +389,67 @@ def _build_candidate(
         contains_rwp_labels=rwp_count > 0,
         rwp_label_count=rwp_count,
         near_tapered_insulation_note=near_notes,
-        near_fall_arrows=near_notes,
+        near_fall_arrows=fall_count > 0 or near_notes,
         overlaps_title_block=overlaps_title,
         overlaps_pv_array=overlaps_pv,
+        overlaps_exclusion_zone=overlaps_exclusion,
+        positive_anchor_count=positive_anchor_count,
+        positive_anchor_coverage=positive_anchor_ratio,
         geometry_valid=polygon.is_valid and not polygon.is_empty,
         plausible_area=_is_plausible_area(area, vector_document),
     )
 
-    vector_linework_agreement = _linework_agreement(polygon, vector_document, geometry_source)
     scores = CandidateScores(
         geometric_validity=1.0 if features.geometry_valid else 0.0,
         agreement_with_vector_linework=vector_linework_agreement,
-        contains_expected_rooflights=_ratio(rooflight_count, len(rooflight_anchors)),
+        contains_expected_rooflights=rooflight_coverage,
         contains_expected_rwp_points=_ratio(rwp_count, len(rwp_anchors)),
         proximity_to_tapered_insulation_notes=1.0 if near_notes else 0.0,
         excludes_title_block_legend_pv=0.0 if overlaps_title or overlaps_pv else 1.0,
         plausible_area_and_dimensions=1.0 if features.plausible_area else 0.0,
+        boundary_evidence_quality=boundary_metrics.linework_closure_confidence,
+        semantic_scope_alignment=round(
+            positive_anchor_ratio
+            * (1.0 - boundary_metrics.excluded_anchor_overlap_ratio)
+            * (1.0 - boundary_metrics.overunion_risk * 0.5),
+            4,
+        ),
+        excludes_detected_exclusions=round(1.0 - excluded_overlap_ratio, 4),
     )
     score = score_candidate(scores, pipeline_profile)
     if overlaps_title or overlaps_pv:
         score = round(score * 0.35, 4)
+    if overlaps_exclusion:
+        score = round(score * 0.65, 4)
+    if scores.semantic_scope_alignment < 0.30:
+        score = round(score * 0.52, 4)
+    if boundary_metrics.overunion_risk >= 0.45:
+        score = round(score * (1.0 - min(0.30, boundary_metrics.overunion_risk * 0.35)), 4)
+    if len(rwp_anchors) >= 3 and rwp_count < max(2, math.ceil(len(rwp_anchors) * 0.5)):
+        score = round(min(score, 0.50), 4)
     if geometry_source == COARSE_GEOMETRY_SOURCE:
         score = round(min(score * 0.45, 0.49), 4)
 
+    warnings = [*(quality_warnings or [])]
+    warnings.extend(
+        _candidate_quality_warnings(
+            features,
+            scores,
+            boundary_metrics,
+            geometry_source,
+            vector_document,
+            area,
+        )
+    )
+    blocking_warnings = SELECTION_BLOCKING_QUALITY_WARNINGS.intersection(warnings)
     auto_export = (
         geometry_source in AUTO_EXPORT_GEOMETRY_SOURCES
         if eligible_for_auto_export is None
         else eligible_for_auto_export
     )
-    warnings = [*(quality_warnings or [])]
-    warnings.extend(
-        _candidate_quality_warnings(features, scores, geometry_source, vector_document, area)
-    )
+    if blocking_warnings:
+        auto_export = False
+        score = round(min(score, 0.44), 4)
     review_required = (
         not auto_export
         or score < 0.75
@@ -333,8 +468,12 @@ def _build_candidate(
         eligible_for_auto_export=auto_export,
         review_required=review_required,
         quality_warnings=sorted(set(warnings)),
+        source_candidate_id=source_candidate_id,
+        source_geometry_source=source_geometry_source,
+        opencv_refinement=opencv_refinement,
         features=features,
         scores=scores,
+        boundary_metrics=boundary_metrics,
         score=score,
     )
 
@@ -390,6 +529,95 @@ def _polygonized_face_candidates(vector_document: VectorDocument) -> list[Polygo
     unique_polygons = _dedupe_polygons(polygons)
     return sorted(unique_polygons, key=lambda polygon: polygon.area, reverse=True)[
         :MAX_POLYGONIZED_CANDIDATES
+    ]
+
+
+def _opencv_refined_semantic_candidate(
+    *,
+    source_path: Path | None,
+    vector_document: VectorDocument,
+    source_candidate: CandidateRegion,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+    note_anchors: list[Anchor],
+    title_regions: list[Polygon],
+    pv_regions: list[Polygon],
+    semantic_zones: list[SemanticZone],
+    pipeline_profile: PipelineProfile,
+    render_dpi: int,
+) -> CandidateRegion | None:
+    if source_path is None or source_path.suffix.lower() != ".pdf":
+        return None
+    try:
+        from app.services.geometry.opencv_refinement import refine_candidate_with_opencv
+
+        refinement = refine_candidate_with_opencv(
+            source_path=source_path,
+            vector_document=vector_document,
+            candidate=source_candidate,
+            semantic_zones=semantic_zones,
+            render_dpi=render_dpi,
+        )
+    except Exception:
+        return None
+    if not refinement.accepted or len(refinement.polygon_pdf) < 3:
+        return None
+    polygon = _clean_polygon(Polygon(refinement.polygon_pdf))
+    if polygon.is_empty or polygon.area <= 0:
+        return None
+    warnings = ["opencv_refined_candidate_requires_review", *refinement.warnings]
+    eligible_for_auto_export: bool | None = None
+    if source_candidate.geometry_source == COARSE_GEOMETRY_SOURCE:
+        warnings.append("opencv_refined_from_coarse_candidate")
+        eligible_for_auto_export = False
+    return _build_candidate(
+        candidate_id="candidate_opencv_refined_semantic_01",
+        polygon=polygon,
+        geometry_source="opencv_refined_vector_candidate",
+        geometry_confidence=0.80,
+        vector_document=vector_document,
+        rwp_anchors=rwp_anchors,
+        rooflight_anchors=rooflight_anchors,
+        note_anchors=note_anchors,
+        title_regions=title_regions,
+        pv_regions=pv_regions,
+        semantic_zones=semantic_zones,
+        pipeline_profile=pipeline_profile,
+        eligible_for_auto_export=eligible_for_auto_export,
+        quality_warnings=warnings,
+        source_candidate_id=source_candidate.id,
+        source_geometry_source=source_candidate.geometry_source,
+        opencv_refinement=refinement.metrics,
+    )
+
+
+def _opencv_refinement_seed(
+    candidates: list[CandidateRegion],
+    coarse_candidate: CandidateRegion,
+) -> CandidateRegion:
+    return next(
+        (
+            candidate
+            for candidate in sorted(candidates, key=lambda item: item.score, reverse=True)
+            if candidate.geometry_source != COARSE_GEOMETRY_SOURCE
+            and not SELECTION_BLOCKING_QUALITY_WARNINGS.intersection(candidate.quality_warnings)
+            and candidate.boundary_metrics.included_positive_anchor_ratio >= 0.45
+        ),
+        coarse_candidate,
+    )
+
+
+def _scope_rooflight_anchors(
+    *,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+) -> list[Anchor]:
+    if not rwp_anchors:
+        return rooflight_anchors
+    return [
+        rooflight
+        for rooflight in rooflight_anchors
+        if any(rooflight.point.distance(rwp.point) <= 450.0 for rwp in rwp_anchors)
     ]
 
 
@@ -514,6 +742,137 @@ def _primitive_anchors(vector_document: VectorDocument) -> list[Anchor]:
             )
         )
     return anchors
+
+
+def _fall_anchors(vector_document: VectorDocument) -> list[Anchor]:
+    return [
+        _primitive_anchor(primitive)
+        for primitive in vector_document.vector_primitives
+        if primitive.semantic_role == "fall_arrow"
+    ]
+
+
+def _primitive_anchor(primitive: VectorPrimitive) -> Anchor:
+    return Anchor(
+        id=f"{primitive.semantic_role}:{primitive.id}",
+        point=_bbox_center(primitive.bbox_pdf),
+        bbox=primitive.bbox_pdf,
+    )
+
+
+def _positive_anchor_coverage(
+    *,
+    polygon: Polygon,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+    note_anchors: list[Anchor],
+    fall_anchors: list[Anchor],
+    rooflights_expected: bool = False,
+    rooflight_constraint_coverage: float = 0.0,
+) -> float:
+    group_scores: list[float] = []
+    if rwp_anchors:
+        group_scores.append(
+            _ratio(
+                sum(
+                    1
+                    for anchor in rwp_anchors
+                    if polygon.contains(anchor.point)
+                    or polygon.distance(anchor.point) <= PROXIMITY_TOLERANCE
+                ),
+                len(rwp_anchors),
+            )
+        )
+    if rooflight_anchors:
+        group_scores.append(
+            _ratio(
+                sum(1 for anchor in rooflight_anchors if polygon.contains(anchor.point)),
+                len(rooflight_anchors),
+            )
+        )
+    elif rooflights_expected:
+        group_scores.append(rooflight_constraint_coverage)
+    if note_anchors:
+        group_scores.append(
+            1.0
+            if any(
+                polygon.distance(anchor.point) <= NOTE_PROXIMITY_TOLERANCE
+                for anchor in note_anchors
+            )
+            else 0.0
+        )
+    if fall_anchors:
+        group_scores.append(
+            1.0
+            if any(
+                polygon.contains(anchor.point)
+                or polygon.distance(anchor.point) <= PROXIMITY_TOLERANCE
+                for anchor in fall_anchors
+            )
+            else 0.0
+        )
+    if not group_scores:
+        return 0.0
+    return round(sum(group_scores) / len(group_scores), 4)
+
+
+def _excluded_zone_overlap_ratio(polygon: Polygon, semantic_zones: list[SemanticZone]) -> float:
+    if polygon.is_empty or polygon.area <= 0:
+        return 0.0
+    excluded_polygons = [box(*zone.bbox_pdf) for zone in semantic_zones if zone.excluded]
+    if not excluded_polygons:
+        return 0.0
+    overlap_area = sum(float(polygon.intersection(region).area) for region in excluded_polygons)
+    return round(min(1.0, overlap_area / float(polygon.area)), 4)
+
+
+def _candidate_boundary_metrics(
+    *,
+    polygon: Polygon,
+    area: float,
+    vector_document: VectorDocument,
+    geometry_source: CandidateGeometrySource,
+    boundary_supported_ratio: float,
+    bridge_count: int,
+    search_boundary_touch_ratio: float,
+    positive_anchor_ratio: float,
+    excluded_overlap_ratio: float,
+    internal_constraint_coverage: float,
+) -> CandidateBoundaryMetrics:
+    page = vector_document.page_metadata[0]
+    page_area = max(page.page_width * page.page_height, 1.0)
+    area_ratio = float(area) / page_area
+    broadness_risk = max(0.0, min(1.0, (area_ratio - 0.18) / 0.32))
+    synthetic_ratio = min(1.0, bridge_count * 0.012)
+    search_touch = max(0.0, min(1.0, search_boundary_touch_ratio))
+    if geometry_source == COARSE_GEOMETRY_SOURCE:
+        broadness_risk = max(broadness_risk, 0.65)
+        search_touch = max(search_touch, 0.65)
+
+    overunion_risk = max(
+        excluded_overlap_ratio,
+        broadness_risk,
+        synthetic_ratio * 0.45,
+        search_touch * 0.75,
+    )
+    scope_fragment_risk = 1.0 - positive_anchor_ratio if positive_anchor_ratio else 0.0
+    linework_closure_confidence = boundary_supported_ratio * (1.0 - synthetic_ratio * 0.5)
+    linework_closure_confidence *= 1.0 - search_touch * 0.4
+    if geometry_source == "vector_polygonized_face":
+        linework_closure_confidence = max(linework_closure_confidence, 0.9)
+
+    return CandidateBoundaryMetrics(
+        boundary_supported_ratio=round(boundary_supported_ratio, 4),
+        synthetic_boundary_ratio=round(synthetic_ratio, 4),
+        search_boundary_touch_ratio=round(search_touch, 4),
+        bridge_count=bridge_count,
+        included_positive_anchor_ratio=positive_anchor_ratio,
+        excluded_anchor_overlap_ratio=excluded_overlap_ratio,
+        internal_constraint_coverage=internal_constraint_coverage,
+        overunion_risk=round(max(0.0, min(1.0, overunion_risk)), 4),
+        scope_fragment_risk=round(max(0.0, min(1.0, scope_fragment_risk)), 4),
+        linework_closure_confidence=round(max(0.0, min(1.0, linework_closure_confidence)), 4),
+    )
 
 
 def _reconstruction_seed_anchors(
@@ -787,6 +1146,96 @@ def _linework_snapped_semantic_candidate(
     return max(polygons, key=lambda polygon: polygon.area)
 
 
+def _target_scope_intent(text_blocks: list[TextBlock]) -> TargetScopeIntent:
+    include_evidence: set[str] = set()
+    exclude_evidence: set[str] = {"title_block", "legend", "notes"}
+    for block in text_blocks:
+        text = block.text.lower()
+        if block.text_class in {"tapered_scope_note", "roof_build_up_note"}:
+            include_evidence.add("tapered_insulation")
+        if block.text_class == "flat_roof_note" or "flat roof" in text or "single-ply" in text:
+            include_evidence.add("flat_roof_single_ply")
+        if block.text_class in {"fall_path_note", "drainage_note"}:
+            include_evidence.add("fall_paths_and_drainage")
+        if block.text_class in {"rwp_label"}:
+            include_evidence.add("rwp_labels")
+        if block.text_class in {"rooflight_label", "rooflight_spec"}:
+            include_evidence.add("rooflights")
+        if block.text_class == "pv_note" or re.search(r"\bpv\b|photovoltaic", text):
+            exclude_evidence.add("pv_array")
+        if block.text_class == "existing_roof_note" or ("existing" in text and "roof" in text):
+            exclude_evidence.add("existing_roof")
+        if block.text_class == "pitched_roof_note" or "pitched roof" in text:
+            exclude_evidence.add("pitched_roof")
+        if block.text_class == "exclusion_note":
+            exclude_evidence.add("explicit_exclusion_note")
+
+    if not include_evidence:
+        include_evidence.add("roof_scope_from_geometry")
+    return TargetScopeIntent(
+        include_evidence=sorted(include_evidence),
+        exclude_evidence=sorted(exclude_evidence),
+        allow_multiple_regions=False,
+        requires_review_if_ambiguous=True,
+    )
+
+
+def _semantic_zones(vector_document: VectorDocument) -> list[SemanticZone]:
+    zones: list[SemanticZone] = []
+    for region in vector_document.sheet_regions:
+        if region.type not in {"title_block", "legend", "notes"}:
+            continue
+        zones.append(
+            SemanticZone(
+                id=f"zone_{len(zones) + 1:03d}",
+                type=cast(SemanticZoneType, region.type),
+                page_number=region.page_number,
+                bbox_pdf=region.bbox_pdf,
+                confidence=region.confidence,
+                source="sheet_region_detection",
+                reason=f"{region.type} linework should not contribute to roof boundary extraction",
+                excluded=True,
+            )
+        )
+
+    for block in vector_document.text_blocks:
+        zone_type = _semantic_zone_type(block)
+        if zone_type is None:
+            continue
+        page = vector_document.page_metadata[block.page_number - 1]
+        excluded = zone_type != "target_scope_note"
+        zones.append(
+            SemanticZone(
+                id=f"zone_{len(zones) + 1:03d}",
+                type=zone_type,
+                page_number=block.page_number,
+                bbox_pdf=_expand_bbox(block.bbox_pdf, 28, page.page_width, page.page_height),
+                confidence=block.semantic_confidence or 0.62,
+                source="classified_text_block",
+                reason=block.text[:160],
+                excluded=excluded,
+            )
+        )
+    return zones
+
+
+def _semantic_zone_type(block: TextBlock) -> SemanticZoneType | None:
+    text = block.text.lower()
+    if block.text_class == "pv_note" or re.search(r"\bpv\b|photovoltaic", text):
+        return "pv_array"
+    if block.text_class == "existing_roof_note" or ("existing" in text and "roof" in text):
+        return "existing_roof"
+    if block.text_class == "pitched_roof_note" or "pitched roof" in text:
+        return "pitched_roof"
+    if block.text_class == "exclusion_note":
+        return "non_target_roof"
+    if any(token in text for token in ("plant", "mechanical equipment")):
+        return "plant_zone"
+    if block.text_class in {"tapered_scope_note", "flat_roof_note", "roof_build_up_note"}:
+        return "target_scope_note"
+    return None
+
+
 def _semantic_envelope_candidate(
     rwp_anchors: list[Anchor],
     rooflight_anchors: list[Anchor],
@@ -943,6 +1392,7 @@ def _linework_agreement(
 def _candidate_quality_warnings(
     features: CandidateFeatures,
     scores: CandidateScores,
+    boundary_metrics: CandidateBoundaryMetrics,
     geometry_source: CandidateGeometrySource,
     vector_document: VectorDocument,
     area: float,
@@ -956,10 +1406,26 @@ def _candidate_quality_warnings(
         warnings.append("overlaps_title_block")
     if features.overlaps_pv_array:
         warnings.append("overlaps_pv_array")
+    if features.overlaps_exclusion_zone:
+        warnings.append("overlaps_detected_exclusion_zone")
     if not features.contains_rwp_labels:
         warnings.append("missing_rwp_anchor")
+    if (
+        vector_document.summary.rwp_label_count >= 3
+        and features.rwp_label_count
+        < max(2, math.ceil(vector_document.summary.rwp_label_count * 0.5))
+    ):
+        warnings.append("partial_rwp_anchor_coverage")
     if scores.agreement_with_vector_linework < 0.55:
         warnings.append("low_boundary_linework_agreement")
+    if boundary_metrics.linework_closure_confidence < 0.45:
+        warnings.append("weak_boundary_closure_evidence")
+    if boundary_metrics.synthetic_boundary_ratio >= 0.25:
+        warnings.append("boundary_depends_on_synthetic_edges")
+    if boundary_metrics.overunion_risk >= 0.45:
+        warnings.append("candidate_overunion_risk")
+    if scores.semantic_scope_alignment < 0.45:
+        warnings.append("weak_semantic_scope_alignment")
     page = vector_document.page_metadata[0]
     if area >= page.page_width * page.page_height * 0.35:
         warnings.append("candidate_area_too_broad")

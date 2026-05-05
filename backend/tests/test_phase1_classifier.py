@@ -60,7 +60,7 @@ def test_upload_document_persists_file_and_returns_classification(
     tp17221_pdf: Path,
     tmp_path: Path,
 ) -> None:
-    app = create_app(Settings(storage_root=tmp_path))
+    app = create_app(Settings(storage_root=tmp_path, ai_provider="mock"))
 
     with TestClient(app) as client, tp17221_pdf.open("rb") as upload:
         response = client.post(

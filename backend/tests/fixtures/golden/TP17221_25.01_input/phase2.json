@@ -12,7 +12,7 @@
       "rwp.4",
       "rwp.5"
     ],
-    "rooflight_rectangle_count": 6
+    "rooflight_rectangle_count": 0
   },
   "page_metadata": {
     "page_number": 1,
@@ -68,17 +68,22 @@
     }
   ],
   "class_counts": {
-    "drawing_number": 5,
+    "drainage_note": 1,
+    "drawing_number": 3,
     "drawing_status": 2,
     "drawing_title": 2,
-    "fall_path_note": 3,
-    "general_note": 15,
+    "existing_roof_note": 3,
+    "fall_path_note": 8,
+    "flat_roof_note": 1,
+    "general_note": 13,
     "other": 42,
-    "revision": 1,
+    "pv_note": 1,
+    "revision": 2,
     "roof_build_up_note": 2,
     "rooflight_label": 1,
     "rwp_label": 3,
-    "scale_text": 8,
+    "scale_text": 1,
+    "tapered_scope_note": 1,
     "title_block_text": 6
   }
 }

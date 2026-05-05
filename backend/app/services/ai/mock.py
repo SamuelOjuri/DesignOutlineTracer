@@ -52,19 +52,39 @@ def _classify_text(text: str) -> TextBlockClass:
 
     if re.search(r"\brwp\.?\s*\d+\b", normalized):
         return "rwp_label"
-    if re.search(r"\b1\s*:\s*\d+\b", normalized) or "scale 1:" in normalized:
+    if "tapered insulation" in normalized:
+        return "tapered_scope_note"
+    if any(token in normalized for token in ("fall", "gradient", "downpipe", "hopper")):
+        return "fall_path_note"
+    if any(token in normalized for token in ("rainwater", "drainage")):
+        return "drainage_note"
+    if re.fullmatch(r"(?:scale\s*)?1\s*:\s*\d+", normalized) or "scale 1:" in normalized:
         return "scale_text"
     if "roof plan" in normalized or "roof layout" in normalized:
         return "drawing_title"
     if "preliminary" in normalized or "drawing status" in normalized:
         return "drawing_status"
-    if re.search(r"\b[A-Z0-9]{2,}[- ][A-Z0-9]{2,}[- ][A-Z0-9]{2,}", text):
+    if re.search(r"\b(?=[A-Z0-9 -]*\d)[A-Z0-9]{2,}[- ][A-Z0-9]{2,}[- ][A-Z0-9]{2,}", text):
         return "drawing_number"
     if re.search(r"\bP\d+\b|\bD\d+\b", text.strip()):
         return "revision"
-    if "roof light" in normalized or "rooflight" in normalized:
+    if re.search(r"\bpv\b|photovoltaic", normalized):
+        return "pv_note"
+    if any(token in normalized for token in ("not in scope", "excluded", "exclude from")):
+        return "exclusion_note"
+    if "pitched roof" in normalized or "sloping roof" in normalized:
+        return "pitched_roof_note"
+    if "existing" in normalized and "roof" in normalized:
+        return "existing_roof_note"
+    if "roof light" in normalized or "rooflight" in normalized or "rooflights" in normalized:
         return "rooflight_label"
-    if "tapered insulation" in normalized or "single-ply" in normalized:
+    if "single-ply" in normalized or "single ply" in normalized or "flat roof" in normalized:
+        return "flat_roof_note"
+    if any(token in normalized for token in ("rainwater", "drainage")):
+        return "drainage_note"
+    if re.search(r"\b(zone|phase|area)\s+[a-z0-9]+\b", normalized):
+        return "phase_or_zone_label"
+    if "single-ply" in normalized:
         return "roof_build_up_note"
     if "fall path" in normalized or "downpipe" in normalized or "hopper" in normalized:
         return "fall_path_note"

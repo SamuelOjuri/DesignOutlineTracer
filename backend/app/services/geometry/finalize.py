@@ -1,9 +1,16 @@
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, box
+from shapely.ops import nearest_points
 
-from app.models.candidates import CandidateDocument, CandidateRegion
+from app.models.candidates import (
+    CandidateDocument,
+    CandidateRegion,
+    RefinedCandidateResult,
+    SemanticZone,
+)
 from app.models.production import (
     CadCoordinateSystem,
     Constraints,
@@ -22,6 +29,13 @@ from app.models.production import (
 from app.models.validation import SemanticValidationResult
 from app.models.vector import TextBlock, VectorDocument, VectorPrimitive
 from app.services.geometry.candidates import _rwp_labels_in_text
+from app.services.geometry.opencv_refinement import refine_candidate_with_opencv
+from app.services.geometry.rooflights import (
+    detect_scoped_rooflight_rectangles,
+)
+from app.services.geometry.rooflights import (
+    rooflights_expected as drawing_expects_rooflights,
+)
 
 
 @dataclass(frozen=True)
@@ -40,9 +54,29 @@ def build_production_schema(
     vector_document: VectorDocument,
     candidate_document: CandidateDocument,
     validation: SemanticValidationResult,
+    source_path: Path | None = None,
+    enable_opencv_refinement: bool = True,
+    refinement_render_dpi: int = 220,
 ) -> ProductionSchema:
     candidate = _selected_candidate(candidate_document, validation.selected_candidate_id)
-    polygon_pdf = _candidate_polygon(candidate)
+    refinement = _opencv_refinement(
+        source_path=source_path,
+        vector_document=vector_document,
+        candidate_document=candidate_document,
+        candidate=candidate,
+        enabled=enable_opencv_refinement,
+        render_dpi=refinement_render_dpi,
+    ) or _candidate_refinement(candidate)
+    polygon_pdf = (
+        _refined_polygon(refinement)
+        if refinement and refinement.accepted
+        else _candidate_polygon(candidate)
+    )
+    geometry_source = (
+        refinement.geometry_source
+        if refinement and refinement.accepted
+        else candidate.geometry_source
+    )
     calibration = _calibration(vector_document=vector_document)
     origin_x, origin_y = polygon_pdf.bounds[0], polygon_pdf.bounds[1]
     outer_polygon_mm = [
@@ -51,13 +85,27 @@ def build_production_schema(
     ]
     polygon_mm = Polygon(outer_polygon_mm)
     area_m2 = round(polygon_mm.area / 1_000_000, 3)
-    rooflights = _rooflights(vector_document, origin_x, origin_y, calibration.mm_per_pdf_unit)
-    outlets = _rainwater_outlets(vector_document, origin_x, origin_y, calibration.mm_per_pdf_unit)
+    rooflights = _rooflights(
+        vector_document,
+        candidate_document=candidate_document,
+        target_polygon_pdf=polygon_pdf,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        mm_per_pdf_unit=calibration.mm_per_pdf_unit,
+    )
+    outlets = _rainwater_outlets(
+        vector_document,
+        target_polygon_pdf=polygon_pdf,
+        origin_x=origin_x,
+        origin_y=origin_y,
+        mm_per_pdf_unit=calibration.mm_per_pdf_unit,
+    )
     review_required = (
         validation.review_required
         or candidate.review_required
         or calibration.requires_user_confirmation
         or not candidate.eligible_for_auto_export
+        or bool(refinement and refinement.accepted and refinement.warnings)
     )
     quality_checks = _quality_checks(
         polygon_mm=polygon_mm,
@@ -67,6 +115,8 @@ def build_production_schema(
         candidate=candidate,
         calibration=calibration,
         review_required=review_required,
+        refinement=refinement,
+        rooflights_expected=drawing_expects_rooflights(vector_document),
     )
     page = vector_document.page_metadata[0]
 
@@ -94,7 +144,16 @@ def build_production_schema(
             holes=[],
             area_m2_estimated=area_m2,
             area_source="computed_from_polygon",
-            geometry_source=candidate.geometry_source,
+            geometry_source=geometry_source,
+            source_candidate_id=(
+                refinement.source_candidate_id
+                if refinement and refinement.accepted
+                else candidate.source_candidate_id or candidate.id
+            ),
+            refinement_source=(
+                "opencv_boundary_refinement" if refinement and refinement.accepted else None
+            ),
+            opencv_refinement=refinement.metrics if refinement and refinement.accepted else None,
             semantic_validation_source=validation.model,
             confidence=min(
                 validation.confidence,
@@ -129,6 +188,53 @@ def _selected_candidate(
 
 def _candidate_polygon(candidate: CandidateRegion) -> Polygon:
     polygon = Polygon(candidate.polygon_pdf).buffer(0)
+    if not isinstance(polygon, Polygon):
+        polygons = [geom for geom in polygon.geoms if isinstance(geom, Polygon)]
+        polygon = max(polygons, key=lambda geom: geom.area)
+    return polygon.simplify(0.5, preserve_topology=True)
+
+
+def _opencv_refinement(
+    *,
+    source_path: Path | None,
+    vector_document: VectorDocument,
+    candidate_document: CandidateDocument,
+    candidate: CandidateRegion,
+    enabled: bool,
+    render_dpi: int,
+) -> RefinedCandidateResult | None:
+    if not enabled or source_path is None or source_path.suffix.lower() != ".pdf":
+        return None
+    if candidate.geometry_source == "opencv_refined_vector_candidate":
+        return None
+    return refine_candidate_with_opencv(
+        source_path=source_path,
+        vector_document=vector_document,
+        candidate=candidate,
+        semantic_zones=candidate_document.semantic_zones,
+        render_dpi=render_dpi,
+    )
+
+
+def _candidate_refinement(candidate: CandidateRegion) -> RefinedCandidateResult | None:
+    if (
+        candidate.geometry_source != "opencv_refined_vector_candidate"
+        or candidate.opencv_refinement is None
+    ):
+        return None
+    return RefinedCandidateResult(
+        accepted=True,
+        source_candidate_id=candidate.source_candidate_id or candidate.id,
+        polygon_pdf=candidate.polygon_pdf,
+        metrics=candidate.opencv_refinement,
+        warnings=[
+            warning for warning in candidate.quality_warnings if warning.startswith("opencv_")
+        ],
+    )
+
+
+def _refined_polygon(refinement: RefinedCandidateResult) -> Polygon:
+    polygon = Polygon(refinement.polygon_pdf).buffer(0)
     if not isinstance(polygon, Polygon):
         polygons = [geom for geom in polygon.geoms if isinstance(geom, Polygon)]
         polygon = max(polygons, key=lambda geom: geom.area)
@@ -213,22 +319,43 @@ def _bbox_polygon_to_mm(
 
 def _rooflights(
     vector_document: VectorDocument,
+    *,
+    candidate_document: CandidateDocument,
+    target_polygon_pdf: Polygon,
     origin_x: float,
     origin_y: float,
     mm_per_pdf_unit: float,
 ) -> list[RooflightConstraint]:
+    rectangles = [
+        _bbox_tuple(rooflight.bbox_pdf)
+        for rooflight in vector_document.rooflight_rectangles
+        if target_polygon_pdf.intersects(box(*rooflight.bbox_pdf))
+    ]
+    rectangles.extend(
+        _detect_scoped_rooflight_rectangles(
+            vector_document=vector_document,
+            target_polygon_pdf=target_polygon_pdf,
+            semantic_zones=candidate_document.semantic_zones,
+        )
+    )
+    deduped: list[tuple[float, float, float, float]] = []
+    for rectangle in rectangles:
+        if not any(_same_bbox(rectangle, existing, tolerance=8.0) for existing in deduped):
+            deduped.append(rectangle)
     return [
         RooflightConstraint(
             id=f"rooflight_{index + 1:02d}",
-            polygon_mm=_bbox_polygon_to_mm(rooflight.bbox_pdf, origin_x, origin_y, mm_per_pdf_unit),
-            confidence=rooflight.confidence,
+            polygon_mm=_bbox_polygon_to_mm(list(rectangle), origin_x, origin_y, mm_per_pdf_unit),
+            confidence=0.72,
         )
-        for index, rooflight in enumerate(vector_document.rooflight_rectangles)
+        for index, rectangle in enumerate(deduped)
     ]
 
 
 def _rainwater_outlets(
     vector_document: VectorDocument,
+    *,
+    target_polygon_pdf: Polygon,
     origin_x: float,
     origin_y: float,
     mm_per_pdf_unit: float,
@@ -247,6 +374,12 @@ def _rainwater_outlets(
             outlet_point, source, confidence = _nearest_outlet_geometry(
                 vector_document.vector_primitives,
                 label_point,
+            )
+            outlet_point, source, confidence = _project_outlet_to_target_boundary(
+                outlet_point=outlet_point,
+                source=source,
+                confidence=confidence,
+                target_polygon_pdf=target_polygon_pdf,
             )
             outlets.append(
                 RainwaterOutlet(
@@ -289,11 +422,17 @@ def _quality_checks(
     candidate: CandidateRegion,
     calibration: CalibrationResult,
     review_required: bool,
+    refinement: RefinedCandidateResult | None = None,
+    rooflights_expected: bool = False,
 ) -> QualityChecks:
-    contains_rooflights = all(
-        polygon_mm.contains(Polygon(rooflight.polygon_mm).centroid) for rooflight in rooflights
+    contains_rooflights = bool(rooflights) and all(
+        polygon_mm.contains(Polygon(rooflight.polygon_mm).centroid)
+        or polygon_mm.distance(Polygon(rooflight.polygon_mm).centroid) <= 250
+        for rooflight in rooflights
     )
-    contains_outlets = all(
+    if not rooflights_expected and not rooflights:
+        contains_rooflights = True
+    contains_outlets = bool(outlets) and all(
         polygon_mm.contains(Point(outlet.point_mm))
         or polygon_mm.distance(Point(outlet.point_mm)) <= 750
         for outlet in outlets
@@ -308,8 +447,26 @@ def _quality_checks(
         warnings.append("scale_requires_user_confirmation")
     if outlet_geometry_confidence < 0.7:
         warnings.append("outlet_geometry_requires_review")
+    if rooflights_expected and not contains_rooflights:
+        warnings.append("missing_rooflight_constraints")
+    if not contains_outlets:
+        warnings.append("rwp_constraints_do_not_touch_target_area")
     if validation.review_required:
         warnings.append("semantic_validation_requires_review")
+    if refinement:
+        warnings.extend(refinement.warnings)
+        if refinement.accepted:
+            warnings.append("opencv_refinement_applied")
+        else:
+            warnings.append("opencv_refinement_rejected")
+
+    cad_candidate_exportable = (
+        candidate.eligible_for_auto_export
+        and polygon_mm.is_valid
+        and contains_outlets
+        and contains_rooflights
+        and not review_required
+    )
 
     return QualityChecks(
         polygon_closed=polygon_mm.exterior.is_ring,
@@ -319,7 +476,7 @@ def _quality_checks(
         excludes_title_block=True,
         excludes_legend=True,
         scale_calibrated=calibration.confidence >= 0.6,
-        cad_candidate_exportable=candidate.eligible_for_auto_export,
+        cad_candidate_exportable=cad_candidate_exportable,
         calibration_confidence=calibration.confidence,
         outlet_geometry_confidence=outlet_geometry_confidence,
         warnings=sorted(set(warnings)),
@@ -367,6 +524,53 @@ def _nearest_outlet_geometry(
             best_confidence = 0.78 if primitive.semantic_role == "drainage_symbol" else 0.68
             best_source = "symbol_or_leader_detection"
     return best_point, best_source, best_confidence
+
+
+def _project_outlet_to_target_boundary(
+    *,
+    outlet_point: tuple[float, float],
+    source: str,
+    confidence: float,
+    target_polygon_pdf: Polygon,
+) -> tuple[tuple[float, float], str, float]:
+    point = Point(outlet_point)
+    if target_polygon_pdf.contains(point):
+        return outlet_point, source, confidence
+    distance = target_polygon_pdf.distance(point)
+    if distance > 260:
+        return outlet_point, source, confidence
+    boundary_point, _ = nearest_points(target_polygon_pdf.boundary, point)
+    return (
+        (float(boundary_point.x), float(boundary_point.y)),
+        f"boundary_projected_from_{source}",
+        min(confidence, 0.72),
+    )
+
+
+def _detect_scoped_rooflight_rectangles(
+    *,
+    vector_document: VectorDocument,
+    target_polygon_pdf: Polygon,
+    semantic_zones: list[SemanticZone],
+) -> list[tuple[float, float, float, float]]:
+    return detect_scoped_rooflight_rectangles(
+        vector_document=vector_document,
+        target_polygon_pdf=target_polygon_pdf,
+        semantic_zones=semantic_zones,
+    )
+
+
+def _bbox_tuple(bbox: list[float]) -> tuple[float, float, float, float]:
+    return (bbox[0], bbox[1], bbox[2], bbox[3])
+
+
+def _same_bbox(
+    left: tuple[float, float, float, float],
+    right: tuple[float, float, float, float],
+    *,
+    tolerance: float,
+) -> bool:
+    return all(abs(left[index] - right[index]) <= tolerance for index in range(4))
 
 
 def _primitive_anchor_point(

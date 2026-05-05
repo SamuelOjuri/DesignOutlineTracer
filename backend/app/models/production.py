@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from app.models.candidates import OpenCvRefinementMetrics
+
 ExportFormat = Literal["dxf", "svg", "geojson", "mask_png", "metadata_json"]
 ExportPipeline = Literal["vector", "raster"]
 
@@ -55,6 +57,9 @@ class TargetArea(BaseModel):
     area_m2_estimated: float
     area_source: str
     geometry_source: str
+    source_candidate_id: str | None = None
+    refinement_source: str | None = None
+    opencv_refinement: OpenCvRefinementMetrics | None = None
     semantic_validation_source: str
     confidence: float = Field(ge=0, le=1)
     review_required: bool

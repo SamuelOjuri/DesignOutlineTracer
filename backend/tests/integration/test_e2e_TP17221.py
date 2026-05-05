@@ -75,3 +75,21 @@ def test_e2e_tp17221_vector_pipeline_export_and_audit(
     assert "candidates_generated" in event_types
     assert "candidates_validated" in event_types
     assert "document_exported" in event_types
+    events_by_type = {event["event_type"]: event for event in audit["events"]}
+    assert events_by_type["vector_extracted"]["payload"]["cache"] == {
+        "vector_document": False,
+    }
+    assert events_by_type["candidates_generated"]["payload"]["cache"] == {
+        "vector_document": True,
+        "candidate_document": False,
+    }
+    assert events_by_type["candidates_validated"]["payload"]["cache"] == {
+        "vector_document": True,
+        "candidate_document": True,
+        "semantic_validation": False,
+    }
+    assert events_by_type["document_exported"]["payload"]["cache"] == {
+        "vector_document": True,
+        "candidate_document": True,
+        "semantic_validation": True,
+    }

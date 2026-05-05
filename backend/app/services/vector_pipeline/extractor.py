@@ -42,7 +42,12 @@ def extract_vector_document(
             )
             sheet_regions.extend(_detect_sheet_regions(page, page_number, page_text_blocks))
             rooflight_rectangles.extend(
-                _detect_rooflight_rectangles(page, page_number, len(rooflight_rectangles))
+                _detect_rooflight_rectangles(
+                    page,
+                    page_number,
+                    len(rooflight_rectangles),
+                    page_text_blocks,
+                )
             )
 
     classified_blocks = ai_provider.classify_text_blocks(text_blocks)
@@ -267,17 +272,35 @@ def _detect_rooflight_rectangles(
     page: fitz.Page,
     page_number: int,
     offset: int,
+    text_blocks: list[TextBlock],
 ) -> list[RooflightRectangle]:
-    if "roof light" not in (page.get_text("text") or "").lower():
+    page_text = (page.get_text("text") or "").lower()
+    if not re.search(r"roof\s*lights?|rooflights?", page_text):
         return []
 
     horizontal: list[tuple[float, float, float]] = []
     vertical: list[tuple[float, float, float]] = []
+    direct_rectangles: list[tuple[float, float, float, float]] = []
     viewport_right = page.rect.width * 0.78
     viewport_bottom = page.rect.height * 0.90
 
     for drawing in page.get_drawings():
         for item in drawing.get("items", []):
+            if item[0] == "re" and isinstance(item[1], fitz.Rect):
+                rect = item[1]
+                if rect.x1 <= viewport_right and rect.y1 <= viewport_bottom:
+                    width = rect.width
+                    height = rect.height
+                    if 25 <= width <= 220 and 25 <= height <= 180:
+                        direct_rectangles.append(
+                            (
+                                round(rect.x0, 1),
+                                round(rect.y0, 1),
+                                round(rect.x1, 1),
+                                round(rect.y1, 1),
+                            )
+                        )
+                continue
             if item[0] != "l":
                 continue
             start = item[1]
@@ -294,7 +317,7 @@ def _detect_rooflight_rectangles(
                 y0, y1 = sorted((start.y, end.y))
                 vertical.append((round(start.x, 1), round(y0, 1), round(y1, 1)))
 
-    rectangles: list[tuple[float, float, float, float]] = []
+    rectangles: list[tuple[float, float, float, float]] = [*direct_rectangles]
     for y0, x0, x1 in horizontal:
         for y1, other_x0, other_x1 in horizontal:
             if y1 <= y0 + 8:
@@ -320,6 +343,10 @@ def _detect_rooflight_rectangles(
 
     deduped: list[tuple[float, float, float, float]] = []
     for rectangle in rectangles:
+        if _is_near_pv_array_text(rectangle, text_blocks):
+            continue
+        if not _is_supported_rooflight_rectangle(rectangle, text_blocks):
+            continue
         if not any(_same_rectangle(rectangle, existing) for existing in deduped):
             deduped.append(rectangle)
 
@@ -329,7 +356,14 @@ def _detect_rooflight_rectangles(
             page_number=page_number,
             bbox_pdf=[round(value, 3) for value in rectangle],
             source="axis_aligned_vector_linework",
-            confidence=0.74,
+            confidence=0.82
+            if _near_text_tokens_bbox(
+                rectangle,
+                text_blocks,
+                {"rooflight", "roof light"},
+                tolerance=180,
+            )
+            else 0.68,
         )
         for index, rectangle in enumerate(deduped)
     ]
@@ -380,6 +414,15 @@ def _classify_primitive_role(
     rooflight_rectangles: list[RooflightRectangle],
 ) -> VectorPrimitiveRole:
     bbox = primitive.bbox_pdf
+    length = _primitive_length(primitive)
+    is_axis_aligned = bool(
+        primitive.start_pdf
+        and primitive.end_pdf
+        and (
+            abs(primitive.start_pdf[0] - primitive.end_pdf[0]) < AXIS_TOLERANCE
+            or abs(primitive.start_pdf[1] - primitive.end_pdf[1]) < AXIS_TOLERANCE
+        )
+    )
     if any(
         region.type in {"title_block", "legend"}
         and _bbox_overlap_ratio(bbox, region.bbox_pdf) > 0.05
@@ -396,29 +439,32 @@ def _classify_primitive_role(
         for rooflight in rooflight_rectangles
     ):
         return "rooflight"
-    if _near_text_class(primitive, text_blocks, {"rwp_label"}, tolerance=90) and (
-        primitive.type in {"curve", "rect"} or _primitive_length(primitive) <= 140
-    ):
-        return "drainage_symbol"
-    if _near_text_class(primitive, text_blocks, {"fall_path_note"}, tolerance=120):
-        return "fall_arrow"
-    if _near_text_class(
+    if length <= 260 and _near_text_class(
         primitive,
         text_blocks,
-        {"roof_build_up_note", "general_note"},
+        {"pv_note"},
+        tolerance=100,
+    ):
+        return "pv_array"
+    if _near_text_class(primitive, text_blocks, {"rwp_label"}, tolerance=90) and (
+        primitive.type in {"curve", "rect"} or length <= 140
+    ):
+        return "drainage_symbol"
+    if length <= 160 and not is_axis_aligned and _near_text_class(
+        primitive,
+        text_blocks,
+        {"fall_path_note", "drainage_note"},
+        tolerance=120,
+    ):
+        return "fall_arrow"
+    if primitive.type == "line" and length <= 220 and _near_text_class(
+        primitive,
+        text_blocks,
+        {"roof_build_up_note", "tapered_scope_note", "flat_roof_note"},
         tolerance=60,
     ):
         return "leader_line"
 
-    length = _primitive_length(primitive)
-    is_axis_aligned = bool(
-        primitive.start_pdf
-        and primitive.end_pdf
-        and (
-            abs(primitive.start_pdf[0] - primitive.end_pdf[0]) < AXIS_TOLERANCE
-            or abs(primitive.start_pdf[1] - primitive.end_pdf[1]) < AXIS_TOLERANCE
-        )
-    )
     if primitive.type == "line" and is_axis_aligned and length >= 80:
         if primitive.stroke_width >= 0.2:
             return "roof_perimeter"
@@ -443,6 +489,76 @@ def _near_text_class(
             continue
         block_x, block_y = _bbox_center(block.bbox_pdf)
         if ((center_x - block_x) ** 2 + (center_y - block_y) ** 2) ** 0.5 <= tolerance:
+            return True
+    return False
+
+
+def _near_text_tokens_bbox(
+    bbox: tuple[float, float, float, float],
+    text_blocks: list[TextBlock],
+    tokens: set[str],
+    *,
+    tolerance: float,
+) -> bool:
+    center_x, center_y = _bbox_center(list(bbox))
+    for block in text_blocks:
+        text = block.text.lower()
+        if not any(token in text for token in tokens):
+            continue
+        block_x, block_y = _bbox_center(block.bbox_pdf)
+        if ((center_x - block_x) ** 2 + (center_y - block_y) ** 2) ** 0.5 <= tolerance:
+            return True
+    return False
+
+
+def _is_near_pv_array_text(
+    bbox: tuple[float, float, float, float],
+    text_blocks: list[TextBlock],
+) -> bool:
+    return _near_text_tokens_bbox(
+        bbox,
+        text_blocks,
+        {"pv", "photovoltaic", "solar panel"},
+        tolerance=180,
+    ) or _overlaps_text_tokens_bbox(
+        bbox,
+        text_blocks,
+        {"pv", "photovoltaic", "solar panel"},
+        padding=150,
+    )
+
+
+def _is_supported_rooflight_rectangle(
+    bbox: tuple[float, float, float, float],
+    text_blocks: list[TextBlock],
+) -> bool:
+    return _near_text_tokens_bbox(
+        bbox,
+        text_blocks,
+        {"rooflight", "roof light", "rooflights", "roof lights"},
+        tolerance=220,
+    )
+
+
+def _overlaps_text_tokens_bbox(
+    bbox: tuple[float, float, float, float],
+    text_blocks: list[TextBlock],
+    tokens: set[str],
+    *,
+    padding: float,
+) -> bool:
+    bbox_list = list(bbox)
+    for block in text_blocks:
+        text = block.text.lower()
+        if not any(token in text for token in tokens):
+            continue
+        expanded = [
+            block.bbox_pdf[0] - padding,
+            block.bbox_pdf[1] - padding,
+            block.bbox_pdf[2] + padding,
+            block.bbox_pdf[3] + padding,
+        ]
+        if _bbox_overlap_ratio(bbox_list, expanded) > 0:
             return True
     return False
 

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 from shapely.geometry import Polygon
 
@@ -27,6 +28,8 @@ def _build_schema(pdf_path: Path) -> ProductionSchema:
         vector_document=vector_document,
         candidate_document=candidate_document,
         validation=validation,
+        source_path=pdf_path,
+        refinement_render_dpi=120,
     )
 
 
@@ -56,10 +59,61 @@ def test_tp17221_finalized_geometry_requires_review(tp17221_pdf: Path) -> None:
     assert schema.quality_checks.self_intersections is False
     assert len(schema.constraints.rainwater_outlets) >= 5
     assert len(schema.constraints.rooflights) >= 5
+    assert schema.quality_checks.contains_rooflights is True
+    assert schema.quality_checks.contains_or_borders_rwp is True
+    assert schema.quality_checks.cad_candidate_exportable is False
     assert schema.target_area.area_m2_estimated != 103.0
+    assert schema.target_area.area_m2_estimated < 169.001
+    assert schema.target_area.geometry_source == "opencv_refined_vector_candidate"
+    assert schema.target_area.source_candidate_id == "candidate_vector_anchor_boundary_01"
+    assert schema.target_area.opencv_refinement is not None
     assert schema.coordinate_systems.cad.calibration_source == "detected_scale_text"
     assert schema.quality_checks.human_review_status == "required"
     assert "scale_requires_user_confirmation" in schema.quality_checks.warnings
+    assert "opencv_refinement_applied" in schema.quality_checks.warnings
+    assert "missing_rooflight_constraints" not in schema.quality_checks.warnings
+    assert "rwp_constraints_do_not_touch_target_area" not in schema.quality_checks.warnings
+
+
+def test_finalization_reuses_pre_refined_candidate_metrics(
+    tp17221_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = MockProvider()
+    vector_document = extract_vector_document(tp17221_pdf, tp17221_pdf.stem, provider)
+    candidate_document = generate_candidate_document(
+        vector_document,
+        source_path=tp17221_pdf,
+        refinement_render_dpi=120,
+    )
+    selected = candidate_document.candidate_regions[0]
+    validation = provider.validate_candidates(
+        candidate_document=candidate_document,
+        text_blocks=vector_document.text_blocks,
+        overlay_png_path=None,
+    )
+
+    def fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("already-refined candidates must not be refined again")
+
+    monkeypatch.setattr(
+        "app.services.geometry.finalize.refine_candidate_with_opencv",
+        fail_if_called,
+    )
+    schema = build_production_schema(
+        document_id=tp17221_pdf.stem,
+        source_file=tp17221_pdf.name,
+        vector_document=vector_document,
+        candidate_document=candidate_document,
+        validation=validation,
+        source_path=tp17221_pdf,
+        refinement_render_dpi=120,
+    )
+
+    assert selected.geometry_source == "opencv_refined_vector_candidate"
+    assert selected.opencv_refinement is not None
+    assert schema.target_area.source_candidate_id == "candidate_vector_anchor_boundary_01"
+    assert schema.target_area.opencv_refinement == selected.opencv_refinement
 
 
 def test_export_endpoint_blocks_dxf_until_review(
@@ -108,6 +162,9 @@ def test_export_endpoint_writes_review_preview_formats(
         assert exports[key]
         assert (tmp_path / exports[key]).exists()
     assert data["production_schema"]["target_area"]["review_required"] is True
+    assert data["production_schema"]["target_area"]["source_candidate_id"] == (
+        "candidate_vector_anchor_boundary_01"
+    )
 
 
 def test_export_endpoint_uses_original_pdf_after_validation_overlay(

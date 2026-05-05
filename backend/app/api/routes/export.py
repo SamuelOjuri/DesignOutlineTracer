@@ -9,6 +9,12 @@ from app.services.export.writers import write_exports
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.finalize import build_production_schema
 from app.services.geometry.quality import QualityGateError, enforce_export_quality_gates
+from app.services.pipeline_cache import (
+    get_or_create_candidate_document,
+    get_or_create_validation_result,
+    get_or_create_vector_document,
+    provider_cache_key,
+)
 from app.services.raster_pipeline.approval import is_approved
 from app.services.raster_pipeline.errors import RasterApprovalRequired
 from app.services.raster_pipeline.pipeline import load_raster_production_schema
@@ -38,6 +44,11 @@ async def export_document(
         )
 
     try:
+        cache_payload: dict[str, bool | None] = {
+            "vector_document": None,
+            "candidate_document": None,
+            "semantic_validation": None,
+        }
         if export_request.pipeline == "raster":
             approved = is_approved(settings.storage_path, document_id)
             if "dxf" in export_request.formats and not approved:
@@ -50,23 +61,51 @@ async def export_document(
                 production_schema.target_area.review_required = False
         else:
             provider = get_ai_provider(settings.ai_provider, settings)
-            vector_document = extract_vector_document(
-                source_path,
+            provider_key = provider_cache_key(provider, settings)
+            vector_result = get_or_create_vector_document(
+                storage_path=settings.storage_path,
                 document_id=document_id,
-                ai_provider=provider,
+                source_path=source_path,
+                provider_key=provider_key,
+                create=lambda: extract_vector_document(
+                    source_path,
+                    document_id=document_id,
+                    ai_provider=provider,
+                ),
             )
-            candidate_document = generate_candidate_document(vector_document)
-            validation = provider.validate_candidates(
-                candidate_document=candidate_document,
-                text_blocks=vector_document.text_blocks,
-                overlay_png_path=None,
+            candidate_result = get_or_create_candidate_document(
+                storage_path=settings.storage_path,
+                document_id=document_id,
+                source_path=source_path,
+                provider_key=provider_key,
+                create=lambda: generate_candidate_document(
+                    vector_result.value,
+                    source_path=source_path,
+                ),
             )
+            validation_result = get_or_create_validation_result(
+                storage_path=settings.storage_path,
+                document_id=document_id,
+                source_path=source_path,
+                provider_key=provider_key,
+                create=lambda: provider.validate_candidates(
+                    candidate_document=candidate_result.value,
+                    text_blocks=vector_result.value.text_blocks,
+                    overlay_png_path=None,
+                ),
+            )
+            cache_payload = {
+                "vector_document": vector_result.cache_hit,
+                "candidate_document": candidate_result.cache_hit,
+                "semantic_validation": validation_result.cache_hit,
+            }
             production_schema = build_production_schema(
                 document_id=document_id,
                 source_file=source_path.name,
-                vector_document=vector_document,
-                candidate_document=candidate_document,
-                validation=validation,
+                vector_document=vector_result.value,
+                candidate_document=candidate_result.value,
+                validation=validation_result.value,
+                source_path=source_path,
             )
         enforce_export_quality_gates(
             production_schema=production_schema,
@@ -99,6 +138,7 @@ async def export_document(
             "formats": export_request.formats,
             "exports": relative_exports.model_dump(mode="json"),
             "quality_checks": production_schema.quality_checks.model_dump(mode="json"),
+            "cache": cache_payload,
         },
         request=request,
     )

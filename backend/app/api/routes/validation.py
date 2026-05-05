@@ -5,6 +5,12 @@ from app.services.ai.factory import get_ai_provider
 from app.services.audit import record_audit_event
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.overlays import render_candidate_overlay
+from app.services.pipeline_cache import (
+    get_or_create_candidate_document,
+    get_or_create_validation_result,
+    get_or_create_vector_document,
+    provider_cache_key,
+)
 from app.services.storage.documents import find_uploaded_source, storage_relative_path, upload_dir
 from app.services.vector_pipeline.extractor import extract_vector_document
 
@@ -28,22 +34,52 @@ async def validate_document_candidates(
 
     try:
         provider = get_ai_provider(settings.ai_provider, settings)
-        vector_document = extract_vector_document(
-            source_path,
+        provider_key = provider_cache_key(provider, settings)
+        vector_result = get_or_create_vector_document(
+            storage_path=settings.storage_path,
             document_id=document_id,
-            ai_provider=provider,
-        )
-        candidate_document = generate_candidate_document(vector_document)
-        overlay_path = render_candidate_overlay(
             source_path=source_path,
-            candidate_document=candidate_document,
-            output_path=upload_dir(settings.storage_path, document_id) / "candidate_overlay.png",
+            provider_key=provider_key,
+            create=lambda: extract_vector_document(
+                source_path,
+                document_id=document_id,
+                ai_provider=provider,
+            ),
+        )
+        candidate_result = get_or_create_candidate_document(
+            storage_path=settings.storage_path,
+            document_id=document_id,
+            source_path=source_path,
+            provider_key=provider_key,
+            create=lambda: generate_candidate_document(
+                vector_result.value,
+                source_path=source_path,
+            ),
+        )
+        validation_overlay_path = render_candidate_overlay(
+            source_path=source_path,
+            candidate_document=candidate_result.value,
+            output_path=upload_dir(settings.storage_path, document_id)
+            / "candidate_overlay_context.png",
             top_n=validation_request.top_n,
         )
-        validation = provider.validate_candidates(
-            candidate_document=candidate_document,
-            text_blocks=vector_document.text_blocks,
-            overlay_png_path=str(overlay_path),
+        validation_result = get_or_create_validation_result(
+            storage_path=settings.storage_path,
+            document_id=document_id,
+            source_path=source_path,
+            provider_key=provider_key,
+            create=lambda: provider.validate_candidates(
+                candidate_document=candidate_result.value,
+                text_blocks=vector_result.value.text_blocks,
+                overlay_png_path=str(validation_overlay_path),
+            ),
+        )
+        overlay_path = render_candidate_overlay(
+            source_path=source_path,
+            candidate_document=candidate_result.value,
+            output_path=upload_dir(settings.storage_path, document_id) / "candidate_overlay.png",
+            top_n=validation_request.top_n,
+            selected_candidate_id=validation_result.value.selected_candidate_id,
         )
     except Exception as exc:
         raise HTTPException(
@@ -55,18 +91,23 @@ async def validate_document_candidates(
         document_id=document_id,
         source_file=source_path.name,
         overlay_png_path=storage_relative_path(settings.storage_path, overlay_path),
-        validation=validation,
+        validation=validation_result.value,
     )
     record_audit_event(
         storage_path=settings.storage_path,
         document_id=document_id,
         event_type="candidates_validated",
         payload={
-            "selected_candidate_id": validation.selected_candidate_id,
-            "confidence": validation.confidence,
-            "review_required": validation.review_required,
-            "provider": validation.provider,
+            "selected_candidate_id": validation_result.value.selected_candidate_id,
+            "confidence": validation_result.value.confidence,
+            "review_required": validation_result.value.review_required,
+            "provider": validation_result.value.provider,
             "overlay_png_path": response.overlay_png_path,
+            "cache": {
+                "vector_document": vector_result.cache_hit,
+                "candidate_document": candidate_result.cache_hit,
+                "semantic_validation": validation_result.cache_hit,
+            },
         },
         request=request,
     )

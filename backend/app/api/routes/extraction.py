@@ -4,6 +4,8 @@ from app.models.raster import ExtractRequest, RasterPipelineResponse
 from app.models.vector import VectorDocument
 from app.services.ai.factory import get_ai_provider
 from app.services.audit import record_audit_event
+from app.services.classifier.pdf_classifier import classify_source
+from app.services.pipeline_cache import get_or_create_vector_document, provider_cache_key
 from app.services.raster_pipeline.pipeline import run_raster_pipeline
 from app.services.storage.documents import find_uploaded_source
 from app.services.vector_pipeline.extractor import extract_vector_document
@@ -22,19 +24,29 @@ async def get_vector_document(request: Request, document_id: str) -> VectorDocum
         )
 
     try:
-        vector_document = extract_vector_document(
-            source_path,
+        provider = get_ai_provider(settings.ai_provider, settings)
+        vector_result = get_or_create_vector_document(
+            storage_path=settings.storage_path,
             document_id=document_id,
-            ai_provider=get_ai_provider(settings.ai_provider, settings),
+            source_path=source_path,
+            provider_key=provider_cache_key(provider, settings),
+            create=lambda: extract_vector_document(
+                source_path,
+                document_id=document_id,
+                ai_provider=provider,
+            ),
         )
         record_audit_event(
             storage_path=settings.storage_path,
             document_id=document_id,
             event_type="vector_extracted",
-            payload=vector_document.summary.model_dump(mode="json"),
+            payload={
+                **vector_result.value.summary.model_dump(mode="json"),
+                "cache": {"vector_document": vector_result.cache_hit},
+            },
             request=request,
         )
-        return vector_document
+        return vector_result.value
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -60,7 +72,12 @@ async def extract_document(
         )
 
     try:
-        if body and body.force_pipeline == "raster_first":
+        forced_pipeline = body.force_pipeline if body else None
+        classification = classify_source(source_path, original_filename=source_path.name)
+        should_run_raster = forced_pipeline == "raster_first" or (
+            forced_pipeline is None and classification.recommended_pipeline == "raster_first"
+        )
+        if should_run_raster:
             raster_response = run_raster_pipeline(
                 source_path=source_path,
                 document_id=document_id,
@@ -70,23 +87,40 @@ async def extract_document(
                 storage_path=settings.storage_path,
                 document_id=document_id,
                 event_type="raster_extracted",
-                payload=raster_response.raster_audit.model_dump(mode="json"),
+                payload={
+                    "classification": classification.model_dump(mode="json"),
+                    **raster_response.raster_audit.model_dump(mode="json"),
+                },
                 request=request,
             )
             return raster_response
-        vector_document = extract_vector_document(
-            source_path,
+        if forced_pipeline is None and classification.recommended_pipeline == "cad_first":
+            raise ValueError("CAD-first extraction is not implemented yet for DWG/DXF uploads")
+        provider = get_ai_provider(settings.ai_provider, settings)
+        vector_result = get_or_create_vector_document(
+            storage_path=settings.storage_path,
             document_id=document_id,
-            ai_provider=get_ai_provider(settings.ai_provider, settings),
+            source_path=source_path,
+            provider_key=provider_cache_key(provider, settings),
+            create=lambda: extract_vector_document(
+                source_path,
+                document_id=document_id,
+                ai_provider=provider,
+            ),
         )
         record_audit_event(
             storage_path=settings.storage_path,
             document_id=document_id,
             event_type="document_extracted",
-            payload={"pipeline": "vector_first", **vector_document.summary.model_dump(mode="json")},
+            payload={
+                "pipeline": "vector_first",
+                "classification": classification.model_dump(mode="json"),
+                **vector_result.value.summary.model_dump(mode="json"),
+                "cache": {"vector_document": vector_result.cache_hit},
+            },
             request=request,
         )
-        return vector_document
+        return vector_result.value
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

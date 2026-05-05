@@ -54,6 +54,7 @@ def test_candidate_overlay_is_rendered(tp17221_pdf: Path, tmp_path: Path) -> Non
         source_path=tp17221_pdf,
         candidate_document=candidate_document,
         output_path=tmp_path / "candidate_overlay.png",
+        selected_candidate_id=candidate_document.candidate_regions[0].id,
     )
 
     assert overlay_path.exists()
