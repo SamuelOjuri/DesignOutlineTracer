@@ -28,7 +28,13 @@ RasterPrimitiveType = Literal[
     "fall_arrow",
     "scale_bar",
 ]
-SegmentationProviderName = Literal["noop", "mock", "self_hosted_falcon", "future_api"]
+SegmentationProviderName = Literal[
+    "noop",
+    "mock",
+    "self_hosted_falcon",
+    "future_api",
+    "gemini_er",
+]
 
 
 class RasterSheetRegion(BaseModel):
@@ -105,6 +111,7 @@ class SegmentationHints(BaseModel):
     document_id: str
     source_file: str
     crop_bbox_px: list[int] | None = None
+    debug_dir_path: str | None = None
 
 
 class SegmentationCandidate(BaseModel):
@@ -113,6 +120,9 @@ class SegmentationCandidate(BaseModel):
     source: str
     provider: SegmentationProviderName
     prompt: str
+    label: str | None = None
+    point_norm: list[int] | None = None
+    point_px: list[float] | None = None
     bbox_px: list[float]
     polygon_px: list[list[float]]
     mask_area_px: float
@@ -131,6 +141,8 @@ class SegmentationAudit(BaseModel):
     cache_misses: int = 0
     available: bool = False
     errors: list[str] = []
+    raw_response_path: str | None = None
+    raw_response_preview: str | None = None
 
 
 class RasterWarning(BaseModel):

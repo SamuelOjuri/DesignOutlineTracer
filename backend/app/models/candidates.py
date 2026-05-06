@@ -9,6 +9,11 @@ CandidateGeometrySource = Literal[
     "linework_snapped_semantic_region",
     "coarse_semantic_search_area",
     "raster_contour_polygonisation",
+    "gemini_er_box_region",
+    "gemini_er_mask_region",
+    "gemini_er_linework_refined_region",
+    "gemini_er_segmentation_mask",
+    "gemini_er_point_seeded_region",
 ]
 
 PipelineProfile = Literal["vector", "raster"]

@@ -4,7 +4,15 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.models.candidates import (
+    CandidateDocument,
+    CandidateFeatures,
+    CandidateRegion,
+    CandidateScores,
+    CandidateSummary,
+)
 from app.models.validation import SemanticValidationResult
+from app.services.ai.gemini import GeminiProvider
 from app.services.ai.mock import MockProvider
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.overlays import render_candidate_overlay
@@ -83,3 +91,82 @@ def test_validate_endpoint_returns_structured_response(
     assert data["validation"]["selected_candidate_id"] != "candidate_coarse_semantic_search_01"
     assert data["validation"]["review_required"] is True
     assert data["validation"]["confidence"] <= 0.75
+
+
+def test_gemini_provider_uses_google_genai_json_adapter() -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_json_generator(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {
+            "selected_candidate_id": "candidate_vector_01",
+            "reason": "Best supported roof-scope candidate.",
+            "confidence": 0.86,
+            "review_required": False,
+        }
+
+    provider = GeminiProvider(api_key="test-key", json_generator=fake_json_generator)
+    result = provider.validate_candidates(
+        candidate_document=_minimal_candidate_document(),
+        text_blocks=[],
+        overlay_png_path="overlay.png",
+    )
+
+    assert result.provider == "gemini"
+    assert result.model == "gemini-2.5-flash"
+    assert result.selected_candidate_id == "candidate_vector_01"
+    assert result.confidence == 0.86
+    assert result.review_required is False
+    assert calls[0]["api_key"] == "test-key"
+    assert calls[0]["model_name"] == "gemini-2.5-flash"
+    assert calls[0]["image_path"] == "overlay.png"
+
+
+def _minimal_candidate_document() -> CandidateDocument:
+    features = CandidateFeatures(
+        contains_rooflights=True,
+        rooflight_count=2,
+        contains_rwp_labels=True,
+        rwp_label_count=3,
+        near_tapered_insulation_note=True,
+        near_fall_arrows=True,
+        overlaps_title_block=False,
+        overlaps_pv_array=False,
+        geometry_valid=True,
+        plausible_area=True,
+    )
+    scores = CandidateScores(
+        geometric_validity=0.9,
+        agreement_with_vector_linework=0.9,
+        contains_expected_rooflights=0.8,
+        contains_expected_rwp_points=0.8,
+        proximity_to_tapered_insulation_notes=0.75,
+        excludes_title_block_legend_pv=0.95,
+        plausible_area_and_dimensions=0.85,
+    )
+    candidate = CandidateRegion(
+        id="candidate_vector_01",
+        rank=1,
+        polygon_pdf=[[0, 0], [100, 0], [100, 100], [0, 100]],
+        bbox_pdf=[0, 0, 100, 100],
+        area_pdf_units=10_000,
+        geometry_source="vector_polygonized_face",
+        geometry_confidence=0.9,
+        eligible_for_auto_export=True,
+        review_required=False,
+        features=features,
+        scores=scores,
+        score=0.88,
+    )
+    return CandidateDocument(
+        document_id="doc",
+        source_file="sample.pdf",
+        pipeline_profile="vector",
+        candidate_regions=[candidate],
+        summary=CandidateSummary(
+            candidate_count=1,
+            top_candidate_id="candidate_vector_01",
+            top_candidate_score=0.88,
+            roof_scope_candidate_rank=1,
+        ),
+    )

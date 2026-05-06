@@ -1,10 +1,11 @@
 import json
-from pathlib import Path
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any
 
 from app.models.candidates import CandidateDocument
 from app.models.validation import SemanticValidationResult
 from app.models.vector import ClassifiedTextBlock, TextBlock
+from app.services.ai.google_genai import generate_gemini_json
 from app.services.ai.mock import MockProvider
 from app.services.ai.provider import AiProvider
 
@@ -19,6 +20,8 @@ VALIDATION_SCHEMA: dict[str, Any] = {
     "required": ["selected_candidate_id", "reason", "confidence", "review_required"],
 }
 
+JsonGenerator = Callable[..., dict[str, Any]]
+
 
 class GeminiProvider(AiProvider):
     def __init__(
@@ -29,12 +32,14 @@ class GeminiProvider(AiProvider):
         pro_model: str = "gemini-2.5-pro",
         allow_pro_escalation: bool = False,
         pro_escalation_confidence_threshold: float = 0.75,
+        json_generator: JsonGenerator | None = None,
     ) -> None:
         self.api_key = api_key
         self.flash_model = flash_model
         self.pro_model = pro_model
         self.allow_pro_escalation = allow_pro_escalation
         self.pro_escalation_confidence_threshold = pro_escalation_confidence_threshold
+        self._json_generator = json_generator or generate_gemini_json
         self._mock_text_classifier = MockProvider()
 
     @property
@@ -82,23 +87,14 @@ class GeminiProvider(AiProvider):
         text_blocks: list[TextBlock],
         overlay_png_path: str | None,
     ) -> SemanticValidationResult:
-        import google.generativeai as genai
-
-        genai.configure(api_key=self.api_key)  # type: ignore[attr-defined]
-        model = genai.GenerativeModel(model_name)  # type: ignore[attr-defined]
         prompt = _build_validation_prompt(candidate_document, text_blocks)
-        parts: list[Any] = [prompt]
-        if overlay_png_path is not None:
-            parts.append({"mime_type": "image/png", "data": Path(overlay_png_path).read_bytes()})
-
-        response = model.generate_content(
-            parts,
-            generation_config={
-                "response_mime_type": "application/json",
-                "response_schema": VALIDATION_SCHEMA,
-            },
+        payload = self._json_generator(
+            api_key=self.api_key,
+            model_name=model_name,
+            prompt=prompt,
+            response_schema=VALIDATION_SCHEMA,
+            image_path=overlay_png_path,
         )
-        payload = cast(dict[str, Any], json.loads(response.text))
         return _coerce_validation_result(
             payload=payload,
             candidate_document=candidate_document,
@@ -156,14 +152,14 @@ def _coerce_validation_result(
         review_required = True
 
     return SemanticValidationResult(
-            selected_candidate_id=str(payload["selected_candidate_id"]),
-            reason=str(payload["reason"]),
-            confidence=confidence,
-            review_required=review_required,
-            provider=provider,
-            model=model_name,
-            escalation_used=False,
-        )
+        selected_candidate_id=str(payload["selected_candidate_id"]),
+        reason=str(payload["reason"]),
+        confidence=confidence,
+        review_required=review_required,
+        provider=provider,
+        model=model_name,
+        escalation_used=False,
+    )
 
 
 def _build_validation_prompt(

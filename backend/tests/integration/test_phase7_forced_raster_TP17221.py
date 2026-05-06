@@ -12,7 +12,14 @@ def test_forced_raster_tp17221_produces_usable_review_required_polygon(
     tmp_path: Path,
 ) -> None:
     app = create_app(
-        Settings(storage_root=tmp_path, raster_render_dpi=80, raster_ocr_provider="mock")
+        Settings(
+            storage_root=tmp_path,
+            raster_render_dpi=80,
+            raster_ocr_provider="mock",
+            segmentation_provider="noop",
+            allow_live_ai_calls=False,
+            google_api_key=None,
+        )
     )
 
     with TestClient(app) as client, tp17221_raster_clean_pdf.open("rb") as upload:

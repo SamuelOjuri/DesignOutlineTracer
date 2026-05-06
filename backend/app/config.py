@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     ai_provider: str = "gemini"
     gemini_validation_model: str = "gemini-2.5-flash"
     gemini_pro_model: str = "gemini-2.5-pro"
+    gemini_er_model: str = "gemini-robotics-er-1.5-preview"
 
     google_api_key: str | None = None
     openai_api_key: str | None = None

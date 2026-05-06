@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+from typing import cast
 
 from PIL import Image
 
 from app.config import Settings
+from app.models.candidates import CandidateRegion
 from app.models.production import (
     CadCoordinateSystem,
     Constraints,
@@ -29,9 +31,12 @@ from app.models.raster import (
     SegmentationAudit,
     SegmentationHints,
 )
+from app.services.ai.google_genai import ImagePromptModelCall, build_gemini_er_model_call
 from app.services.raster_pipeline.candidates import generate_raster_candidates
+from app.services.raster_pipeline.er_segmentation import GeminiErSegmenter
 from app.services.raster_pipeline.falcon_perception import SelfHostedFalconSegmenter
 from app.services.raster_pipeline.image_geometry import extract_image_geometry
+from app.services.raster_pipeline.linework_refinement import refine_er_segmentation_candidates
 from app.services.raster_pipeline.ocr_merge import merge_ocr_blocks
 from app.services.raster_pipeline.ocr_provider import get_ocr_provider, ocr_audit
 from app.services.raster_pipeline.ocr_tiling import OcrTile, generate_ocr_tiles
@@ -96,8 +101,12 @@ def run_raster_pipeline(
         try:
             segmentation_candidates = segmenter.segment(
                 image,
-                prompts=_falcon_prompts()[: settings.falcon_perception_max_prompts],
-                hints=SegmentationHints(document_id=document_id, source_file=source_path.name),
+                prompts=_segmentation_prompts()[: settings.falcon_perception_max_prompts],
+                hints=SegmentationHints(
+                    document_id=document_id,
+                    source_file=source_path.name,
+                    debug_dir_path=str(debug_dir),
+                ),
             )
             segmentation_audit = segmenter.audit()
             warnings: list[RasterWarning] = []
@@ -118,6 +127,14 @@ def run_raster_pipeline(
                 )
             ]
 
+    segmentation_candidates = refine_er_segmentation_candidates(
+        segmentation_candidates=segmentation_candidates,
+        linework_path=Path(preprocess_outputs["line_enhanced"]),
+        render_result=render,
+        text_blocks=text_blocks,
+        sheet_regions=sheet_regions,
+        debug_dir=debug_dir,
+    )
     primitives = extract_image_geometry(Path(preprocess_outputs["line_enhanced"]), sheet_regions)
     candidate_document = generate_raster_candidates(
         document_id=document_id,
@@ -125,13 +142,14 @@ def run_raster_pipeline(
         render_result=render,
         text_blocks=text_blocks,
         primitives=primitives,
+        segmentation_candidates=segmentation_candidates,
     )
     production_schema = _production_schema(
         document_id=document_id,
         source_file=source_path.name,
         render=render,
         text_blocks=text_blocks,
-        candidate_polygon=candidate_document.candidate_regions[0].polygon_pdf,
+        selected_candidate=candidate_document.candidate_regions[0],
     )
     audit = ocr_audit(provider, len(tiles))
     raster_audit = RasterAudit(
@@ -182,9 +200,24 @@ def _production_schema(
     source_file: str,
     render: RasterRenderResult,
     text_blocks: list[RasterTextBlock],
-    candidate_polygon: list[list[float]],
+    selected_candidate: CandidateRegion,
 ) -> ProductionSchema:
-    polygon_mm = candidate_polygon
+    polygon_mm = selected_candidate.polygon_pdf
+    target_geometry_source = selected_candidate.geometry_source
+    if target_geometry_source == "coarse_semantic_search_area":
+        target_geometry_source = "raster_contour_polygonisation"
+    semantic_validation_source = (
+        "gemini_er_semantic_anchor"
+        if selected_candidate.geometry_source
+        in {
+            "gemini_er_box_region",
+            "gemini_er_mask_region",
+            "gemini_er_linework_refined_region",
+            "gemini_er_segmentation_mask",
+            "gemini_er_point_seeded_region",
+        }
+        else "mock_raster_validation"
+    )
     outlets = [
         RainwaterOutlet(
             id=block.text.lower().replace(" ", ""),
@@ -242,10 +275,10 @@ def _production_schema(
             holes=[],
             area_m2_estimated=round(_polygon_area(polygon_mm) / 1_000_000, 3),
             area_source="computed_from_raster_polygon",
-            geometry_source="raster_contour_polygonisation",
-            semantic_validation_source="mock_raster_validation",
-            confidence=0.62,
-            review_required=True,
+            geometry_source=target_geometry_source,
+            semantic_validation_source=semantic_validation_source,
+            confidence=selected_candidate.geometry_confidence,
+            review_required=selected_candidate.review_required,
         ),
         constraints=Constraints(
             rainwater_outlets=outlets,
@@ -263,6 +296,7 @@ def _production_schema(
             excludes_title_block=True,
             excludes_legend=True,
             scale_calibrated=True,
+            warnings=selected_candidate.quality_warnings,
             human_review_status="required",
         ),
         exports=ExportPaths(),
@@ -272,12 +306,28 @@ def _production_schema(
 def _segmenter(settings: Settings) -> Segmenter:
     if settings.segmentation_provider == "mock":
         return MockSegmenter()
+    if settings.segmentation_provider == "gemini_er":
+        model_call = _gemini_er_model_call(settings)
+        return GeminiErSegmenter(model_call=model_call, model_name=settings.gemini_er_model)
     if settings.segmentation_provider == "self_hosted_falcon":
         return SelfHostedFalconSegmenter(settings)
     return NoopSegmenter()
 
 
-def _falcon_prompts() -> list[str]:
+def _gemini_er_model_call(settings: Settings) -> ImagePromptModelCall:
+    if settings.allow_live_ai_calls and settings.google_api_key:
+        return build_gemini_er_model_call(
+            api_key=settings.google_api_key,
+            model_name=settings.gemini_er_model,
+        )
+
+    def disabled_call(image: Image.Image, prompt: str) -> str:
+        raise RuntimeError("Gemini ER requires ALLOW_LIVE_AI_CALLS=1 and GOOGLE_API_KEY")
+
+    return cast(ImagePromptModelCall, disabled_call)
+
+
+def _segmentation_prompts() -> list[str]:
     return [
         "Segment the proposed flat roof area requiring tapered insulation.",
         "Segment the single-ply membrane flat roof area containing rooflights and outlets.",
