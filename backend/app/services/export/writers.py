@@ -17,29 +17,31 @@ def write_exports(
 ) -> ExportPaths:
     export_directory.mkdir(parents=True, exist_ok=True)
     paths = ExportPaths()
+    basename = (
+        "roof_scope_review_preview"
+        if production_schema.target_area.review_required
+        else "roof_scope"
+    )
 
     if "dxf" in formats:
         paths.dxf = _write_dxf(production_schema, export_directory / "roof_scope_outline.dxf").name
     if "svg" in formats:
-        paths.svg = _write_svg(production_schema, export_directory / "roof_scope_overlay.svg").name
+        paths.svg = _write_svg(production_schema, export_directory / f"{basename}_overlay.svg").name
     if "geojson" in formats:
         paths.geojson = _write_geojson(
-            production_schema, export_directory / "roof_scope.geojson"
+            production_schema, export_directory / f"{basename}.geojson"
         ).name
     if "mask_png" in formats:
         paths.mask_png = _write_mask_png(
-            production_schema, export_directory / "roof_scope_mask.png"
+            production_schema, export_directory / f"{basename}_mask.png"
         ).name
     if "metadata_json" in formats:
-        metadata_path = export_directory / "roof_scope_metadata.json"
+        metadata_path = export_directory / f"{basename}_metadata.json"
         paths.metadata_json = metadata_path.name
 
     production_schema.exports = paths
     if "metadata_json" in formats:
-        (export_directory / "roof_scope_metadata.json").write_text(
-            production_schema.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
+        metadata_path.write_text(production_schema.model_dump_json(indent=2), encoding="utf-8")
     return paths
 
 

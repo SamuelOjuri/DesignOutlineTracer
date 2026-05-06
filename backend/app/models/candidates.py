@@ -17,6 +17,7 @@ CandidateGeometrySource = Literal[
 ]
 
 PipelineProfile = Literal["vector", "raster"]
+CandidateSafetyStatus = Literal["pass", "review", "blocked"]
 
 
 class CandidateFeatures(BaseModel):
@@ -51,8 +52,12 @@ class CandidateRegion(BaseModel):
     geometry_source: CandidateGeometrySource
     geometry_confidence: float = Field(ge=0, le=1)
     eligible_for_auto_export: bool = True
+    eligible_for_review_selection: bool = True
+    eligible_for_final_dxf: bool = True
     review_required: bool = False
     quality_warnings: list[str] = Field(default_factory=list)
+    safety_status: CandidateSafetyStatus = "review"
+    safety_warnings: list[str] = Field(default_factory=list)
     features: CandidateFeatures
     scores: CandidateScores
     score: float = Field(ge=0, le=1)
@@ -63,6 +68,7 @@ class CandidateSummary(BaseModel):
     top_candidate_id: str | None
     top_candidate_score: float | None
     roof_scope_candidate_rank: int | None
+    review_candidate_ids: list[str] = Field(default_factory=list)
 
 
 class CandidateDocument(BaseModel):

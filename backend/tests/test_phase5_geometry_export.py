@@ -55,10 +55,16 @@ def test_tp17221_finalized_geometry_requires_review(tp17221_pdf: Path) -> None:
     assert polygon.exterior.is_ring
     assert schema.quality_checks.self_intersections is False
     assert len(schema.constraints.rainwater_outlets) >= 5
-    assert len(schema.constraints.rooflights) >= 5
-    assert schema.target_area.area_m2_estimated != 103.0
+    assert len(schema.constraints.rooflights) == 0
+    assert schema.quality_checks.contains_rooflights is False
+    assert schema.target_area.geometry_source == "anchor_boundary_reconstruction"
+    assert schema.target_area.area_m2_estimated > 100.0
     assert schema.coordinate_systems.cad.calibration_source == "detected_scale_text"
     assert schema.quality_checks.human_review_status == "required"
+    assert schema.target_area.confidence <= 0.58
+    assert schema.quality_checks.cad_candidate_exportable is False
+    assert "candidate_area_outlier" in schema.quality_checks.warnings
+    assert "rooflight_detection_requires_review" in schema.quality_checks.warnings
     assert "scale_requires_user_confirmation" in schema.quality_checks.warnings
 
 
@@ -106,6 +112,7 @@ def test_export_endpoint_writes_review_preview_formats(
     assert exports["dxf"] is None
     for key in ("svg", "geojson", "mask_png", "metadata_json"):
         assert exports[key]
+        assert "review_preview" in exports[key]
         assert (tmp_path / exports[key]).exists()
     assert data["production_schema"]["target_area"]["review_required"] is True
 
@@ -132,6 +139,12 @@ def test_export_endpoint_uses_original_pdf_after_validation_overlay(
     assert export_response.status_code == 200
     data = export_response.json()
     assert data["production_schema"]["document"]["source_file"] == tp17221_pdf.name
+    assert data["production_schema"]["target_area"]["geometry_source"] == (
+        "anchor_boundary_reconstruction"
+    )
+    assert data["production_schema"]["target_area"]["semantic_validation_source"] == (
+        "mock-deterministic-v1"
+    )
     assert data["production_schema"]["coordinate_systems"]["cad"]["calibration_source"] != (
         "accuroof_reference_area_tp17221"
     )

@@ -48,7 +48,7 @@ def test_tp17221_extracts_required_vector_signals(tp17221_pdf: Path) -> None:
     assert "P2" in all_text
     assert "Fall paths to be" in all_text
     assert document.summary.rwp_labels == ["rwp.1", "rwp.2", "rwp.3", "rwp.4", "rwp.5"]
-    assert document.summary.rooflight_rectangle_count >= 5
+    assert document.summary.rooflight_rectangle_count == 0
     assert any(block.text_class == "rooflight_label" for block in document.text_blocks)
     assert viewport.bbox_pdf[2] < title_block.bbox_pdf[0]
 
@@ -72,5 +72,5 @@ def test_vector_endpoint_returns_uploaded_document(
     data = vector_response.json()
     assert data["document_id"] == document_id
     assert data["summary"]["rwp_label_count"] == 5
-    assert data["summary"]["rooflight_rectangle_count"] >= 5
+    assert data["summary"]["rooflight_rectangle_count"] == 0
     assert data["summary"]["vector_primitive_count"] >= 20_000

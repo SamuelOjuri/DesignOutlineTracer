@@ -3,11 +3,13 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.models.production import ExportPaths, ExportRequest, ExportResponse
+from app.models.validation import ValidationResponse
 from app.services.ai.factory import get_ai_provider
 from app.services.audit import record_audit_event
 from app.services.export.writers import write_exports
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.finalize import build_production_schema
+from app.services.geometry.overlays import render_candidate_overlay
 from app.services.geometry.quality import QualityGateError, enforce_export_quality_gates
 from app.services.raster_pipeline.approval import is_approved
 from app.services.raster_pipeline.errors import RasterApprovalRequired
@@ -16,7 +18,9 @@ from app.services.storage.documents import (
     export_dir,
     find_uploaded_source,
     storage_relative_path,
+    upload_dir,
 )
+from app.services.storage.validation import load_validation_response, save_validation_response
 from app.services.vector_pipeline.extractor import extract_vector_document
 
 router = APIRouter(tags=["export"])
@@ -56,11 +60,38 @@ async def export_document(
                 ai_provider=provider,
             )
             candidate_document = generate_candidate_document(vector_document)
-            validation = provider.validate_candidates(
-                candidate_document=candidate_document,
-                text_blocks=vector_document.text_blocks,
-                overlay_png_path=None,
+            cached_validation = load_validation_response(
+                storage_path=settings.storage_path,
+                document_id=document_id,
             )
+            validation = None
+            if cached_validation and _candidate_exists(
+                candidate_document,
+                cached_validation.validation.selected_review_candidate_id
+                or cached_validation.validation.selected_candidate_id,
+            ):
+                validation = cached_validation.validation
+            if validation is None:
+                overlay_path = render_candidate_overlay(
+                    source_path=source_path,
+                    candidate_document=candidate_document,
+                    output_path=upload_dir(settings.storage_path, document_id)
+                    / "candidate_overlay.png",
+                )
+                validation = provider.validate_candidates(
+                    candidate_document=candidate_document,
+                    text_blocks=vector_document.text_blocks,
+                    overlay_png_path=str(overlay_path),
+                )
+                save_validation_response(
+                    storage_path=settings.storage_path,
+                    response=ValidationResponse(
+                        document_id=document_id,
+                        source_file=source_path.name,
+                        overlay_png_path=storage_relative_path(settings.storage_path, overlay_path),
+                        validation=validation,
+                    ),
+                )
             production_schema = build_production_schema(
                 document_id=document_id,
                 source_file=source_path.name,
@@ -123,3 +154,10 @@ def _relative_path(storage_path: Path, output_dir: Path, filename: str | None) -
     if filename is None:
         return None
     return storage_relative_path(storage_path, output_dir / filename)
+
+
+def _candidate_exists(candidate_document: object, candidate_id: str) -> bool:
+    return any(
+        candidate.id == candidate_id
+        for candidate in getattr(candidate_document, "candidate_regions", [])
+    )

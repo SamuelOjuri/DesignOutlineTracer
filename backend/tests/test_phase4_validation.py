@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,10 +13,11 @@ from app.models.candidates import (
     CandidateSummary,
 )
 from app.models.validation import SemanticValidationResult
-from app.services.ai.gemini import GeminiProvider
+from app.services.ai.gemini import VALIDATION_SCHEMA, GeminiProvider
 from app.services.ai.mock import MockProvider
 from app.services.geometry.candidates import generate_candidate_document
-from app.services.geometry.overlays import render_candidate_overlay
+from app.services.geometry.overlays import _overlay_candidates, render_candidate_overlay
+from app.services.storage.validation import load_validation_response
 from app.services.vector_pipeline.extractor import extract_vector_document
 
 
@@ -54,6 +56,30 @@ def test_tp17221_mock_selects_roof_scope_candidate(tp17221_pdf: Path) -> None:
     assert "human review" in result.reason
 
 
+def test_mock_validation_selects_review_visible_reconstruction(tp17221_pdf: Path) -> None:
+    provider = MockProvider()
+    vector_document = extract_vector_document(tp17221_pdf, tp17221_pdf.stem, provider)
+    candidate_document = generate_candidate_document(vector_document)
+    review_candidate = next(
+        candidate
+        for candidate in candidate_document.candidate_regions
+        if candidate.geometry_source == "anchor_boundary_reconstruction"
+    )
+
+    result = provider.validate_candidates(
+        candidate_document=candidate_document,
+        text_blocks=vector_document.text_blocks,
+        overlay_png_path=None,
+    )
+
+    assert review_candidate.safety_status == "review"
+    assert "synthetic_gap_bridges_used" in review_candidate.quality_warnings
+    assert result.selected_candidate_id == review_candidate.id
+    assert result.selected_review_candidate_id == review_candidate.id
+    assert result.selected_auto_export_candidate_id is None
+    assert result.confidence <= 0.7
+
+
 def test_candidate_overlay_is_rendered(tp17221_pdf: Path, tmp_path: Path) -> None:
     provider = MockProvider()
     vector_document = extract_vector_document(tp17221_pdf, tp17221_pdf.stem, provider)
@@ -66,6 +92,26 @@ def test_candidate_overlay_is_rendered(tp17221_pdf: Path, tmp_path: Path) -> Non
 
     assert overlay_path.exists()
     assert overlay_path.stat().st_size > 0
+
+
+def test_candidate_overlay_includes_blocked_reconstruction_for_review(
+    tp17221_pdf: Path,
+) -> None:
+    provider = MockProvider()
+    vector_document = extract_vector_document(tp17221_pdf, tp17221_pdf.stem, provider)
+    candidate_document = generate_candidate_document(vector_document)
+    blocked = next(
+        candidate
+        for candidate in candidate_document.candidate_regions
+        if candidate.geometry_source == "anchor_boundary_reconstruction"
+    )
+    overlay_candidates = _overlay_candidates(candidate_document, top_n=5)
+
+    assert blocked.rank > 5
+    assert blocked.safety_status == "review"
+    assert not blocked.eligible_for_auto_export
+    assert blocked.eligible_for_review_selection
+    assert blocked in overlay_candidates
 
 
 def test_validate_endpoint_returns_structured_response(
@@ -89,8 +135,15 @@ def test_validate_endpoint_returns_structured_response(
     assert data["overlay_png_path"] == f"uploads/{document_id}/candidate_overlay.png"
     assert (tmp_path / data["overlay_png_path"]).exists()
     assert data["validation"]["selected_candidate_id"] != "candidate_coarse_semantic_search_01"
+    assert data["validation"]["selected_review_candidate_id"] == data["validation"][
+        "selected_candidate_id"
+    ]
+    assert data["validation"]["selected_auto_export_candidate_id"] is None
     assert data["validation"]["review_required"] is True
     assert data["validation"]["confidence"] <= 0.75
+    saved = load_validation_response(storage_path=tmp_path, document_id=document_id)
+    assert saved is not None
+    assert saved.overlay_png_path == f"uploads/{document_id}/candidate_overlay.png"
 
 
 def test_gemini_provider_uses_google_genai_json_adapter() -> None:
@@ -115,11 +168,25 @@ def test_gemini_provider_uses_google_genai_json_adapter() -> None:
     assert result.provider == "gemini"
     assert result.model == "gemini-2.5-flash"
     assert result.selected_candidate_id == "candidate_vector_01"
+    assert result.selected_review_candidate_id == "candidate_vector_01"
+    assert result.selected_auto_export_candidate_id == "candidate_vector_01"
     assert result.confidence == 0.86
     assert result.review_required is False
     assert calls[0]["api_key"] == "test-key"
     assert calls[0]["model_name"] == "gemini-2.5-flash"
     assert calls[0]["image_path"] == "overlay.png"
+
+
+def test_gemini_validation_schema_is_sdk_compatible() -> None:
+    from google.genai import _transformers, types
+
+    schema = _transformers.t_schema(None, deepcopy(VALIDATION_SCHEMA))
+
+    assert schema is not None
+    assert schema.properties is not None
+    auto_export_property = schema.properties["selected_auto_export_candidate_id"]
+    assert auto_export_property.type == types.Type.STRING
+    assert auto_export_property.nullable is True
 
 
 def _minimal_candidate_document() -> CandidateDocument:
@@ -154,6 +221,7 @@ def _minimal_candidate_document() -> CandidateDocument:
         geometry_confidence=0.9,
         eligible_for_auto_export=True,
         review_required=False,
+        safety_status="pass",
         features=features,
         scores=scores,
         score=0.88,

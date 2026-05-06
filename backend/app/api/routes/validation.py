@@ -6,6 +6,7 @@ from app.services.audit import record_audit_event
 from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.overlays import render_candidate_overlay
 from app.services.storage.documents import find_uploaded_source, storage_relative_path, upload_dir
+from app.services.storage.validation import save_validation_response
 from app.services.vector_pipeline.extractor import extract_vector_document
 
 router = APIRouter(tags=["validation"])
@@ -57,12 +58,15 @@ async def validate_document_candidates(
         overlay_png_path=storage_relative_path(settings.storage_path, overlay_path),
         validation=validation,
     )
+    save_validation_response(storage_path=settings.storage_path, response=response)
     record_audit_event(
         storage_path=settings.storage_path,
         document_id=document_id,
         event_type="candidates_validated",
         payload={
             "selected_candidate_id": validation.selected_candidate_id,
+            "selected_review_candidate_id": validation.selected_review_candidate_id,
+            "selected_auto_export_candidate_id": validation.selected_auto_export_candidate_id,
             "confidence": validation.confidence,
             "review_required": validation.review_required,
             "provider": validation.provider,

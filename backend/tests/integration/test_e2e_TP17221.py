@@ -49,11 +49,19 @@ def test_e2e_tp17221_vector_pipeline_export_and_audit(
     assert vector["summary"]["rwp_label_count"] >= 5
     assert candidates["summary"]["roof_scope_candidate_rank"] == 1
     assert candidates["summary"]["top_candidate_id"] != "candidate_coarse_semantic_search_01"
+    assert "candidate_vector_anchor_boundary_01" in candidates["summary"][
+        "review_candidate_ids"
+    ]
     assert validation["validation"]["selected_candidate_id"] != (
         "candidate_coarse_semantic_search_01"
     )
+    assert validation["validation"]["selected_candidate_id"] == (
+        "candidate_vector_anchor_boundary_01"
+    )
+    assert validation["validation"]["selected_auto_export_candidate_id"] is None
     assert validation["validation"]["review_required"] is True
     assert schema["target_area"]["review_required"] is True
+    assert schema["target_area"]["geometry_source"] == "anchor_boundary_reconstruction"
     assert schema["coordinate_systems"]["cad"]["calibration_source"] != (
         "accuroof_reference_area_tp17221"
     )

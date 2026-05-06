@@ -210,8 +210,8 @@ export const NewBuildApp = () => {
       const result = await runAutomatedExtraction(pdfFile);
       const schema = result.exportResult.production_schema;
       const outline = backendCandidateToCanvasOutline(result.candidate, pdfCanvas, schema);
-      const holes = backendRooflightsToCanvasHoles(result.candidate, pdfCanvas, schema);
-      const extractedOutlets = backendOutletsToCanvas(result.candidate, pdfCanvas, schema);
+      const holes = backendRooflightsToCanvasHoles(result.validatedCandidate, pdfCanvas, schema);
+      const extractedOutlets = backendOutletsToCanvas(result.validatedCandidate, pdfCanvas, schema);
 
       setRoofOutlines(outline.length > 2 ? [outline] : []);
       setInteriorHoles(holes);

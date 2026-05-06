@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, box
 
 from app.models.candidates import CandidateDocument, CandidateRegion
 from app.models.production import (
@@ -22,6 +22,7 @@ from app.models.production import (
 from app.models.validation import SemanticValidationResult
 from app.models.vector import TextBlock, VectorDocument, VectorPrimitive
 from app.services.geometry.candidates import _rwp_labels_in_text
+from app.services.geometry.safety import cap_confidence_for_safety, select_candidate_for_validation
 
 
 @dataclass(frozen=True)
@@ -41,8 +42,12 @@ def build_production_schema(
     candidate_document: CandidateDocument,
     validation: SemanticValidationResult,
 ) -> ProductionSchema:
-    candidate = _selected_candidate(candidate_document, validation.selected_candidate_id)
-    polygon_pdf = _candidate_polygon(candidate)
+    selection = select_candidate_for_validation(
+        candidate_document,
+        validation.selected_review_candidate_id or validation.selected_candidate_id,
+    )
+    candidate = selection.candidate
+    polygon_pdf = _candidate_polygon(candidate, vector_document)
     calibration = _calibration(vector_document=vector_document)
     origin_x, origin_y = polygon_pdf.bounds[0], polygon_pdf.bounds[1]
     outer_polygon_mm = [
@@ -51,22 +56,39 @@ def build_production_schema(
     ]
     polygon_mm = Polygon(outer_polygon_mm)
     area_m2 = round(polygon_mm.area / 1_000_000, 3)
-    rooflights = _rooflights(vector_document, origin_x, origin_y, calibration.mm_per_pdf_unit)
+    rooflights = _rooflights(
+        vector_document,
+        polygon_pdf,
+        origin_x,
+        origin_y,
+        calibration.mm_per_pdf_unit,
+    )
     outlets = _rainwater_outlets(vector_document, origin_x, origin_y, calibration.mm_per_pdf_unit)
     review_required = (
         validation.review_required
         or candidate.review_required
         or calibration.requires_user_confirmation
         or not candidate.eligible_for_auto_export
+        or not candidate.eligible_for_final_dxf
+        or selection.demoted
     )
     quality_checks = _quality_checks(
+        polygon_pdf=polygon_pdf,
         polygon_mm=polygon_mm,
         rooflights=rooflights,
         outlets=outlets,
+        vector_document=vector_document,
         validation=validation,
         candidate=candidate,
         calibration=calibration,
         review_required=review_required,
+        selection_warnings=selection.warnings,
+    )
+    target_confidence = _target_confidence(
+        validation=validation,
+        candidate=candidate,
+        quality_checks=quality_checks,
+        demoted=selection.demoted,
     )
     page = vector_document.page_metadata[0]
 
@@ -96,10 +118,7 @@ def build_production_schema(
             area_source="computed_from_polygon",
             geometry_source=candidate.geometry_source,
             semantic_validation_source=validation.model,
-            confidence=min(
-                validation.confidence,
-                max(candidate.score, candidate.geometry_confidence),
-            ),
+            confidence=target_confidence,
             review_required=review_required,
         ),
         constraints=Constraints(
@@ -127,12 +146,104 @@ def _selected_candidate(
     )
 
 
-def _candidate_polygon(candidate: CandidateRegion) -> Polygon:
+def _candidate_polygon(candidate: CandidateRegion, vector_document: VectorDocument) -> Polygon:
     polygon = Polygon(candidate.polygon_pdf).buffer(0)
     if not isinstance(polygon, Polygon):
         polygons = [geom for geom in polygon.geoms if isinstance(geom, Polygon)]
         polygon = max(polygons, key=lambda geom: geom.area)
+    polygon = _snap_polygon_to_vector_linework(polygon, vector_document)
+    polygon = _remove_spike_vertices(polygon)
+    polygon = _remove_collinear_vertices(polygon)
     return polygon.simplify(0.5, preserve_topology=True)
+
+
+def _snap_polygon_to_vector_linework(polygon: Polygon, vector_document: VectorDocument) -> Polygon:
+    if polygon.is_empty:
+        return polygon
+    trusted_x: list[float] = []
+    trusted_y: list[float] = []
+    for primitive in vector_document.vector_primitives:
+        if primitive.type != "line" or primitive.start_pdf is None or primitive.end_pdf is None:
+            continue
+        if primitive.semantic_role not in {"roof_perimeter", "parapet_or_wall", "unknown"}:
+            continue
+        start = primitive.start_pdf
+        end = primitive.end_pdf
+        if _distance((start[0], start[1]), (end[0], end[1])) < 45:
+            continue
+        if abs(start[0] - end[0]) <= 1.0:
+            trusted_x.append(round((start[0] + end[0]) / 2, 1))
+        if abs(start[1] - end[1]) <= 1.0:
+            trusted_y.append(round((start[1] + end[1]) / 2, 1))
+    if not trusted_x and not trusted_y:
+        return polygon
+    points = []
+    for x, y in list(polygon.exterior.coords)[:-1]:
+        points.append([
+            _snap_value(float(x), trusted_x, tolerance=3.0),
+            _snap_value(float(y), trusted_y, tolerance=3.0),
+        ])
+    return _clean_polygon(points) or polygon
+
+
+def _snap_value(value: float, candidates: list[float], *, tolerance: float) -> float:
+    if not candidates:
+        return value
+    nearest = min(candidates, key=lambda candidate: abs(candidate - value))
+    return nearest if abs(nearest - value) <= tolerance else value
+
+
+def _remove_spike_vertices(polygon: Polygon) -> Polygon:
+    points = list(polygon.exterior.coords)[:-1]
+    if len(points) < 4:
+        return polygon
+    cleaned: list[tuple[float, float]] = []
+    for index, current in enumerate(points):
+        previous = points[index - 1]
+        following = points[(index + 1) % len(points)]
+        if _distance(previous, following) <= 4.0 and min(
+            _distance(previous, current),
+            _distance(current, following),
+        ) >= 20.0:
+            continue
+        if cleaned and _distance(cleaned[-1], current) <= 0.5:
+            continue
+        cleaned.append((float(current[0]), float(current[1])))
+    return _clean_polygon(cleaned) or polygon
+
+
+def _remove_collinear_vertices(polygon: Polygon) -> Polygon:
+    points = list(polygon.exterior.coords)[:-1]
+    if len(points) < 4:
+        return polygon
+    cleaned: list[tuple[float, float]] = []
+    for index, current in enumerate(points):
+        previous = points[index - 1]
+        following = points[(index + 1) % len(points)]
+        if _is_axis_collinear(previous, current, following):
+            continue
+        cleaned.append((float(current[0]), float(current[1])))
+    return _clean_polygon(cleaned) or polygon
+
+
+def _is_axis_collinear(
+    previous: tuple[float, float],
+    current: tuple[float, float],
+    following: tuple[float, float],
+) -> bool:
+    same_x = max(abs(previous[0] - current[0]), abs(current[0] - following[0])) <= 1.0
+    same_y = max(abs(previous[1] - current[1]), abs(current[1] - following[1])) <= 1.0
+    return bool(same_x or same_y)
+
+
+def _clean_polygon(points: list[tuple[float, float]] | list[list[float]]) -> Polygon | None:
+    if len(points) < 3:
+        return None
+    cleaned = Polygon(points).buffer(0)
+    if isinstance(cleaned, Polygon):
+        return cleaned
+    polygons = [geom for geom in cleaned.geoms if isinstance(geom, Polygon)]
+    return max(polygons, key=lambda geom: geom.area) if polygons else None
 
 
 def _calibration(*, vector_document: VectorDocument) -> CalibrationResult:
@@ -213,18 +324,31 @@ def _bbox_polygon_to_mm(
 
 def _rooflights(
     vector_document: VectorDocument,
+    polygon_pdf: Polygon,
     origin_x: float,
     origin_y: float,
     mm_per_pdf_unit: float,
 ) -> list[RooflightConstraint]:
-    return [
-        RooflightConstraint(
-            id=f"rooflight_{index + 1:02d}",
-            polygon_mm=_bbox_polygon_to_mm(rooflight.bbox_pdf, origin_x, origin_y, mm_per_pdf_unit),
-            confidence=rooflight.confidence,
+    rooflights: list[RooflightConstraint] = []
+    target_region = polygon_pdf.buffer(8.0)
+    for rooflight in vector_document.rooflight_rectangles:
+        if not target_region.contains(Point(_bbox_center_tuple(rooflight.bbox_pdf))):
+            continue
+        if not _rooflight_supported_by_text(rooflight.bbox_pdf, vector_document.text_blocks):
+            continue
+        rooflights.append(
+            RooflightConstraint(
+                id=f"rooflight_{len(rooflights) + 1:02d}",
+                polygon_mm=_bbox_polygon_to_mm(
+                    rooflight.bbox_pdf,
+                    origin_x,
+                    origin_y,
+                    mm_per_pdf_unit,
+                ),
+                confidence=rooflight.confidence,
+            )
         )
-        for index, rooflight in enumerate(vector_document.rooflight_rectangles)
-    ]
+    return rooflights
 
 
 def _rainwater_outlets(
@@ -282,16 +406,22 @@ def _drawing_metadata(vector_document: VectorDocument, scale_text: str) -> Drawi
 
 def _quality_checks(
     *,
+    polygon_pdf: Polygon,
     polygon_mm: Polygon,
     rooflights: list[RooflightConstraint],
     outlets: list[RainwaterOutlet],
+    vector_document: VectorDocument,
     validation: SemanticValidationResult,
     candidate: CandidateRegion,
     calibration: CalibrationResult,
     review_required: bool,
+    selection_warnings: list[str],
 ) -> QualityChecks:
-    contains_rooflights = all(
-        polygon_mm.contains(Polygon(rooflight.polygon_mm).centroid) for rooflight in rooflights
+    rooflight_expected = _has_rooflight_expectation(vector_document.text_blocks)
+    contains_rooflights = (
+        all(polygon_mm.contains(Polygon(rooflight.polygon_mm).centroid) for rooflight in rooflights)
+        if rooflights
+        else not rooflight_expected
     )
     contains_outlets = all(
         polygon_mm.contains(Point(outlet.point_mm))
@@ -301,9 +431,19 @@ def _quality_checks(
     outlet_geometry_confidence = (
         round(sum(outlet.confidence for outlet in outlets) / len(outlets), 3) if outlets else 0.0
     )
-    warnings = [*candidate.quality_warnings]
+    excludes_title_block = _excludes_sheet_regions(polygon_pdf, vector_document, {"title_block"})
+    excludes_legend = _excludes_sheet_regions(polygon_pdf, vector_document, {"legend"})
+    warnings = [*candidate.quality_warnings, *candidate.safety_warnings, *selection_warnings]
     if candidate.geometry_source == "coarse_semantic_search_area":
         warnings.append("coarse_candidate_not_cad_final")
+    if candidate.safety_status == "blocked":
+        warnings.append("selected_candidate_failed_safety_gate")
+    if not contains_rooflights:
+        warnings.append("rooflight_detection_requires_review")
+    if not excludes_title_block:
+        warnings.append("target_overlaps_title_block")
+    if not excludes_legend:
+        warnings.append("target_overlaps_legend")
     if calibration.requires_user_confirmation:
         warnings.append("scale_requires_user_confirmation")
     if outlet_geometry_confidence < 0.7:
@@ -316,15 +456,73 @@ def _quality_checks(
         self_intersections=not polygon_mm.is_valid,
         contains_rooflights=contains_rooflights,
         contains_or_borders_rwp=contains_outlets,
-        excludes_title_block=True,
-        excludes_legend=True,
+        excludes_title_block=excludes_title_block,
+        excludes_legend=excludes_legend,
         scale_calibrated=calibration.confidence >= 0.6,
-        cad_candidate_exportable=candidate.eligible_for_auto_export,
+        cad_candidate_exportable=(
+            candidate.eligible_for_auto_export and candidate.eligible_for_final_dxf
+        ),
         calibration_confidence=calibration.confidence,
         outlet_geometry_confidence=outlet_geometry_confidence,
         warnings=sorted(set(warnings)),
         human_review_status="required" if review_required else "pending",
     )
+
+
+def _target_confidence(
+    *,
+    validation: SemanticValidationResult,
+    candidate: CandidateRegion,
+    quality_checks: QualityChecks,
+    demoted: bool,
+) -> float:
+    confidence = min(validation.confidence, max(candidate.score, candidate.geometry_confidence))
+    confidence = cap_confidence_for_safety(confidence, candidate=candidate, demoted=demoted)
+    if not quality_checks.contains_rooflights:
+        confidence = min(confidence, 0.58)
+    if "candidate_area_outlier" in quality_checks.warnings:
+        confidence = min(confidence, 0.55)
+    if quality_checks.human_review_status == "required":
+        confidence = min(confidence, 0.7)
+    return round(confidence, 4)
+
+
+def _excludes_sheet_regions(
+    polygon_pdf: Polygon,
+    vector_document: VectorDocument,
+    region_types: set[str],
+) -> bool:
+    if polygon_pdf.area <= 0:
+        return False
+    regions = [
+        box(*region.bbox_pdf)
+        for region in vector_document.sheet_regions
+        if region.type in region_types
+    ]
+    return not any(
+        polygon_pdf.intersects(region)
+        and polygon_pdf.intersection(region).area / polygon_pdf.area > 0.01
+        for region in regions
+    )
+
+
+def _has_rooflight_expectation(text_blocks: list[TextBlock]) -> bool:
+    return any(
+        re.search(r"roof\s*light|rooflight", block.text, flags=re.IGNORECASE)
+        for block in text_blocks
+    )
+
+
+def _rooflight_supported_by_text(bbox: list[float], text_blocks: list[TextBlock]) -> bool:
+    return any(
+        re.search(r"roof\s*light|rooflight", block.text, flags=re.IGNORECASE)
+        and _distance(_bbox_center_tuple(bbox), _bbox_center_tuple(block.bbox_pdf)) <= 220
+        for block in text_blocks
+    )
+
+
+def _bbox_center_tuple(bbox: list[float]) -> tuple[float, float]:
+    return (float((bbox[0] + bbox[2]) / 2), float((bbox[1] + bbox[3]) / 2))
 
 
 def _first_match(text: str, pattern: str) -> str | None:

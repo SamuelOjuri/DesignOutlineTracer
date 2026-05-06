@@ -37,7 +37,7 @@ def test_candidate_generation_matches_golden_summaries_for_all_sample_pdfs(
                 assert "not_cad_final_geometry" in candidate.quality_warnings
 
 
-def test_tp17221_coarse_semantic_area_is_fallback_only(tp17221_pdf: Path) -> None:
+def test_reconstruction_remains_review_only_not_final_exportable(tp17221_pdf: Path) -> None:
     candidates = _generate_candidates(tp17221_pdf)
     reconstructed_candidate = next(
         candidate
@@ -50,19 +50,25 @@ def test_tp17221_coarse_semantic_area_is_fallback_only(tp17221_pdf: Path) -> Non
         if candidate.geometry_source == "coarse_semantic_search_area"
     )
 
-    assert candidates.candidate_regions[0] == reconstructed_candidate
+    assert candidates.candidate_regions[0] != reconstructed_candidate
+    assert reconstructed_candidate.safety_status == "review"
+    assert not reconstructed_candidate.eligible_for_auto_export
+    assert reconstructed_candidate.eligible_for_review_selection
+    assert not reconstructed_candidate.eligible_for_final_dxf
     assert reconstructed_candidate.features.rwp_label_count == 5
     assert reconstructed_candidate.area_pdf_units > (
         10 * candidates.candidate_regions[1].area_pdf_units
     )
+    assert "candidate_area_outlier" in reconstructed_candidate.quality_warnings
     assert "anchor_boundary_reconstruction_requires_review" in (
         reconstructed_candidate.quality_warnings
     )
+    assert reconstructed_candidate.id in candidates.summary.review_candidate_ids
     assert candidates.candidate_regions[0].geometry_source != "coarse_semantic_search_area"
     assert candidates.candidate_regions[0].eligible_for_auto_export
     assert candidates.candidate_regions[0].review_required
     assert coarse_candidate.rank > candidates.candidate_regions[0].rank
-    assert coarse_candidate.features.contains_rooflights
+    assert not coarse_candidate.features.contains_rooflights
     assert coarse_candidate.features.rwp_label_count == 5
     assert coarse_candidate.score < candidates.candidate_regions[0].score
 
@@ -91,5 +97,7 @@ def test_candidates_endpoint_returns_ranked_candidates(
     assert data["document_id"] == document_id
     assert data["summary"]["top_candidate_id"] != "candidate_coarse_semantic_search_01"
     assert data["summary"]["roof_scope_candidate_rank"] == 1
+    assert "candidate_vector_anchor_boundary_01" in data["summary"]["review_candidate_ids"]
     assert data["candidate_regions"][0]["eligible_for_auto_export"] is True
+    assert data["candidate_regions"][0]["safety_status"] != "blocked"
     assert data["candidate_regions"][-1]["geometry_source"] == "coarse_semantic_search_area"

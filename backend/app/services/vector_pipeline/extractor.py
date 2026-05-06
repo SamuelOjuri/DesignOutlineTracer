@@ -42,7 +42,12 @@ def extract_vector_document(
             )
             sheet_regions.extend(_detect_sheet_regions(page, page_number, page_text_blocks))
             rooflight_rectangles.extend(
-                _detect_rooflight_rectangles(page, page_number, len(rooflight_rectangles))
+                _detect_rooflight_rectangles(
+                    page,
+                    page_number,
+                    len(rooflight_rectangles),
+                    page_text_blocks,
+                )
             )
 
     classified_blocks = ai_provider.classify_text_blocks(text_blocks)
@@ -267,9 +272,21 @@ def _detect_rooflight_rectangles(
     page: fitz.Page,
     page_number: int,
     offset: int,
+    text_blocks: list[TextBlock],
 ) -> list[RooflightRectangle]:
     if "roof light" not in (page.get_text("text") or "").lower():
         return []
+
+    rooflight_text_bboxes = [
+        block.bbox_pdf
+        for block in text_blocks
+        if re.search(r"roof\s*light|rooflight", block.text, flags=re.IGNORECASE)
+    ]
+    pv_text_bboxes = [
+        block.bbox_pdf
+        for block in text_blocks
+        if re.search(r"\bpv\b|photovoltaic|solar", block.text, flags=re.IGNORECASE)
+    ]
 
     horizontal: list[tuple[float, float, float]] = []
     vertical: list[tuple[float, float, float]] = []
@@ -331,8 +348,40 @@ def _detect_rooflight_rectangles(
             source="axis_aligned_vector_linework",
             confidence=0.74,
         )
-        for index, rectangle in enumerate(deduped)
+        for index, rectangle in enumerate(
+            [
+                rectangle
+                for rectangle in deduped
+                if _is_supported_rooflight_rectangle(
+                    rectangle,
+                    rooflight_text_bboxes=rooflight_text_bboxes,
+                    pv_text_bboxes=pv_text_bboxes,
+                )
+            ]
+        )
     ]
+
+
+def _is_supported_rooflight_rectangle(
+    rectangle: tuple[float, float, float, float],
+    *,
+    rooflight_text_bboxes: list[list[float]],
+    pv_text_bboxes: list[list[float]],
+) -> bool:
+    if any(_bbox_distance(rectangle, bbox) <= 260 for bbox in pv_text_bboxes):
+        return False
+    if not rooflight_text_bboxes:
+        return False
+    return any(_bbox_distance(rectangle, bbox) <= 220 for bbox in rooflight_text_bboxes)
+
+
+def _bbox_distance(
+    left: tuple[float, float, float, float] | list[float],
+    right: tuple[float, float, float, float] | list[float],
+) -> float:
+    left_x, left_y = _bbox_center(list(left))
+    right_x, right_y = _bbox_center(list(right))
+    return float(((left_x - right_x) ** 2 + (left_y - right_y) ** 2) ** 0.5)
 
 
 def _apply_classification(

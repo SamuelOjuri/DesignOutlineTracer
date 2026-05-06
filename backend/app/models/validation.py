@@ -7,6 +7,8 @@ class ValidationRequest(BaseModel):
 
 class SemanticValidationResult(BaseModel):
     selected_candidate_id: str
+    selected_review_candidate_id: str | None = None
+    selected_auto_export_candidate_id: str | None = None
     reason: str
     confidence: float = Field(ge=0, le=1)
     review_required: bool

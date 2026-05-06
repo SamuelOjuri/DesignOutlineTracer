@@ -4,6 +4,7 @@ import fitz
 from PIL import Image, ImageDraw
 
 from app.models.candidates import CandidateDocument, CandidateRegion
+from app.services.geometry.review_visibility import is_review_visible_candidate
 
 RANK_COLOURS = ["#ef4444", "#3b82f6", "#22c55e", "#f59e0b", "#a855f7"]
 
@@ -24,12 +25,26 @@ def render_candidate_overlay(
         image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
 
     draw = ImageDraw.Draw(image, "RGBA")
-    for index, candidate in enumerate(candidate_document.candidate_regions[:top_n]):
+    for index, candidate in enumerate(_overlay_candidates(candidate_document, top_n)):
         _draw_candidate(draw, candidate, scale, RANK_COLOURS[index % len(RANK_COLOURS)])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path)
     return output_path
+
+
+def _overlay_candidates(
+    candidate_document: CandidateDocument,
+    top_n: int,
+) -> list[CandidateRegion]:
+    selected = list(candidate_document.candidate_regions[:top_n])
+    selected_ids = {candidate.id for candidate in selected}
+    review_candidates = [
+        candidate
+        for candidate in candidate_document.candidate_regions
+        if candidate.id not in selected_ids and is_review_visible_candidate(candidate)
+    ]
+    return [*selected, *review_candidates]
 
 
 def _draw_candidate(

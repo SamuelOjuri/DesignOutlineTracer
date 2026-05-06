@@ -1,6 +1,7 @@
 import math
 import re
 from dataclasses import dataclass
+from statistics import median
 
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import polygonize, unary_union
@@ -15,6 +16,8 @@ from app.models.candidates import (
     PipelineProfile,
 )
 from app.models.vector import TextBlock, VectorDocument
+from app.services.geometry.review_visibility import is_review_visible_candidate
+from app.services.geometry.safety import safety_status_for_candidate, safety_warnings_for_candidate
 from app.services.scoring.candidate_scoring import score_candidate
 
 MAX_POLYGONIZED_SEGMENTS = 2500
@@ -219,6 +222,7 @@ def generate_candidate_document(
             )
         )
 
+    candidates = _apply_candidate_safety_gates(candidates, vector_document)
     ranked_candidates = sorted(candidates, key=lambda candidate: candidate.score, reverse=True)
     ranked_candidates = [
         candidate.model_copy(update={"rank": rank})
@@ -243,6 +247,11 @@ def generate_candidate_document(
             top_candidate_id=ranked_candidates[0].id if ranked_candidates else None,
             top_candidate_score=ranked_candidates[0].score if ranked_candidates else None,
             roof_scope_candidate_rank=roof_scope_rank,
+            review_candidate_ids=[
+                candidate.id
+                for candidate in ranked_candidates
+                if is_review_visible_candidate(candidate)
+            ],
         ),
     )
 
@@ -964,6 +973,92 @@ def _candidate_quality_warnings(
     if area >= page.page_width * page.page_height * 0.35:
         warnings.append("candidate_area_too_broad")
     return warnings
+
+
+def _apply_candidate_safety_gates(
+    candidates: list[CandidateRegion],
+    vector_document: VectorDocument,
+) -> list[CandidateRegion]:
+    if not candidates:
+        return []
+
+    page = vector_document.page_metadata[0]
+    page_area = page.page_width * page.page_height
+    comparison_areas = [
+        candidate.area_pdf_units
+        for candidate in candidates
+        if candidate.geometry_source != COARSE_GEOMETRY_SOURCE
+        and candidate.geometry_source != RECONSTRUCTION_GEOMETRY_SOURCE
+        and candidate.area_pdf_units >= MIN_FACE_AREA
+    ]
+    median_comparison_area = median(comparison_areas) if comparison_areas else None
+    gated: list[CandidateRegion] = []
+    for candidate in candidates:
+        quality_warnings = set(candidate.quality_warnings)
+        if _is_relative_area_outlier(candidate, median_comparison_area, page_area):
+            quality_warnings.add("candidate_area_outlier")
+
+        score = candidate.score
+        eligible = candidate.eligible_for_auto_export
+        eligible_for_review_selection = candidate.eligible_for_review_selection
+        eligible_for_final_dxf = candidate.eligible_for_final_dxf
+        review_required = candidate.review_required
+        if "synthetic_gap_bridges_used" in quality_warnings:
+            score = min(score, 0.58)
+            eligible = False
+            eligible_for_final_dxf = False
+            review_required = True
+        if "candidate_area_outlier" in quality_warnings:
+            score = min(score, 0.55)
+            eligible = False
+            eligible_for_final_dxf = False
+            review_required = True
+        if "anchor_boundary_reconstruction_requires_review" in quality_warnings:
+            score = min(score, 0.68)
+            eligible_for_final_dxf = False
+            review_required = True
+
+        updated = candidate.model_copy(
+            update={
+                "quality_warnings": sorted(quality_warnings),
+                "score": round(score, 4),
+                "eligible_for_auto_export": eligible,
+                "eligible_for_review_selection": eligible_for_review_selection,
+                "eligible_for_final_dxf": eligible_for_final_dxf,
+                "review_required": review_required,
+            }
+        )
+        safety_warnings = safety_warnings_for_candidate(updated)
+        safety_status = safety_status_for_candidate(updated)
+        gated.append(
+            updated.model_copy(
+                update={
+                    "safety_warnings": safety_warnings,
+                    "safety_status": safety_status,
+                    "eligible_for_final_dxf": eligible_for_final_dxf
+                    and safety_status == "pass",
+                    "review_required": review_required or safety_status != "pass",
+                }
+            )
+        )
+    return gated
+
+
+def _is_relative_area_outlier(
+    candidate: CandidateRegion,
+    median_comparison_area: float | None,
+    page_area: float,
+) -> bool:
+    if candidate.geometry_source != RECONSTRUCTION_GEOMETRY_SOURCE:
+        return False
+    if "synthetic_gap_bridges_used" not in candidate.quality_warnings:
+        return False
+    if median_comparison_area is None or median_comparison_area <= 0:
+        return False
+    return bool(
+        candidate.area_pdf_units > median_comparison_area * 8
+        and candidate.area_pdf_units > page_area * 0.08
+    )
 
 
 def _cluster_polygons(polygons: list[Polygon], tolerance: float) -> list[list[Polygon]]:

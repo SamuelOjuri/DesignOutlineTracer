@@ -4,6 +4,8 @@ from app.models.candidates import CandidateDocument, CandidateRegion
 from app.models.validation import SemanticValidationResult
 from app.models.vector import ClassifiedTextBlock, TextBlock, TextBlockClass
 from app.services.ai.provider import AiProvider
+from app.services.geometry.review_visibility import is_review_visible_candidate
+from app.services.geometry.safety import cap_confidence_for_safety, select_candidate_for_validation
 
 
 class MockProvider(AiProvider):
@@ -31,13 +33,38 @@ class MockProvider(AiProvider):
         text_blocks: list[TextBlock],
         overlay_png_path: str | None,
     ) -> SemanticValidationResult:
-        selected = _select_mock_candidate(candidate_document)
+        requested = _select_mock_candidate(candidate_document)
+        selection = select_candidate_for_validation(candidate_document, requested.id)
+        selected = selection.candidate
         is_coarse_fallback = selected.geometry_source == "coarse_semantic_search_area"
-        confidence = _mock_confidence(selected, is_coarse_fallback)
-        review_required = selected.review_required or is_coarse_fallback or confidence < 0.75
+        confidence = cap_confidence_for_safety(
+            _mock_confidence(selected, is_coarse_fallback),
+            candidate=selected,
+            demoted=selection.demoted,
+        )
+        review_required = (
+            selected.review_required
+            or is_coarse_fallback
+            or confidence < 0.75
+            or selected.safety_status != "pass"
+            or selection.demoted
+        )
         reason = _mock_reason(selected, is_coarse_fallback, review_required)
+        if selection.demoted:
+            reason = (
+                f"{reason} Safety gate demoted {requested.id} to {selected.id}: "
+                f"{', '.join(selection.warnings)}."
+            )
+        elif selected.safety_warnings:
+            reason = f"{reason} Safety gate warnings: {', '.join(selected.safety_warnings)}."
         return SemanticValidationResult(
             selected_candidate_id=selected.id,
+            selected_review_candidate_id=selected.id,
+            selected_auto_export_candidate_id=(
+                selected.id
+                if _candidate_can_auto_export(selected, review_required=review_required)
+                else None
+            ),
             reason=reason,
             confidence=confidence,
             review_required=review_required,
@@ -76,6 +103,20 @@ def _classify_text(text: str) -> TextBlockClass:
 
 
 def _select_mock_candidate(candidate_document: CandidateDocument) -> CandidateRegion:
+    review_candidate = next(
+        (
+            candidate
+            for candidate in candidate_document.candidate_regions
+            if candidate.id in candidate_document.summary.review_candidate_ids
+            and is_review_visible_candidate(candidate)
+            and candidate.eligible_for_review_selection
+            and candidate.safety_status != "blocked"
+        ),
+        None,
+    )
+    if review_candidate is not None:
+        return review_candidate
+
     exportable_candidate = next(
         (
             candidate
@@ -88,6 +129,15 @@ def _select_mock_candidate(candidate_document: CandidateDocument) -> CandidateRe
     if exportable_candidate is not None:
         return exportable_candidate
     return candidate_document.candidate_regions[0]
+
+
+def _candidate_can_auto_export(candidate: CandidateRegion, *, review_required: bool) -> bool:
+    return bool(
+        not review_required
+        and candidate.eligible_for_auto_export
+        and candidate.eligible_for_final_dxf
+        and candidate.safety_status == "pass"
+    )
 
 
 def _mock_confidence(candidate: CandidateRegion, is_coarse_fallback: bool) -> float:
