@@ -7,7 +7,6 @@ CandidateGeometrySource = Literal[
     "vector_composite_region",
     "anchor_boundary_reconstruction",
     "linework_snapped_semantic_region",
-    "vector_raster_refined_region",
     "coarse_semantic_search_area",
     "raster_contour_polygonisation",
     "gemini_er_box_region",
@@ -59,7 +58,6 @@ class CandidateRegion(BaseModel):
     quality_warnings: list[str] = Field(default_factory=list)
     safety_status: CandidateSafetyStatus = "review"
     safety_warnings: list[str] = Field(default_factory=list)
-    raster_iou: float | None = Field(default=None, ge=0, le=1)
     features: CandidateFeatures
     scores: CandidateScores
     score: float = Field(ge=0, le=1)

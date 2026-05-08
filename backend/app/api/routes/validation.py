@@ -34,10 +34,7 @@ async def validate_document_candidates(
             document_id=document_id,
             ai_provider=provider,
         )
-        candidate_document = generate_candidate_document(
-            vector_document,
-            source_path=source_path,
-        )
+        candidate_document = generate_candidate_document(vector_document)
         overlay_path = render_candidate_overlay(
             source_path=source_path,
             candidate_document=candidate_document,
