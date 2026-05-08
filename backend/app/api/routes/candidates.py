@@ -26,7 +26,10 @@ async def get_candidate_document(request: Request, document_id: str) -> Candidat
             document_id=document_id,
             ai_provider=get_ai_provider(settings.ai_provider, settings),
         )
-        candidate_document = generate_candidate_document(vector_document)
+        candidate_document = generate_candidate_document(
+            vector_document,
+            source_path=source_path,
+        )
         record_audit_event(
             storage_path=settings.storage_path,
             document_id=document_id,

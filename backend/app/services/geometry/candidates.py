@@ -1,6 +1,7 @@
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from statistics import median
 
 from shapely.geometry import LineString, Point, Polygon, box
@@ -16,6 +17,10 @@ from app.models.candidates import (
     PipelineProfile,
 )
 from app.models.vector import TextBlock, VectorDocument
+from app.services.geometry.raster_refinement import (
+    RefinementResult,
+    refine_polygon_with_raster,
+)
 from app.services.geometry.review_visibility import is_review_visible_candidate
 from app.services.geometry.safety import safety_status_for_candidate, safety_warnings_for_candidate
 from app.services.scoring.candidate_scoring import score_candidate
@@ -31,12 +36,14 @@ COMPOSITE_ANCHOR_TOLERANCE = 180.0
 COMPOSITE_NEIGHBOUR_TOLERANCE = 8.0
 COARSE_GEOMETRY_SOURCE: CandidateGeometrySource = "coarse_semantic_search_area"
 RECONSTRUCTION_GEOMETRY_SOURCE: CandidateGeometrySource = "anchor_boundary_reconstruction"
+RASTER_REFINED_GEOMETRY_SOURCE: CandidateGeometrySource = "vector_raster_refined_region"
 AUTO_EXPORT_GEOMETRY_SOURCES: set[CandidateGeometrySource] = {
     "anchor_boundary_reconstruction",
     "vector_polygonized_face",
     "vector_composite_region",
     "linework_snapped_semantic_region",
     "raster_contour_polygonisation",
+    "vector_raster_refined_region",
 }
 RECONSTRUCTION_EXCLUDED_ROLES = {
     "dimension_line",
@@ -69,6 +76,7 @@ def generate_candidate_document(
     vector_document: VectorDocument,
     *,
     pipeline_profile: PipelineProfile = "vector",
+    source_path: Path | None = None,
 ) -> CandidateDocument:
     rwp_anchors = _rwp_anchors(vector_document.text_blocks)
     note_anchors = _note_anchors(vector_document.text_blocks)
@@ -140,6 +148,33 @@ def generate_candidate_document(
                 quality_warnings=warnings,
             )
         )
+        refined = _try_refine_with_raster(
+            polygon=reconstruction.polygon,
+            source_path=source_path,
+            vector_document=vector_document,
+            rwp_anchors=rwp_anchors,
+            rooflight_anchors=rooflight_anchors,
+            primitive_anchors=primitive_anchors,
+        )
+        if refined is not None:
+            candidates.append(
+                _build_candidate(
+                    candidate_id=(
+                        f"candidate_vector_raster_refined_{index + 1:02d}"
+                    ),
+                    polygon=refined.polygon_pdf,
+                    geometry_source=RASTER_REFINED_GEOMETRY_SOURCE,
+                    geometry_confidence=round(min(0.92, 0.78 + refined.raster_iou * 0.10), 4),
+                    vector_document=vector_document,
+                    rwp_anchors=rwp_anchors,
+                    rooflight_anchors=rooflight_anchors,
+                    note_anchors=note_anchors,
+                    title_regions=title_regions,
+                    pv_regions=pv_regions,
+                    pipeline_profile=pipeline_profile,
+                    raster_iou=refined.raster_iou,
+                )
+            )
 
     if semantic_polygon is not None:
         snapped_polygon = _linework_snapped_semantic_candidate(vector_document, semantic_polygon)
@@ -271,6 +306,7 @@ def _build_candidate(
     pipeline_profile: PipelineProfile,
     eligible_for_auto_export: bool | None = None,
     quality_warnings: list[str] | None = None,
+    raster_iou: float | None = None,
 ) -> CandidateRegion:
     polygon = _clean_polygon(polygon)
     rooflight_count = sum(1 for anchor in rooflight_anchors if polygon.contains(anchor.point))
@@ -342,6 +378,7 @@ def _build_candidate(
         eligible_for_auto_export=auto_export,
         review_required=review_required,
         quality_warnings=sorted(set(warnings)),
+        raster_iou=raster_iou,
         features=features,
         scores=scores,
         score=score,
@@ -1003,6 +1040,25 @@ def _apply_candidate_safety_gates(
         eligible_for_review_selection = candidate.eligible_for_review_selection
         eligible_for_final_dxf = candidate.eligible_for_final_dxf
         review_required = candidate.review_required
+        # Raster-refined candidates: a high IoU against the source vector
+        # candidate provides additional evidence the boundary is correct, so
+        # we suppress the area-outlier warning. Conversely, a low IoU means
+        # the refinement disagreed strongly with the vector candidate and the
+        # result must go through human review before auto-export.
+        if candidate.geometry_source == RASTER_REFINED_GEOMETRY_SOURCE:
+            iou = candidate.raster_iou or 0.0
+            if iou >= 0.85:
+                quality_warnings.discard("candidate_area_outlier")
+            else:
+                # Refined polygon is review-only when the raster disagrees
+                # with the vector candidate; cap score so it does not
+                # outrank auto-exportable candidates.
+                score = min(score, 0.66)
+                eligible = False
+                eligible_for_final_dxf = False
+                review_required = True
+                if iou < 0.6:
+                    quality_warnings.add("raster_disagreement")
         if "synthetic_gap_bridges_used" in quality_warnings:
             score = min(score, 0.58)
             eligible = False
@@ -1154,3 +1210,42 @@ def _dedupe_polygons(polygons: list[Polygon]) -> list[Polygon]:
             continue
         unique.append(polygon)
     return unique
+
+
+def _try_refine_with_raster(
+    *,
+    polygon: Polygon,
+    source_path: Path | None,
+    vector_document: VectorDocument,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+    primitive_anchors: list[Anchor],
+) -> RefinementResult | None:
+    """Run OpenCV/Shapely raster refinement against a reconstruction polygon.
+
+    Returns ``None`` whenever a refined polygon cannot be derived (no source
+    PDF on disk, no usable anchors, all flood seeds fall on linework, etc.).
+    Refinement failures must never break the vector pipeline, so any
+    unexpected exception is swallowed.
+    """
+    if source_path is None:
+        return None
+    seed_anchors = [
+        *rwp_anchors,
+        *rooflight_anchors,
+        *primitive_anchors,
+    ]
+    if not seed_anchors:
+        return None
+    anchors_pdf = [(float(anchor.point.x), float(anchor.point.y)) for anchor in seed_anchors]
+    page = vector_document.page_metadata[0]
+    try:
+        return refine_polygon_with_raster(
+            candidate_polygon=polygon,
+            anchors_pdf=anchors_pdf,
+            source_path=source_path,
+            page=page,
+            sheet_regions=vector_document.sheet_regions,
+        )
+    except Exception:
+        return None

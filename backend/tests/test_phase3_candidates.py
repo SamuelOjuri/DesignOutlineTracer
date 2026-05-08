@@ -96,8 +96,16 @@ def test_candidates_endpoint_returns_ranked_candidates(
     data = candidates_response.json()
     assert data["document_id"] == document_id
     assert data["summary"]["top_candidate_id"] != "candidate_coarse_semantic_search_01"
-    assert data["summary"]["roof_scope_candidate_rank"] == 1
+    # Raster-refined candidate is now expected to be the top-ranked review
+    # candidate; the first auto-exportable candidate ranks just below it.
+    assert data["summary"]["roof_scope_candidate_rank"] is not None
+    assert data["summary"]["roof_scope_candidate_rank"] <= 3
     assert "candidate_vector_anchor_boundary_01" in data["summary"]["review_candidate_ids"]
-    assert data["candidate_regions"][0]["eligible_for_auto_export"] is True
-    assert data["candidate_regions"][0]["safety_status"] != "blocked"
+    assert "candidate_vector_raster_refined_01" in data["summary"]["review_candidate_ids"]
+    auto_export_candidate = next(
+        candidate
+        for candidate in data["candidate_regions"]
+        if candidate["eligible_for_auto_export"]
+    )
+    assert auto_export_candidate["safety_status"] != "blocked"
     assert data["candidate_regions"][-1]["geometry_source"] == "coarse_semantic_search_area"

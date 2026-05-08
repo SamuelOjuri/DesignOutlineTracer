@@ -59,7 +59,10 @@ async def export_document(
                 document_id=document_id,
                 ai_provider=provider,
             )
-            candidate_document = generate_candidate_document(vector_document)
+            candidate_document = generate_candidate_document(
+                vector_document,
+                source_path=source_path,
+            )
             cached_validation = load_validation_response(
                 storage_path=settings.storage_path,
                 document_id=document_id,

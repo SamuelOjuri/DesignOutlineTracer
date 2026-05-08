@@ -140,7 +140,7 @@ def test_export_endpoint_uses_original_pdf_after_validation_overlay(
     data = export_response.json()
     assert data["production_schema"]["document"]["source_file"] == tp17221_pdf.name
     assert data["production_schema"]["target_area"]["geometry_source"] == (
-        "anchor_boundary_reconstruction"
+        "vector_raster_refined_region"
     )
     assert data["production_schema"]["target_area"]["semantic_validation_source"] == (
         "mock-deterministic-v1"

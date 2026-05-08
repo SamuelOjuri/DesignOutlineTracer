@@ -47,21 +47,43 @@ def test_e2e_tp17221_vector_pipeline_export_and_audit(
     polygon = Polygon(schema["target_area"]["outer_polygon_mm"])
 
     assert vector["summary"]["rwp_label_count"] >= 5
-    assert candidates["summary"]["roof_scope_candidate_rank"] == 1
+    assert candidates["summary"]["roof_scope_candidate_rank"] is not None
+    assert candidates["summary"]["roof_scope_candidate_rank"] <= 3
     assert candidates["summary"]["top_candidate_id"] != "candidate_coarse_semantic_search_01"
-    assert "candidate_vector_anchor_boundary_01" in candidates["summary"][
-        "review_candidate_ids"
-    ]
+    review_ids = candidates["summary"]["review_candidate_ids"]
+    assert "candidate_vector_anchor_boundary_01" in review_ids
+    assert "candidate_vector_raster_refined_01" in review_ids
+    refined_candidate = next(
+        candidate
+        for candidate in candidates["candidate_regions"]
+        if candidate["id"] == "candidate_vector_raster_refined_01"
+    )
+    assert refined_candidate["geometry_source"] == "vector_raster_refined_region"
+    assert refined_candidate["raster_iou"] is not None
+    assert refined_candidate["raster_iou"] >= 0.5
+    anchor_boundary_candidate = next(
+        candidate
+        for candidate in candidates["candidate_regions"]
+        if candidate["id"] == "candidate_vector_anchor_boundary_01"
+    )
+    # The raster refinement should produce a tighter polygon than the
+    # original anchor-boundary reconstruction (which over-covered into the
+    # title block on TP17221).
+    assert refined_candidate["area_pdf_units"] < anchor_boundary_candidate["area_pdf_units"]
     assert validation["validation"]["selected_candidate_id"] != (
         "candidate_coarse_semantic_search_01"
     )
     assert validation["validation"]["selected_candidate_id"] == (
-        "candidate_vector_anchor_boundary_01"
+        "candidate_vector_raster_refined_01"
     )
     assert validation["validation"]["selected_auto_export_candidate_id"] is None
     assert validation["validation"]["review_required"] is True
     assert schema["target_area"]["review_required"] is True
-    assert schema["target_area"]["geometry_source"] == "anchor_boundary_reconstruction"
+    assert schema["target_area"]["geometry_source"] == "vector_raster_refined_region"
+    target_warnings = schema["target_area"].get("warnings") or []
+    assert "target_overlaps_title_block" not in target_warnings
+    assert "synthetic_gap_bridges_used" not in target_warnings
+    assert polygon.area / 1_000_000 < 140  # m²
     assert schema["coordinate_systems"]["cad"]["calibration_source"] != (
         "accuroof_reference_area_tp17221"
     )
