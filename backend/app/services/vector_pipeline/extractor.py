@@ -1,3 +1,4 @@
+import math
 import re
 from pathlib import Path
 
@@ -40,13 +41,15 @@ def extract_vector_document(
             vector_primitives.extend(
                 _extract_vector_primitives(page, page_number, len(vector_primitives))
             )
-            sheet_regions.extend(_detect_sheet_regions(page, page_number, page_text_blocks))
+            page_sheet_regions = _detect_sheet_regions(page, page_number, page_text_blocks)
+            sheet_regions.extend(page_sheet_regions)
             rooflight_rectangles.extend(
                 _detect_rooflight_rectangles(
                     page,
                     page_number,
                     len(rooflight_rectangles),
                     page_text_blocks,
+                    page_sheet_regions,
                 )
             )
 
@@ -212,7 +215,7 @@ def _detect_sheet_regions(
     title_candidates = [
         block.bbox_pdf
         for block in text_blocks
-        if block.bbox_pdf[0] >= width * 0.50 and block.bbox_pdf[1] >= height * 0.65
+        if block.bbox_pdf[0] >= width * 0.45 and block.bbox_pdf[1] >= height * 0.90
     ]
     if not title_candidates:
         title_candidates = [
@@ -221,7 +224,17 @@ def _detect_sheet_regions(
             if block.bbox_pdf[0] >= width * 0.75 or block.bbox_pdf[1] >= height * 0.88
         ]
 
+    notes_candidates = [
+        block.bbox_pdf
+        for block in text_blocks
+        if block.bbox_pdf[0] >= width * 0.70 and block.bbox_pdf[1] < height * 0.86
+    ]
+
     regions: list[SheetRegion] = []
+    notes_bbox: list[float] | None = None
+    if notes_candidates:
+        notes_bbox = _union_bboxes(notes_candidates, padding=8, page_rect=page.rect)
+
     if title_candidates:
         title_bbox = _union_bboxes(title_candidates, padding=8, page_rect=page.rect)
         regions.append(
@@ -232,7 +245,12 @@ def _detect_sheet_regions(
                 confidence=0.78,
             )
         )
-        viewport_right = max(0.0, title_bbox[0] - 12)
+        if notes_bbox is not None:
+            viewport_right = max(0.0, notes_bbox[0] - 12)
+        elif title_bbox[1] <= height * 0.70:
+            viewport_right = max(0.0, title_bbox[0] - 12)
+        else:
+            viewport_right = width
         regions.append(
             SheetRegion(
                 type="drawing_viewport",
@@ -251,17 +269,12 @@ def _detect_sheet_regions(
             )
         )
 
-    notes_candidates = [
-        block.bbox_pdf
-        for block in text_blocks
-        if block.bbox_pdf[0] >= width * 0.70 and block.bbox_pdf[1] < height * 0.65
-    ]
-    if notes_candidates:
+    if notes_bbox is not None:
         regions.append(
             SheetRegion(
                 type="notes",
                 page_number=page_number,
-                bbox_pdf=_union_bboxes(notes_candidates, padding=8, page_rect=page.rect),
+                bbox_pdf=notes_bbox,
                 confidence=0.65,
             )
         )
@@ -273,8 +286,10 @@ def _detect_rooflight_rectangles(
     page_number: int,
     offset: int,
     text_blocks: list[TextBlock],
+    sheet_regions: list[SheetRegion],
 ) -> list[RooflightRectangle]:
-    if "roof light" not in (page.get_text("text") or "").lower():
+    page_text = (page.get_text("text") or "").lower()
+    if "roof light" not in page_text and "rooflight" not in page_text:
         return []
 
     rooflight_text_bboxes = [
@@ -340,7 +355,7 @@ def _detect_rooflight_rectangles(
         if not any(_same_rectangle(rectangle, existing) for existing in deduped):
             deduped.append(rectangle)
 
-    return [
+    vector_rectangles = [
         RooflightRectangle(
             id=f"rooflight_rect_{offset + index + 1:03d}",
             page_number=page_number,
@@ -360,6 +375,173 @@ def _detect_rooflight_rectangles(
             ]
         )
     ]
+    if vector_rectangles:
+        return vector_rectangles
+    return _detect_crosshatched_rooflight_symbols(
+        page=page,
+        page_number=page_number,
+        offset=offset,
+        rooflight_text_bboxes=rooflight_text_bboxes,
+        pv_text_bboxes=pv_text_bboxes,
+        sheet_regions=sheet_regions,
+    )
+
+
+def _detect_crosshatched_rooflight_symbols(
+    *,
+    page: fitz.Page,
+    page_number: int,
+    offset: int,
+    rooflight_text_bboxes: list[list[float]],
+    pv_text_bboxes: list[list[float]],
+    sheet_regions: list[SheetRegion],
+) -> list[RooflightRectangle]:
+    if not rooflight_text_bboxes:
+        return []
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return []
+
+    viewport = next(
+        (region.bbox_pdf for region in sheet_regions if region.type == "drawing_viewport"),
+        [0.0, 0.0, page.rect.width, page.rect.height],
+    )
+    text_y0 = min(bbox[1] for bbox in rooflight_text_bboxes)
+    text_y1 = max(bbox[3] for bbox in rooflight_text_bboxes)
+    clip_left = max(viewport[0], page.rect.width * 0.33)
+    clip_top = max(viewport[1], min(page.rect.height * 0.45, text_y0 - page.rect.height * 0.24))
+    clip_right = min(viewport[2], page.rect.width * 0.82)
+    clip_bottom = min(viewport[3], max(page.rect.height * 0.78, text_y1 + page.rect.height * 0.10))
+    if clip_right <= clip_left + 50 or clip_bottom <= clip_top + 50:
+        return []
+
+    scale = 3.0
+    pixmap = page.get_pixmap(
+        matrix=fitz.Matrix(scale, scale),
+        clip=fitz.Rect(clip_left, clip_top, clip_right, clip_bottom),
+        alpha=False,
+    )
+    image = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+        pixmap.height,
+        pixmap.width,
+        pixmap.n,
+    )[:, :, :3]
+    channel_max = image.max(axis=2)
+    channel_min = image.min(axis=2)
+    grey = image.mean(axis=2)
+    grey_symbol_mask = (
+        (channel_max - channel_min < 20)
+        & (grey > 90)
+        & (grey < 248)
+    ).astype("uint8") * 255
+    edges = cv2.Canny(grey_symbol_mask, 30, 90, apertureSize=3)
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=12,
+        minLineLength=18,
+        maxLineGap=16,
+    )
+    if lines is None:
+        return []
+
+    segments: list[tuple[float, float, float, float, float, float]] = []
+    for line in lines[:, 0, :]:
+        x0, y0, x1, y1 = (float(value) for value in line)
+        dx = x1 - x0
+        dy = y1 - y0
+        length = math.hypot(dx, dy) / scale
+        if not (25 <= length <= 180) or abs(dx) < 8 or abs(dy) < 8:
+            continue
+        pdf_x0 = clip_left + x0 / scale
+        pdf_y0 = clip_top + y0 / scale
+        pdf_x1 = clip_left + x1 / scale
+        pdf_y1 = clip_top + y1 / scale
+        if pdf_x1 < pdf_x0:
+            pdf_x0, pdf_y0, pdf_x1, pdf_y1 = pdf_x1, pdf_y1, pdf_x0, pdf_y0
+        slope = (pdf_y1 - pdf_y0) / max(pdf_x1 - pdf_x0, 0.001)
+        angle = abs(math.degrees(math.atan(slope)))
+        if not (35 <= angle <= 75):
+            continue
+        segments.append(
+            (
+                pdf_x0,
+                pdf_y0,
+                pdf_x1,
+                pdf_y1,
+                (pdf_x0 + pdf_x1) / 2,
+                (pdf_y0 + pdf_y1) / 2,
+            )
+        )
+
+    clusters = _cluster_diagonal_segments(segments)
+    rectangles: list[tuple[float, float, float, float]] = []
+    for cluster in clusters:
+        if len(cluster) < 2:
+            continue
+        xs = [value for segment in cluster for value in (segment[0], segment[2])]
+        ys = [value for segment in cluster for value in (segment[1], segment[3])]
+        x0 = min(xs)
+        y0 = min(ys)
+        x1 = max(xs)
+        y1 = max(ys)
+        center_x = (x0 + x1) / 2
+        center_y = (y0 + y1) / 2
+        width = max(x1 - x0 + 16, 55)
+        height = max(y1 - y0 + 16, 90)
+        rectangle = (
+            max(viewport[0], center_x - width / 2),
+            max(viewport[1], center_y - height / 2),
+            min(viewport[2], center_x + width / 2),
+            min(viewport[3], center_y + height / 2),
+        )
+        rect_width = rectangle[2] - rectangle[0]
+        rect_height = rectangle[3] - rectangle[1]
+        if not (45 <= rect_width <= 150 and 80 <= rect_height <= 180):
+            continue
+        if any(_bbox_distance(rectangle, bbox) <= 260 for bbox in pv_text_bboxes):
+            continue
+        if any(_same_rectangle(rectangle, existing) for existing in rectangles):
+            continue
+        rectangles.append(rectangle)
+
+    return [
+        RooflightRectangle(
+            id=f"rooflight_rect_{offset + index + 1:03d}",
+            page_number=page_number,
+            bbox_pdf=[round(value, 3) for value in rectangle],
+            source="raster_crosshatched_rooflight_symbol",
+            confidence=0.68,
+        )
+        for index, rectangle in enumerate(sorted(rectangles, key=lambda bbox: (bbox[0], bbox[1])))
+    ]
+
+
+def _cluster_diagonal_segments(
+    segments: list[tuple[float, float, float, float, float, float]],
+) -> list[list[tuple[float, float, float, float, float, float]]]:
+    clusters: list[list[tuple[float, float, float, float, float, float]]] = []
+    for segment in segments:
+        matches = [
+            index
+            for index, cluster in enumerate(clusters)
+            if any(
+                abs(segment[4] - existing[4]) <= 70
+                and abs(segment[5] - existing[5]) <= 95
+                for existing in cluster
+            )
+        ]
+        if not matches:
+            clusters.append([segment])
+            continue
+        first = matches[0]
+        clusters[first].append(segment)
+        for index in reversed(matches[1:]):
+            clusters[first].extend(clusters.pop(index))
+    return clusters
 
 
 def _is_supported_rooflight_rectangle(

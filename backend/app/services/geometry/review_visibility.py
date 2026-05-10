@@ -2,6 +2,8 @@ from app.models.candidates import CandidateRegion
 
 
 def is_review_visible_candidate(candidate: CandidateRegion) -> bool:
+    if candidate.geometry_source == "vector_raster_refined_region":
+        return bool(candidate.raster_iou is not None and candidate.raster_iou >= 0.20)
     if candidate.geometry_source != "anchor_boundary_reconstruction":
         return False
     return bool(

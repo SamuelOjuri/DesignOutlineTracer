@@ -19,6 +19,8 @@ from app.services.geometry.candidates import generate_candidate_document
 from app.services.geometry.overlays import _overlay_candidates, render_candidate_overlay
 from app.services.storage.validation import load_validation_response
 from app.services.vector_pipeline.extractor import extract_vector_document
+import app.api.routes.export as export_route
+import app.api.routes.validation as validation_route
 
 
 def _validate_with_mock(pdf_path: Path) -> SemanticValidationResult:
@@ -144,6 +146,56 @@ def test_validate_endpoint_returns_structured_response(
     saved = load_validation_response(storage_path=tmp_path, document_id=document_id)
     assert saved is not None
     assert saved.overlay_png_path == f"uploads/{document_id}/candidate_overlay.png"
+
+
+def test_validate_then_export_reuses_cached_vector_workflow_artifacts(
+    tp17221_pdf: Path,
+    tmp_path: Path,
+    monkeypatch: object,
+) -> None:
+    calls = {"extract": 0, "generate": 0}
+    real_validation_extract = validation_route.extract_vector_document
+    real_validation_generate = validation_route.generate_candidate_document
+    real_export_extract = export_route.extract_vector_document
+    real_export_generate = export_route.generate_candidate_document
+
+    def counting_validation_extract(*args: object, **kwargs: object) -> object:
+        calls["extract"] += 1
+        return real_validation_extract(*args, **kwargs)
+
+    def counting_export_extract(*args: object, **kwargs: object) -> object:
+        calls["extract"] += 1
+        return real_export_extract(*args, **kwargs)
+
+    def counting_validation_generate(*args: object, **kwargs: object) -> object:
+        calls["generate"] += 1
+        return real_validation_generate(*args, **kwargs)
+
+    def counting_export_generate(*args: object, **kwargs: object) -> object:
+        calls["generate"] += 1
+        return real_export_generate(*args, **kwargs)
+
+    monkeypatch.setattr(validation_route, "extract_vector_document", counting_validation_extract)
+    monkeypatch.setattr(export_route, "extract_vector_document", counting_export_extract)
+    monkeypatch.setattr(validation_route, "generate_candidate_document", counting_validation_generate)
+    monkeypatch.setattr(export_route, "generate_candidate_document", counting_export_generate)
+    app = create_app(Settings(storage_root=tmp_path, ai_provider="mock"))
+
+    with TestClient(app) as client, tp17221_pdf.open("rb") as upload:
+        upload_response = client.post(
+            "/api/documents",
+            files={"file": (tp17221_pdf.name, upload, "application/pdf")},
+        )
+        document_id = upload_response.json()["document_id"]
+        validation_response = client.post(f"/api/documents/{document_id}/validate")
+        export_response = client.post(
+            f"/api/documents/{document_id}/export",
+            json={"formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+        )
+
+    assert validation_response.status_code == 200
+    assert export_response.status_code == 200
+    assert calls == {"extract": 1, "generate": 1}
 
 
 def test_gemini_provider_uses_google_genai_json_adapter() -> None:

@@ -12,7 +12,7 @@
       "rwp.4",
       "rwp.5"
     ],
-    "rooflight_rectangle_count": 0
+    "rooflight_rectangle_count": 5
   },
   "page_metadata": {
     "page_number": 1,
@@ -38,7 +38,7 @@
       "page_number": 1,
       "bbox_pdf": [
         1241.92,
-        1092.209,
+        1554.929,
         2335.868,
         1660.721
       ],
@@ -50,7 +50,7 @@
       "bbox_pdf": [
         0.0,
         0.0,
-        1229.92,
+        1818.769,
         1684.0
       ],
       "confidence": 0.72
@@ -62,7 +62,7 @@
         1830.769,
         62.665,
         2321.364,
-        1288.56
+        1400.556
       ],
       "confidence": 0.65
     }

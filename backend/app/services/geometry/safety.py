@@ -16,6 +16,7 @@ REVIEW_QUALITY_WARNINGS = {
     "low_boundary_linework_agreement",
     "missing_rwp_anchor",
     "not_cad_final_geometry",
+    "raster_disagreement",
     "synthetic_gap_bridges_used",
 }
 

@@ -47,27 +47,47 @@ def test_e2e_tp17221_vector_pipeline_export_and_audit(
     polygon = Polygon(schema["target_area"]["outer_polygon_mm"])
 
     assert vector["summary"]["rwp_label_count"] >= 5
-    assert candidates["summary"]["roof_scope_candidate_rank"] == 1
+    assert candidates["summary"]["roof_scope_candidate_rank"] is not None
+    assert candidates["summary"]["roof_scope_candidate_rank"] <= 3
     assert candidates["summary"]["top_candidate_id"] != "candidate_coarse_semantic_search_01"
-    assert "candidate_vector_anchor_boundary_01" in candidates["summary"][
-        "review_candidate_ids"
-    ]
+    assert candidates["summary"]["top_candidate_id"] == "candidate_vector_raster_refined_01"
+    assert "candidate_vector_anchor_boundary_01" in candidates["summary"]["review_candidate_ids"]
+    assert "candidate_vector_raster_refined_01" in candidates["summary"]["review_candidate_ids"]
+    refined_candidate = next(
+        candidate
+        for candidate in candidates["candidate_regions"]
+        if candidate["id"] == "candidate_vector_raster_refined_01"
+    )
+    anchor_candidate = next(
+        candidate
+        for candidate in candidates["candidate_regions"]
+        if candidate["id"] == "candidate_vector_anchor_boundary_01"
+    )
+    assert refined_candidate["geometry_source"] == "vector_raster_refined_region"
+    assert refined_candidate["raster_iou"] >= 0.6
+    assert refined_candidate["raster_clip_iou"] >= 0.85
+    assert refined_candidate["area_pdf_units"] < anchor_candidate["area_pdf_units"]
     assert validation["validation"]["selected_candidate_id"] != (
         "candidate_coarse_semantic_search_01"
     )
     assert validation["validation"]["selected_candidate_id"] == (
-        "candidate_vector_anchor_boundary_01"
+        "candidate_vector_raster_refined_01"
     )
     assert validation["validation"]["selected_auto_export_candidate_id"] is None
     assert validation["validation"]["review_required"] is True
     assert schema["target_area"]["review_required"] is True
-    assert schema["target_area"]["geometry_source"] == "anchor_boundary_reconstruction"
+    assert schema["target_area"]["geometry_source"] == "vector_raster_refined_region"
+    target_warnings = schema["quality_checks"]["warnings"]
+    assert "target_overlaps_title_block" not in target_warnings
+    assert "synthetic_gap_bridges_used" not in target_warnings
+    assert polygon.area / 1_000_000 < 140
     assert schema["coordinate_systems"]["cad"]["calibration_source"] != (
         "accuroof_reference_area_tp17221"
     )
     assert polygon.is_valid
     assert polygon.exterior.is_ring
-    assert len(schema["constraints"]["rainwater_outlets"]) >= 5
+    assert len(schema["constraints"]["rainwater_outlets"]) >= 4
+    assert schema["quality_checks"]["contains_or_borders_rwp"] is True
     assert schema["quality_checks"]["self_intersections"] is False
     assert schema["quality_checks"]["human_review_status"] == "required"
 

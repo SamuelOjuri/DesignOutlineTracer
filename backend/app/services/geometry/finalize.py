@@ -1,7 +1,8 @@
 import re
 from dataclasses import dataclass
 
-from shapely.geometry import Point, Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
+from shapely.ops import nearest_points, snap, unary_union
 
 from app.models.candidates import CandidateDocument, CandidateRegion
 from app.models.production import (
@@ -63,7 +64,13 @@ def build_production_schema(
         origin_y,
         calibration.mm_per_pdf_unit,
     )
-    outlets = _rainwater_outlets(vector_document, origin_x, origin_y, calibration.mm_per_pdf_unit)
+    outlets = _rainwater_outlets(
+        vector_document,
+        polygon_pdf,
+        origin_x,
+        origin_y,
+        calibration.mm_per_pdf_unit,
+    )
     review_required = (
         validation.review_required
         or candidate.review_required
@@ -160,8 +167,7 @@ def _candidate_polygon(candidate: CandidateRegion, vector_document: VectorDocume
 def _snap_polygon_to_vector_linework(polygon: Polygon, vector_document: VectorDocument) -> Polygon:
     if polygon.is_empty:
         return polygon
-    trusted_x: list[float] = []
-    trusted_y: list[float] = []
+    linework: list[LineString] = []
     for primitive in vector_document.vector_primitives:
         if primitive.type != "line" or primitive.start_pdf is None or primitive.end_pdf is None:
             continue
@@ -171,19 +177,14 @@ def _snap_polygon_to_vector_linework(polygon: Polygon, vector_document: VectorDo
         end = primitive.end_pdf
         if _distance((start[0], start[1]), (end[0], end[1])) < 45:
             continue
-        if abs(start[0] - end[0]) <= 1.0:
-            trusted_x.append(round((start[0] + end[0]) / 2, 1))
-        if abs(start[1] - end[1]) <= 1.0:
-            trusted_y.append(round((start[1] + end[1]) / 2, 1))
-    if not trusted_x and not trusted_y:
+        linework.append(LineString([start, end]))
+    if not linework:
         return polygon
-    points = []
-    for x, y in list(polygon.exterior.coords)[:-1]:
-        points.append([
-            _snap_value(float(x), trusted_x, tolerance=3.0),
-            _snap_value(float(y), trusted_y, tolerance=3.0),
-        ])
-    return _clean_polygon(points) or polygon
+    snapped = snap(polygon, unary_union(linework), 2.0)
+    if isinstance(snapped, Polygon):
+        return snapped.buffer(0)
+    polygons = [geom for geom in getattr(snapped, "geoms", []) if isinstance(geom, Polygon)]
+    return max(polygons, key=lambda geom: geom.area).buffer(0) if polygons else polygon
 
 
 def _snap_value(value: float, candidates: list[float], *, tolerance: float) -> float:
@@ -331,11 +332,27 @@ def _rooflights(
 ) -> list[RooflightConstraint]:
     rooflights: list[RooflightConstraint] = []
     target_region = polygon_pdf.buffer(8.0)
+    pv_regions = _pv_text_regions(vector_document.text_blocks)
     for rooflight in vector_document.rooflight_rectangles:
-        if not target_region.contains(Point(_bbox_center_tuple(rooflight.bbox_pdf))):
+        center = Point(_bbox_center_tuple(rooflight.bbox_pdf))
+        if not target_region.contains(center):
             continue
-        if not _rooflight_supported_by_text(rooflight.bbox_pdf, vector_document.text_blocks):
+        if any(region.buffer(8.0).contains(center) for region in pv_regions):
             continue
+        supported_by_text = _rooflight_supported_by_text(
+            rooflight.bbox_pdf,
+            vector_document.text_blocks,
+        )
+        recovered_symbol = rooflight.source == "raster_crosshatched_rooflight_symbol"
+        confidence = rooflight.confidence
+        if supported_by_text:
+            confidence = min(1.0, confidence + 0.08)
+        elif recovered_symbol and _has_rooflight_expectation(vector_document.text_blocks):
+            confidence = max(0.58, confidence - 0.04)
+        elif confidence < 0.78:
+            continue
+        else:
+            confidence = max(0.55, confidence - 0.12)
         rooflights.append(
             RooflightConstraint(
                 id=f"rooflight_{len(rooflights) + 1:02d}",
@@ -345,7 +362,7 @@ def _rooflights(
                     origin_y,
                     mm_per_pdf_unit,
                 ),
-                confidence=rooflight.confidence,
+                confidence=round(confidence, 3),
             )
         )
     return rooflights
@@ -353,12 +370,16 @@ def _rooflights(
 
 def _rainwater_outlets(
     vector_document: VectorDocument,
+    polygon_pdf: Polygon,
     origin_x: float,
     origin_y: float,
     mm_per_pdf_unit: float,
 ) -> list[RainwaterOutlet]:
     outlets: list[RainwaterOutlet] = []
     seen: set[str] = set()
+    association_tolerance = max(45.0, min(110.0, 750.0 / max(mm_per_pdf_unit, 0.001)))
+    border_tolerance = max(2.0, min(25.0, 750.0 / max(mm_per_pdf_unit, 0.001)))
+    target_region = polygon_pdf.buffer(association_tolerance)
     for block in vector_document.text_blocks:
         labels = _rwp_labels_in_text(block.text)
         if not labels:
@@ -372,6 +393,14 @@ def _rainwater_outlets(
                 vector_document.vector_primitives,
                 label_point,
             )
+            outlet_pdf = Point(outlet_point)
+            if not target_region.contains(outlet_pdf):
+                continue
+            if not polygon_pdf.buffer(border_tolerance).contains(outlet_pdf):
+                boundary_point = nearest_points(polygon_pdf.boundary, outlet_pdf)[0]
+                outlet_point = (float(boundary_point.x), float(boundary_point.y))
+                source = f"{source}_snapped_to_target_boundary"
+                confidence = max(0.55, confidence - 0.08)
             outlets.append(
                 RainwaterOutlet(
                     id=label,
@@ -418,15 +447,20 @@ def _quality_checks(
     selection_warnings: list[str],
 ) -> QualityChecks:
     rooflight_expected = _has_rooflight_expectation(vector_document.text_blocks)
+    outlet_expected = _has_rwp_expectation(vector_document.text_blocks)
     contains_rooflights = (
         all(polygon_mm.contains(Polygon(rooflight.polygon_mm).centroid) for rooflight in rooflights)
         if rooflights
         else not rooflight_expected
     )
-    contains_outlets = all(
-        polygon_mm.contains(Point(outlet.point_mm))
-        or polygon_mm.distance(Point(outlet.point_mm)) <= 750
-        for outlet in outlets
+    contains_outlets = (
+        all(
+            polygon_mm.contains(Point(outlet.point_mm))
+            or polygon_mm.distance(Point(outlet.point_mm)) <= 750
+            for outlet in outlets
+        )
+        if outlets
+        else not outlet_expected
     )
     outlet_geometry_confidence = (
         round(sum(outlet.confidence for outlet in outlets) / len(outlets), 3) if outlets else 0.0
@@ -461,6 +495,9 @@ def _quality_checks(
         scale_calibrated=calibration.confidence >= 0.6,
         cad_candidate_exportable=(
             candidate.eligible_for_auto_export and candidate.eligible_for_final_dxf
+            and not review_required
+            and not calibration.requires_user_confirmation
+            and not validation.review_required
         ),
         calibration_confidence=calibration.confidence,
         outlet_geometry_confidence=outlet_geometry_confidence,
@@ -513,6 +550,18 @@ def _has_rooflight_expectation(text_blocks: list[TextBlock]) -> bool:
     )
 
 
+def _has_rwp_expectation(text_blocks: list[TextBlock]) -> bool:
+    return any(_rwp_labels_in_text(block.text) for block in text_blocks)
+
+
+def _pv_text_regions(text_blocks: list[TextBlock]) -> list[Polygon]:
+    return [
+        box(*_expand_bbox(block.bbox_pdf, 28, 10_000, 10_000))
+        for block in text_blocks
+        if re.search(r"\bpv\b|photovoltaic|solar\s+array", block.text, flags=re.IGNORECASE)
+    ]
+
+
 def _rooflight_supported_by_text(bbox: list[float], text_blocks: list[TextBlock]) -> bool:
     return any(
         re.search(r"roof\s*light|rooflight", block.text, flags=re.IGNORECASE)
@@ -523,6 +572,20 @@ def _rooflight_supported_by_text(bbox: list[float], text_blocks: list[TextBlock]
 
 def _bbox_center_tuple(bbox: list[float]) -> tuple[float, float]:
     return (float((bbox[0] + bbox[2]) / 2), float((bbox[1] + bbox[3]) / 2))
+
+
+def _expand_bbox(
+    bbox: list[float],
+    padding: float,
+    max_width: float,
+    max_height: float,
+) -> list[float]:
+    return [
+        max(0.0, bbox[0] - padding),
+        max(0.0, bbox[1] - padding),
+        min(max_width, bbox[2] + padding),
+        min(max_height, bbox[3] + padding),
+    ]
 
 
 def _first_match(text: str, pattern: str) -> str | None:

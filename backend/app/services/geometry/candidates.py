@@ -1,6 +1,7 @@
 import math
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from statistics import median
 
 from shapely.geometry import LineString, Point, Polygon, box
@@ -16,6 +17,11 @@ from app.models.candidates import (
     PipelineProfile,
 )
 from app.models.vector import TextBlock, VectorDocument
+from app.services.geometry.raster_refinement import (
+    RefinedCandidate,
+    recover_hough_linework,
+    refine_candidate,
+)
 from app.services.geometry.review_visibility import is_review_visible_candidate
 from app.services.geometry.safety import safety_status_for_candidate, safety_warnings_for_candidate
 from app.services.scoring.candidate_scoring import score_candidate
@@ -31,8 +37,10 @@ COMPOSITE_ANCHOR_TOLERANCE = 180.0
 COMPOSITE_NEIGHBOUR_TOLERANCE = 8.0
 COARSE_GEOMETRY_SOURCE: CandidateGeometrySource = "coarse_semantic_search_area"
 RECONSTRUCTION_GEOMETRY_SOURCE: CandidateGeometrySource = "anchor_boundary_reconstruction"
+RASTER_REFINED_GEOMETRY_SOURCE: CandidateGeometrySource = "vector_raster_refined_region"
 AUTO_EXPORT_GEOMETRY_SOURCES: set[CandidateGeometrySource] = {
     "anchor_boundary_reconstruction",
+    "vector_raster_refined_region",
     "vector_polygonized_face",
     "vector_composite_region",
     "linework_snapped_semantic_region",
@@ -69,6 +77,7 @@ def generate_candidate_document(
     vector_document: VectorDocument,
     *,
     pipeline_profile: PipelineProfile = "vector",
+    source_path: Path | None = None,
 ) -> CandidateDocument:
     rwp_anchors = _rwp_anchors(vector_document.text_blocks)
     note_anchors = _note_anchors(vector_document.text_blocks)
@@ -79,10 +88,12 @@ def generate_candidate_document(
     primitive_anchors = _primitive_anchors(vector_document)
     title_regions = _title_regions(vector_document)
     pv_regions = _pv_regions(vector_document.text_blocks)
+    non_target_roof_regions = _non_target_roof_regions(vector_document)
 
     candidates: list[CandidateRegion] = []
     semantic_polygon = _semantic_envelope_candidate(rwp_anchors, rooflight_anchors, vector_document)
-    face_polygons = _polygonized_face_candidates(vector_document)
+    face_polygons = _polygonized_face_candidates(vector_document, source_path=source_path)
+    vector_linework = _candidate_refinement_linework(vector_document)
 
     for index, polygon in enumerate(
         _composite_face_candidates(
@@ -140,6 +151,37 @@ def generate_candidate_document(
                 quality_warnings=warnings,
             )
         )
+        refined = _try_refine_with_raster(
+            polygon=reconstruction.polygon,
+            source_path=source_path,
+            vector_document=vector_document,
+            rwp_anchors=rwp_anchors,
+            rooflight_anchors=rooflight_anchors,
+            note_anchors=note_anchors,
+            vector_linework=vector_linework,
+            excluded_scope_regions=[*title_regions, *pv_regions, *non_target_roof_regions],
+        )
+        if refined is not None:
+            candidates.append(
+                _build_candidate(
+                    candidate_id=f"candidate_vector_raster_refined_{index + 1:02d}",
+                    polygon=refined.polygon_pdf,
+                    geometry_source=RASTER_REFINED_GEOMETRY_SOURCE,
+                    geometry_confidence=round(
+                        min(0.93, 0.80 + refined.raster_clip_iou * 0.12),
+                        4,
+                    ),
+                    vector_document=vector_document,
+                    rwp_anchors=rwp_anchors,
+                    rooflight_anchors=rooflight_anchors,
+                    note_anchors=note_anchors,
+                    title_regions=title_regions,
+                    pv_regions=pv_regions,
+                    pipeline_profile=pipeline_profile,
+                    raster_iou=refined.raster_iou,
+                    raster_clip_iou=refined.raster_clip_iou,
+                )
+            )
 
     if semantic_polygon is not None:
         snapped_polygon = _linework_snapped_semantic_candidate(vector_document, semantic_polygon)
@@ -229,11 +271,7 @@ def generate_candidate_document(
         for rank, candidate in enumerate(ranked_candidates, start=1)
     ]
     roof_scope_rank = next(
-        (
-            candidate.rank
-            for candidate in ranked_candidates
-            if candidate.eligible_for_auto_export
-        ),
+        (candidate.rank for candidate in ranked_candidates if candidate.eligible_for_auto_export),
         None,
     )
 
@@ -271,6 +309,8 @@ def _build_candidate(
     pipeline_profile: PipelineProfile,
     eligible_for_auto_export: bool | None = None,
     quality_warnings: list[str] | None = None,
+    raster_iou: float | None = None,
+    raster_clip_iou: float | None = None,
 ) -> CandidateRegion:
     polygon = _clean_polygon(polygon)
     rooflight_count = sum(1 for anchor in rooflight_anchors if polygon.contains(anchor.point))
@@ -342,13 +382,19 @@ def _build_candidate(
         eligible_for_auto_export=auto_export,
         review_required=review_required,
         quality_warnings=sorted(set(warnings)),
+        raster_iou=raster_iou,
+        raster_clip_iou=raster_clip_iou,
         features=features,
         scores=scores,
         score=score,
     )
 
 
-def _polygonized_face_candidates(vector_document: VectorDocument) -> list[Polygon]:
+def _polygonized_face_candidates(
+    vector_document: VectorDocument,
+    *,
+    source_path: Path | None = None,
+) -> list[Polygon]:
     viewport = _drawing_viewport(vector_document)
     title_regions = _title_regions(vector_document)
     line_segments: list[tuple[float, LineString]] = []
@@ -383,6 +429,18 @@ def _polygonized_face_candidates(vector_document: VectorDocument) -> list[Polygo
         if any(segment.intersects(region) for region in title_regions):
             continue
         line_segments.append((length, segment))
+
+    if source_path is not None and vector_document.page_metadata:
+        for segment in recover_hough_linework(
+            source_path=source_path,
+            page=vector_document.page_metadata[0],
+            sheet_regions=vector_document.sheet_regions,
+        ):
+            if not viewport.contains(segment.centroid):
+                continue
+            if any(segment.intersects(region) for region in title_regions):
+                continue
+            line_segments.append((float(segment.length), segment))
 
     line_segments = sorted(line_segments, key=lambda item: item[0], reverse=True)[
         :MAX_POLYGONIZED_SEGMENTS
@@ -428,8 +486,7 @@ def _composite_face_candidates(
             if polygon in expanded:
                 continue
             if any(
-                polygon.distance(existing) <= COMPOSITE_NEIGHBOUR_TOLERANCE
-                for existing in selected
+                polygon.distance(existing) <= COMPOSITE_NEIGHBOUR_TOLERANCE for existing in selected
             ):
                 expanded.append(polygon)
         if len(expanded) == len(selected):
@@ -724,7 +781,9 @@ def _reconstruction_rank(
     boundary_penalty = min(0.35, candidate.search_boundary_touch_ratio)
     return float(
         round(
-            (coverage * 0.52) + (linework * 0.30) + ((1.0 - broadness) * 0.18)
+            (coverage * 0.52)
+            + (linework * 0.30)
+            + ((1.0 - broadness) * 0.18)
             - bridge_penalty
             - boundary_penalty,
             4,
@@ -873,6 +932,57 @@ def _pv_regions(text_blocks: list[TextBlock]) -> list[Polygon]:
     ]
 
 
+def _non_target_roof_regions(vector_document: VectorDocument) -> list[Polygon]:
+    regions: list[Polygon] = []
+    patterns = (
+        r"\bexisting\s+(?:pitched\s+)?roof\b",
+        r"\bpitched\s+roof\b",
+        r"\bindustrial\s+ventilation\b",
+        r"\bnot\s+in\s+scope\b",
+    )
+    left_existing_roof_bboxes: list[list[float]] = []
+    for block in vector_document.text_blocks:
+        if not any(re.search(pattern, block.text, flags=re.IGNORECASE) for pattern in patterns):
+            continue
+        page = vector_document.page_metadata[block.page_number - 1]
+        padding = max(80.0, min(max(page.page_width, page.page_height) * 0.06, 180.0))
+        regions.append(
+            box(*_expand_bbox(block.bbox_pdf, padding, page.page_width, page.page_height))
+        )
+        if block.bbox_pdf[2] <= page.page_width * 0.25:
+            left_existing_roof_bboxes.append(block.bbox_pdf)
+    if left_existing_roof_bboxes and vector_document.page_metadata:
+        page = vector_document.page_metadata[0]
+        x1 = min(
+            page.page_width,
+            max(bbox[2] for bbox in left_existing_roof_bboxes) + max(260.0, page.page_width * 0.16),
+        )
+        y0 = max(
+            0.0,
+            min(bbox[1] for bbox in left_existing_roof_bboxes)
+            - max(120.0, page.page_height * 0.07),
+        )
+        y1 = min(
+            page.page_height,
+            max(bbox[3] for bbox in left_existing_roof_bboxes)
+            + max(190.0, page.page_height * 0.14),
+        )
+        regions.append(box(0.0, y0, x1, y1))
+
+        tail_x1 = min(
+            page.page_width,
+            max(bbox[2] for bbox in left_existing_roof_bboxes) + max(160.0, page.page_width * 0.08),
+        )
+        tail_y0 = max(bbox[3] for bbox in left_existing_roof_bboxes) + max(
+            100.0,
+            page.page_height * 0.08,
+        )
+        tail_y1 = min(page.page_height, tail_y0 + page.page_height * 0.14)
+        if tail_y1 > tail_y0:
+            regions.append(box(0.0, tail_y0, tail_x1, tail_y1))
+    return regions
+
+
 def _drawing_viewport(vector_document: VectorDocument) -> Polygon:
     viewport = next(
         (region for region in vector_document.sheet_regions if region.type == "drawing_viewport"),
@@ -933,6 +1043,8 @@ def _linework_agreement(
         return 0.25
     if geometry_source == "vector_polygonized_face":
         return 0.95
+    if geometry_source == RASTER_REFINED_GEOMETRY_SOURCE:
+        return 0.82
     boundary = polygon.boundary
     boundary_length = float(boundary.length)
     matching_length = 0.0
@@ -959,6 +1071,8 @@ def _candidate_quality_warnings(
     warnings: list[str] = []
     if geometry_source == COARSE_GEOMETRY_SOURCE:
         warnings.append("coarse_candidate_requires_review")
+    if geometry_source == RASTER_REFINED_GEOMETRY_SOURCE:
+        warnings.append("raster_refined_candidate_requires_review")
     if not features.geometry_valid:
         warnings.append("invalid_geometry")
     if features.overlaps_title_block:
@@ -1003,6 +1117,20 @@ def _apply_candidate_safety_gates(
         eligible_for_review_selection = candidate.eligible_for_review_selection
         eligible_for_final_dxf = candidate.eligible_for_final_dxf
         review_required = candidate.review_required
+        if candidate.geometry_source == RASTER_REFINED_GEOMETRY_SOURCE:
+            raster_iou = candidate.raster_iou or 0.0
+            raster_clip_iou = candidate.raster_clip_iou or raster_iou
+            if raster_clip_iou >= 0.85 and raster_iou >= 0.50:
+                quality_warnings.discard("candidate_area_outlier")
+                eligible = True
+                eligible_for_final_dxf = True
+            else:
+                eligible = False
+                eligible_for_final_dxf = False
+                review_required = True
+                score = min(score, 0.72 if raster_clip_iou >= 0.6 else 0.66)
+            if raster_iou < 0.6:
+                quality_warnings.add("raster_disagreement")
         if "synthetic_gap_bridges_used" in quality_warnings:
             score = min(score, 0.58)
             eligible = False
@@ -1035,8 +1163,7 @@ def _apply_candidate_safety_gates(
                 update={
                     "safety_warnings": safety_warnings,
                     "safety_status": safety_status,
-                    "eligible_for_final_dxf": eligible_for_final_dxf
-                    and safety_status == "pass",
+                    "eligible_for_final_dxf": eligible_for_final_dxf and safety_status == "pass",
                     "review_required": review_required or safety_status != "pass",
                 }
             )
@@ -1059,6 +1186,347 @@ def _is_relative_area_outlier(
         candidate.area_pdf_units > median_comparison_area * 8
         and candidate.area_pdf_units > page_area * 0.08
     )
+
+
+def _try_refine_with_raster(
+    *,
+    polygon: Polygon,
+    source_path: Path | None,
+    vector_document: VectorDocument,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+    note_anchors: list[Anchor],
+    vector_linework: list[LineString],
+    excluded_scope_regions: list[Polygon],
+) -> RefinedCandidate | None:
+    if source_path is None or not vector_document.page_metadata:
+        return None
+    anchors = [*rwp_anchors, *rooflight_anchors]
+    if not anchors:
+        return None
+    anchors_pdf = [(float(anchor.point.x), float(anchor.point.y)) for anchor in anchors]
+    excluded_polygons = excluded_scope_regions
+    semantic_clip = _semantic_support_clip_polygon(
+        vector_document=vector_document,
+        anchors=[*rwp_anchors, *rooflight_anchors, *note_anchors],
+        exclusions=excluded_polygons,
+    )
+    try:
+        refined = refine_candidate(
+            candidate_polygon=polygon,
+            source_path=source_path,
+            page=vector_document.page_metadata[0],
+            anchors_pdf=anchors_pdf,
+            sheet_regions=vector_document.sheet_regions,
+            excluded_polygons_pdf=excluded_polygons,
+            semantic_clip_pdf=semantic_clip,
+            vector_linework=vector_linework,
+        )
+        if refined is None:
+            return None
+        trimmed_polygon = _trim_to_flat_roof_evidence_band(
+            polygon=refined.polygon_pdf,
+            vector_document=vector_document,
+            rwp_anchors=rwp_anchors,
+            rooflight_anchors=rooflight_anchors,
+            vector_linework=vector_linework,
+        )
+        boundary_refined_polygon = _refine_scope_boundary_to_linework(
+            polygon=trimmed_polygon,
+            vector_document=vector_document,
+            rwp_anchors=rwp_anchors,
+            rooflight_anchors=rooflight_anchors,
+            vector_linework=vector_linework,
+        )
+        if boundary_refined_polygon.equals_exact(refined.polygon_pdf, tolerance=0.5):
+            return refined
+        return RefinedCandidate(
+            polygon_pdf=boundary_refined_polygon,
+            raster_iou=refined.raster_iou,
+            raster_clip_iou=refined.raster_clip_iou,
+            flood_seed_count=refined.flood_seed_count,
+            bounded_by_linework=refined.bounded_by_linework,
+        )
+    except Exception:
+        return None
+
+
+def _trim_to_flat_roof_evidence_band(
+    *,
+    polygon: Polygon,
+    vector_document: VectorDocument,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+    vector_linework: list[LineString],
+) -> Polygon:
+    polygon = _clean_polygon(polygon)
+    if polygon.is_empty or not vector_linework:
+        return polygon
+
+    evidence_anchors = _trim_evidence_anchors(polygon, rwp_anchors, rooflight_anchors)
+    if len(evidence_anchors) < 2:
+        return polygon
+
+    page = vector_document.page_metadata[0]
+    page_diagonal = math.hypot(page.page_width, page.page_height)
+    trim_candidates = _unsupported_upper_shelf_trims(
+        polygon=polygon,
+        evidence_anchors=evidence_anchors,
+        vector_linework=vector_linework,
+        page_diagonal=page_diagonal,
+    )
+    if not trim_candidates:
+        return polygon
+    return _clean_polygon(max(trim_candidates, key=lambda candidate: polygon.area - candidate.area))
+
+
+def _trim_evidence_anchors(
+    polygon: Polygon,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+) -> list[Anchor]:
+    support_polygon = polygon.buffer(PROXIMITY_TOLERANCE)
+    return [
+        anchor
+        for anchor in [*rwp_anchors, *rooflight_anchors]
+        if support_polygon.contains(anchor.point)
+    ]
+
+
+def _unsupported_upper_shelf_trims(
+    *,
+    polygon: Polygon,
+    evidence_anchors: list[Anchor],
+    vector_linework: list[LineString],
+    page_diagonal: float,
+) -> list[Polygon]:
+    min_x, min_y, max_x, max_y = polygon.bounds
+    polygon_width = max(max_x - min_x, 1.0)
+    polygon_height = max(max_y - min_y, 1.0)
+    line_tolerance = max(1.0, min(5.0, page_diagonal * 0.0015))
+    evidence_clearance = max(18.0, min(60.0, page_diagonal * 0.018))
+    min_evidence_top = min(anchor.bbox[1] for anchor in evidence_anchors)
+    min_segment_length = max(120.0, min(page_diagonal * 0.05, polygon_width * 0.18))
+    trims: list[Polygon] = []
+
+    for segment in vector_linework:
+        coords = list(segment.coords)
+        if len(coords) < 2:
+            continue
+        (x0, y0), (x1, y1) = coords[0], coords[-1]
+        if abs(y0 - y1) > line_tolerance:
+            continue
+        segment_y = (y0 + y1) / 2
+        segment_left, segment_right = sorted((x0, x1))
+        if segment_right - segment_left < min_segment_length:
+            continue
+        if not (min_y + line_tolerance < segment_y < max_y - line_tolerance):
+            continue
+        if segment_y > min_evidence_top - evidence_clearance:
+            continue
+        if not polygon.buffer(line_tolerance * 2).intersects(segment):
+            continue
+
+        unsupported = polygon.intersection(
+            box(
+                max(min_x, segment_left - line_tolerance),
+                min_y - line_tolerance,
+                max_x + line_tolerance,
+                segment_y,
+            )
+        )
+        if unsupported.is_empty:
+            continue
+        unsupported_area_ratio = unsupported.area / max(polygon.area, 1.0)
+        if not 0.008 <= unsupported_area_ratio <= 0.28:
+            continue
+        unsupported_bounds = unsupported.bounds
+        if unsupported_bounds[1] > min_y + line_tolerance:
+            continue
+        if unsupported_bounds[2] < min(max_x - line_tolerance, segment_right - line_tolerance):
+            continue
+        if _region_contains_trim_evidence(unsupported, evidence_anchors, evidence_clearance):
+            continue
+
+        trimmed = _clean_polygon(polygon.difference(unsupported))
+        if trimmed.is_empty or trimmed.area < polygon.area * 0.65:
+            continue
+        if _trim_loses_evidence(polygon, trimmed, evidence_anchors):
+            continue
+        if max(trimmed.bounds[2] - trimmed.bounds[0], 1.0) < polygon_width * 0.60:
+            continue
+        if max(trimmed.bounds[3] - trimmed.bounds[1], 1.0) < polygon_height * 0.60:
+            continue
+        trims.append(trimmed)
+    return trims
+
+
+def _region_contains_trim_evidence(
+    region: Polygon,
+    evidence_anchors: list[Anchor],
+    evidence_clearance: float,
+) -> bool:
+    buffered_region = region.buffer(evidence_clearance * 0.5)
+    return any(buffered_region.contains(anchor.point) for anchor in evidence_anchors)
+
+
+def _trim_loses_evidence(
+    original: Polygon,
+    trimmed: Polygon,
+    evidence_anchors: list[Anchor],
+) -> bool:
+    for anchor in evidence_anchors:
+        if not original.buffer(PROXIMITY_TOLERANCE).contains(anchor.point):
+            continue
+        if trimmed.contains(anchor.point) or trimmed.distance(anchor.point) <= PROXIMITY_TOLERANCE:
+            continue
+        return True
+    return False
+
+
+def _refine_scope_boundary_to_linework(
+    *,
+    polygon: Polygon,
+    vector_document: VectorDocument,
+    rwp_anchors: list[Anchor],
+    rooflight_anchors: list[Anchor],
+    vector_linework: list[LineString],
+) -> Polygon:
+    polygon = _clean_polygon(polygon)
+    if polygon.is_empty or not vector_linework or not rooflight_anchors:
+        return polygon
+
+    page = vector_document.page_metadata[0]
+    page_diagonal = math.hypot(page.page_width, page.page_height)
+    evidence_anchors = _trim_evidence_anchors(polygon, rwp_anchors, rooflight_anchors)
+    if len(evidence_anchors) < 2:
+        return polygon
+
+    refined = _trim_unsupported_left_shoulder(
+        polygon=polygon,
+        rooflight_anchors=rooflight_anchors,
+        evidence_anchors=evidence_anchors,
+        vector_linework=vector_linework,
+        page_diagonal=page_diagonal,
+    )
+    if refined.area < polygon.area * 0.70 or _trim_loses_evidence(
+        polygon,
+        refined,
+        evidence_anchors,
+    ):
+        return polygon
+    return _clean_polygon(refined)
+
+
+def _trim_unsupported_left_shoulder(
+    *,
+    polygon: Polygon,
+    rooflight_anchors: list[Anchor],
+    evidence_anchors: list[Anchor],
+    vector_linework: list[LineString],
+    page_diagonal: float,
+) -> Polygon:
+    min_x, min_y, max_x, max_y = polygon.bounds
+    polygon_width = max(max_x - min_x, 1.0)
+    polygon_height = max(max_y - min_y, 1.0)
+    line_tolerance = max(3.0, min(10.0, page_diagonal * 0.003))
+    evidence_clearance = max(18.0, min(60.0, page_diagonal * 0.018))
+    first_rooflight_left = min(anchor.bbox[0] for anchor in rooflight_anchors)
+    min_segment_length = max(110.0, min(page_diagonal * 0.08, polygon_width * 0.24))
+    trim_candidates: list[Polygon] = []
+
+    for segment in vector_linework:
+        coords = list(segment.coords)
+        if len(coords) < 2:
+            continue
+        (x0, y0), (x1, y1) = coords[0], coords[-1]
+        if abs(y0 - y1) > line_tolerance:
+            continue
+        segment_y = (y0 + y1) / 2
+        segment_left, segment_right = sorted((x0, x1))
+        if segment_right - segment_left < min_segment_length:
+            continue
+        if segment_left > min_x + evidence_clearance:
+            continue
+        if segment_right < min_x + evidence_clearance:
+            continue
+        if segment_right >= first_rooflight_left - evidence_clearance:
+            continue
+        if not (min_y + polygon_height * 0.12 < segment_y < max_y - polygon_height * 0.18):
+            continue
+        if not polygon.buffer(line_tolerance).intersects(segment):
+            continue
+
+        unsupported = polygon.intersection(
+            box(
+                min_x - line_tolerance,
+                min_y - line_tolerance,
+                segment_right,
+                segment_y,
+            )
+        )
+        if unsupported.is_empty:
+            continue
+        unsupported_bounds = unsupported.bounds
+        if unsupported_bounds[0] > min_x + line_tolerance:
+            continue
+        if unsupported_bounds[1] > min_y + line_tolerance:
+            continue
+        unsupported_area_ratio = unsupported.area / max(polygon.area, 1.0)
+        if not 0.02 <= unsupported_area_ratio <= 0.22:
+            continue
+        if _region_contains_trim_evidence(unsupported, evidence_anchors, evidence_clearance):
+            continue
+
+        trimmed = _clean_polygon(polygon.difference(unsupported))
+        if trimmed.is_empty:
+            continue
+        if max(trimmed.bounds[2] - trimmed.bounds[0], 1.0) < polygon_width * 0.70:
+            continue
+        if max(trimmed.bounds[3] - trimmed.bounds[1], 1.0) < polygon_height * 0.70:
+            continue
+        trim_candidates.append(trimmed)
+
+    if not trim_candidates:
+        return polygon
+    return max(trim_candidates, key=lambda candidate: polygon.area - candidate.area)
+
+
+def _candidate_refinement_linework(vector_document: VectorDocument) -> list[LineString]:
+    linework: list[LineString] = []
+    for primitive in vector_document.vector_primitives:
+        if primitive.type != "line" or primitive.start_pdf is None or primitive.end_pdf is None:
+            continue
+        if primitive.semantic_role not in {"roof_perimeter", "parapet_or_wall", "unknown"}:
+            continue
+        if math.dist(primitive.start_pdf, primitive.end_pdf) < 30:
+            continue
+        linework.append(LineString([primitive.start_pdf, primitive.end_pdf]))
+    return _dedupe_lines(linework)
+
+
+def _semantic_support_clip_polygon(
+    *,
+    vector_document: VectorDocument,
+    anchors: list[Anchor],
+    exclusions: list[Polygon],
+) -> Polygon | None:
+    if not anchors:
+        return None
+    page = vector_document.page_metadata[0]
+    page_diagonal = math.hypot(page.page_width, page.page_height)
+    radius = max(180.0, min(page_diagonal * 0.09, 360.0))
+    support = unary_union([anchor.point.buffer(radius) for anchor in anchors])
+    if support.is_empty:
+        return None
+    clip = support.convex_hull.buffer(radius * 0.20).intersection(
+        _drawing_viewport(vector_document)
+    )
+    if exclusions:
+        clip = clip.difference(unary_union(exclusions))
+    if clip.is_empty:
+        return None
+    return _clean_polygon(clip)
 
 
 def _cluster_polygons(polygons: list[Polygon], tolerance: float) -> list[list[Polygon]]:
@@ -1138,13 +1606,82 @@ def _overlaps_meaningfully(polygon: Polygon, region: Polygon) -> bool:
 def _clean_polygon(polygon: Polygon) -> Polygon:
     cleaned = polygon.buffer(0)
     if isinstance(cleaned, Polygon):
-        return cleaned
+        return _remove_near_collinear_vertices(cleaned)
     polygons = [geom for geom in cleaned.geoms if isinstance(geom, Polygon)]
-    return max(polygons, key=lambda geom: geom.area) if polygons else Polygon()
+    return (
+        _remove_near_collinear_vertices(max(polygons, key=lambda geom: geom.area))
+        if polygons
+        else Polygon()
+    )
+
+
+def _remove_near_collinear_vertices(polygon: Polygon, *, tolerance: float = 1.0) -> Polygon:
+    if polygon.interiors:
+        return polygon
+    coords = list(polygon.exterior.coords)[:-1]
+    if len(coords) <= 4:
+        return polygon
+
+    cleaned_coords = coords
+    for _ in range(3):
+        next_coords: list[tuple[float, float]] = []
+        changed = False
+        for index, point in enumerate(cleaned_coords):
+            previous = cleaned_coords[index - 1]
+            following = cleaned_coords[(index + 1) % len(cleaned_coords)]
+            if len(cleaned_coords) - int(changed) > 4 and _is_near_collinear(
+                previous,
+                point,
+                following,
+                tolerance=tolerance,
+            ):
+                changed = True
+                continue
+            next_coords.append(point)
+        cleaned_coords = next_coords
+        if not changed:
+            break
+        if len(cleaned_coords) <= 4:
+            break
+
+    if len(cleaned_coords) < 4:
+        return polygon
+    cleaned = Polygon(cleaned_coords).buffer(0)
+    if not isinstance(cleaned, Polygon) or cleaned.is_empty:
+        return polygon
+    if cleaned.area < polygon.area * 0.995:
+        return polygon
+    return cleaned
+
+
+def _is_near_collinear(
+    previous: tuple[float, float],
+    current: tuple[float, float],
+    following: tuple[float, float],
+    *,
+    tolerance: float,
+) -> bool:
+    previous_point = Point(previous)
+    current_point = Point(current)
+    following_point = Point(following)
+    if previous_point.distance(current_point) <= tolerance:
+        return True
+    if current_point.distance(following_point) <= tolerance:
+        return True
+    baseline = LineString([previous, following])
+    if baseline.length <= tolerance:
+        return False
+    return bool(current_point.distance(baseline) <= tolerance)
 
 
 def _polygon_points(polygon: Polygon) -> list[list[float]]:
-    return [[round(x, 3), round(y, 3)] for x, y in list(polygon.exterior.coords)[:-1]]
+    rounded_points = [[round(x, 3), round(y, 3)] for x, y in list(polygon.exterior.coords)[:-1]]
+    if len(rounded_points) < 4:
+        return rounded_points
+    rounded_polygon = _clean_polygon(Polygon(rounded_points))
+    if rounded_polygon.is_empty or rounded_polygon.area < polygon.area * 0.995:
+        return rounded_points
+    return [[round(x, 3), round(y, 3)] for x, y in list(rounded_polygon.exterior.coords)[:-1]]
 
 
 def _dedupe_polygons(polygons: list[Polygon]) -> list[Polygon]:
