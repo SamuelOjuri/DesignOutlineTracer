@@ -210,38 +210,45 @@ Invoke-RestMethod `
 curl -X POST "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/validate"
 ```
 
-Vector export:
+Default raster extraction:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/extract"
+```
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/extract"
+```
+
+Default raster preview export:
+
+```powershell
+Invoke-RestMethod `
+  -Method Post `
+  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/export"
+```
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/export"
+```
+
+Explicit vector export:
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
   -ContentType "application/json" `
-  -Body '{"formats":["dxf","svg","geojson","mask_png","metadata_json"]}' `
+  -Body '{"pipeline":"vector","formats":["dxf","svg","geojson","mask_png","metadata_json"]}' `
   "http://127.0.0.1:8000/api/documents/$($upload.document_id)/export"
 ```
 
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"formats":["dxf","svg","geojson","mask_png","metadata_json"]}' \
+  -d '{"pipeline":"vector","formats":["dxf","svg","geojson","mask_png","metadata_json"]}' \
   "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/export"
-```
-
-Forced raster extraction:
-
-```powershell
-Invoke-RestMethod `
-  -Method Post `
-  -ContentType "application/json" `
-  -Body '{"force_pipeline":"raster_first"}' `
-  "http://127.0.0.1:8000/api/documents/$($upload.document_id)/extract"
-```
-
-```bash
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"force_pipeline":"raster_first"}' \
-  "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/extract"
 ```
 
 Raster approval gate:

@@ -74,3 +74,31 @@ def build_gemini_er_model_call(
         return response.text or "[]"
 
     return call
+
+
+def build_gemini_image_prompt_model_call(
+    *,
+    api_key: str,
+    model_name: str,
+    temperature: float = 0.1,
+    response_mime_type: str | None = None,
+) -> ImagePromptModelCall:
+    """Build a generic image+prompt callable for Gemini vision tasks."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    config = types.GenerateContentConfig(
+        temperature=temperature,
+        response_mime_type=response_mime_type,
+    )
+
+    def call(image: Image.Image, prompt: str) -> str:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[image, prompt],
+            config=config,
+        )
+        return response.text or "[]"
+
+    return call

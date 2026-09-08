@@ -2,6 +2,16 @@ import { Point } from "@/types/roof";
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
+export type BackendExportFormat = "dxf" | "svg" | "geojson" | "mask_png" | "metadata_json";
+export type BackendExportPipeline = "vector" | "raster";
+
+export const RASTER_PREVIEW_EXPORT_FORMATS: BackendExportFormat[] = [
+  "svg",
+  "geojson",
+  "mask_png",
+  "metadata_json",
+];
+
 export interface BackendCandidate {
   id: string;
   rank: number;
@@ -120,11 +130,14 @@ export interface BackendRasterExtractionResponse {
 
 export interface AutomatedExtractionResult {
   documentId: string;
-  candidate: BackendCandidate;
-  validatedCandidate: BackendCandidate;
-  candidates: BackendCandidateDocument;
-  validation: BackendValidationResponse;
+  schema: BackendProductionSchema;
+  rasterExtraction: BackendRasterExtractionResponse;
   exportResult: BackendExportResponse;
+}
+
+export interface BackendExportRequest {
+  formats?: BackendExportFormat[];
+  pipeline?: BackendExportPipeline;
 }
 
 async function backendFetch<T>(path: string, options?: RequestInit): Promise<T> {
@@ -166,24 +179,21 @@ export function validateDocument(documentId: string): Promise<BackendValidationR
 
 export function exportDocument(
   documentId: string,
-  formats?: string[],
+  request: BackendExportRequest = {},
 ): Promise<BackendExportResponse> {
   return backendFetch<BackendExportResponse>(`/api/documents/${documentId}/export`, {
     method: "POST",
-    ...(formats
-      ? {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ formats }),
-        }
-      : {}),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pipeline: request.pipeline ?? "raster",
+      formats: request.formats ?? RASTER_PREVIEW_EXPORT_FORMATS,
+    }),
   });
 }
 
 export function extractRasterDocument(documentId: string): Promise<BackendRasterExtractionResponse> {
   return backendFetch<BackendRasterExtractionResponse>(`/api/documents/${documentId}/extract`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ force_pipeline: "raster_first" }),
   });
 }
 
@@ -211,31 +221,12 @@ export function approveDocument(schema: BackendProductionSchema): Promise<{
 
 export async function runAutomatedExtraction(file: File): Promise<AutomatedExtractionResult> {
   const upload = await uploadDocument(file);
-  const [candidates, validation] = await Promise.all([
-    getCandidates(upload.document_id),
-    validateDocument(upload.document_id),
-  ]);
-  const exportResult = await exportDocument(upload.document_id, [
-    "svg",
-    "geojson",
-    "mask_png",
-    "metadata_json",
-  ]);
-  const selectedId =
-    validation.validation.selected_review_candidate_id ||
-    validation.validation.selected_candidate_id ||
-    candidates.summary.top_candidate_id;
-  const validatedCandidate = candidates.candidate_regions.find((item) => item.id === selectedId);
-  if (!validatedCandidate) {
-    throw new Error("Backend did not return the selected candidate geometry.");
-  }
-  const candidate = selectDisplayCandidate(candidates, validation) ?? validatedCandidate;
+  const rasterExtraction = await extractRasterDocument(upload.document_id);
+  const exportResult = await exportDocument(upload.document_id);
   return {
     documentId: upload.document_id,
-    candidate,
-    validatedCandidate,
-    candidates,
-    validation,
+    schema: exportResult.production_schema,
+    rasterExtraction,
     exportResult,
   };
 }

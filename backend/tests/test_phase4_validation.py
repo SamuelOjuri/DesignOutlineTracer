@@ -166,14 +166,14 @@ def test_gemini_provider_uses_google_genai_json_adapter() -> None:
     )
 
     assert result.provider == "gemini"
-    assert result.model == "gemini-2.5-flash"
+    assert result.model == "gemini-3-flash-preview"
     assert result.selected_candidate_id == "candidate_vector_01"
     assert result.selected_review_candidate_id == "candidate_vector_01"
     assert result.selected_auto_export_candidate_id == "candidate_vector_01"
     assert result.confidence == 0.86
     assert result.review_required is False
     assert calls[0]["api_key"] == "test-key"
-    assert calls[0]["model_name"] == "gemini-2.5-flash"
+    assert calls[0]["model_name"] == "gemini-3-flash-preview"
     assert calls[0]["image_path"] == "overlay.png"
 
 

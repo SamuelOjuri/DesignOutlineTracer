@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from app.config import Settings
 from app.models.raster import (
@@ -35,6 +38,99 @@ def test_raster_pipeline_produces_review_required_candidate(
     assert schema.target_area.review_required is True
     assert schema.target_area.geometry_source == "raster_contour_polygonisation"
     assert result.image_derived_primitives
+
+
+def test_raster_pipeline_completes_with_gemini_ocr_and_gemini_er(
+    tp17221_raster_clean_pdf: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ocr_builder_calls: list[dict[str, object]] = []
+    er_builder_calls: list[dict[str, object]] = []
+
+    def fake_ocr_builder(**kwargs: object):
+        ocr_builder_calls.append(kwargs)
+
+        def fake_ocr_call(image: object, prompt: str) -> str:
+            return json.dumps(
+                {
+                    "text_blocks": [
+                        {
+                            "text": "rwp.1",
+                            "bbox_1000": [160, 650, 190, 670],
+                            "class": "rwp_label",
+                            "confidence": 0.9,
+                        },
+                        {
+                            "text": "rwp.2",
+                            "bbox_1000": [240, 790, 280, 810],
+                            "class": "rwp_label",
+                            "confidence": 0.9,
+                        },
+                        {
+                            "text": "Proprietary roof light",
+                            "bbox_1000": [780, 650, 860, 700],
+                            "class": "rooflight_label",
+                            "confidence": 0.9,
+                        },
+                        {
+                            "text": "1:50",
+                            "bbox_1000": [720, 930, 750, 950],
+                            "class": "scale_text",
+                            "confidence": 0.9,
+                        },
+                    ]
+                }
+            )
+
+        return fake_ocr_call
+
+    def fake_er_builder(**kwargs: object):
+        er_builder_calls.append(kwargs)
+
+        def fake_er_call(image: object, prompt: str) -> str:
+            return json.dumps(
+                [
+                    {
+                        "point": [650, 300],
+                        "label": "proposed flat roof area requiring tapered insulation",
+                    }
+                ]
+            )
+
+        return fake_er_call
+
+    monkeypatch.setattr(
+        "app.services.raster_pipeline.ocr_provider.build_gemini_image_prompt_model_call",
+        fake_ocr_builder,
+    )
+    monkeypatch.setattr(
+        "app.services.raster_pipeline.pipeline.build_gemini_er_model_call",
+        fake_er_builder,
+    )
+
+    result = run_raster_pipeline(
+        source_path=tp17221_raster_clean_pdf,
+        document_id="doc",
+        settings=Settings(
+            storage_root=tmp_path,
+            raster_render_dpi=80,
+            raster_ocr_provider="gemini",
+            segmentation_provider="gemini_er",
+            allow_live_ai_calls=True,
+            google_api_key="test-key",
+        ),
+    )
+
+    assert result.ocr_audit.provider == "gemini"
+    assert result.ocr_audit.model == "gemini-3-flash-preview"
+    assert result.ocr_audit.live_calls >= 1
+    assert result.segmentation_audit.provider == "gemini_er"
+    assert result.segmentation_audit.live_calls == 1
+    assert result.production_schema.quality_checks.human_review_status == "required"
+    assert any(block.text_class == "rwp_label" for block in result.text_blocks)
+    assert ocr_builder_calls[0]["model_name"] == "gemini-3-flash-preview"
+    assert er_builder_calls[0]["model_name"] == "gemini-robotics-er-1.6-preview"
 
 
 def test_gemini_er_point_anchor_seeds_local_raster_candidate() -> None:

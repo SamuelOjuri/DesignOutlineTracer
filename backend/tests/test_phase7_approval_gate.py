@@ -29,8 +29,8 @@ def test_raster_dxf_export_blocked_until_approval(
         document_id = upload_response.json()["document_id"]
         extract_response = client.post(
             f"/api/documents/{document_id}/extract",
-            json={"force_pipeline": "raster_first"},
         )
+        preview_export = client.post(f"/api/documents/{document_id}/export")
         blocked_export = client.post(
             f"/api/documents/{document_id}/export",
             json={"pipeline": "raster", "formats": ["dxf"]},
@@ -49,6 +49,14 @@ def test_raster_dxf_export_blocked_until_approval(
         )
 
     assert extract_response.status_code == 200
+    assert extract_response.json()["pipeline"] == "raster_first"
+    assert preview_export.status_code == 200
+    preview_exports = preview_export.json()["exports"]
+    assert preview_exports["dxf"] is None
+    assert preview_exports["svg"] is not None
+    assert preview_exports["geojson"] is not None
+    assert preview_exports["mask_png"] is not None
+    assert preview_exports["metadata_json"] is not None
     assert blocked_export.status_code == 409
     assert approval_response.json()["export_unlocked"] is True
     assert allowed_export.status_code == 200

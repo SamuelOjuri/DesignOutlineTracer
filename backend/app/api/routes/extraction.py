@@ -60,7 +60,12 @@ async def extract_document(
         )
 
     try:
-        if body and body.force_pipeline == "raster_first":
+        requested_pipeline = (
+            body.force_pipeline
+            if body and body.force_pipeline
+            else settings.default_extraction_pipeline
+        )
+        if requested_pipeline == "raster_first":
             raster_response = run_raster_pipeline(
                 source_path=source_path,
                 document_id=document_id,

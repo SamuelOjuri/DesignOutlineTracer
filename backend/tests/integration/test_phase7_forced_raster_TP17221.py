@@ -7,7 +7,7 @@ from app.config import Settings
 from app.main import create_app
 
 
-def test_forced_raster_tp17221_produces_usable_review_required_polygon(
+def test_default_raster_tp17221_produces_usable_review_required_polygon(
     tp17221_raster_clean_pdf: Path,
     tmp_path: Path,
 ) -> None:
@@ -28,10 +28,7 @@ def test_forced_raster_tp17221_produces_usable_review_required_polygon(
             files={"file": (tp17221_raster_clean_pdf.name, upload, "application/pdf")},
         )
         document_id = upload_response.json()["document_id"]
-        extract_response = client.post(
-            f"/api/documents/{document_id}/extract",
-            json={"force_pipeline": "raster_first"},
-        )
+        extract_response = client.post(f"/api/documents/{document_id}/extract")
 
     assert extract_response.status_code == 200
     data = extract_response.json()

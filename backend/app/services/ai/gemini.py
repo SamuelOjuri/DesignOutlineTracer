@@ -31,7 +31,7 @@ class GeminiProvider(AiProvider):
         self,
         *,
         api_key: str,
-        flash_model: str = "gemini-2.5-flash",
+        flash_model: str = "gemini-3-flash-preview",
         pro_model: str = "gemini-2.5-pro",
         allow_pro_escalation: bool = False,
         pro_escalation_confidence_threshold: float = 0.75,

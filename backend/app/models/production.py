@@ -4,11 +4,19 @@ from pydantic import BaseModel, Field
 
 ExportFormat = Literal["dxf", "svg", "geojson", "mask_png", "metadata_json"]
 ExportPipeline = Literal["vector", "raster"]
+RASTER_PREVIEW_EXPORT_FORMATS: list[ExportFormat] = [
+    "svg",
+    "geojson",
+    "mask_png",
+    "metadata_json",
+]
 
 
 class ExportRequest(BaseModel):
-    formats: list[ExportFormat] = ["dxf", "svg", "geojson", "mask_png", "metadata_json"]
-    pipeline: ExportPipeline = "vector"
+    formats: list[ExportFormat] = Field(
+        default_factory=lambda: list(RASTER_PREVIEW_EXPORT_FORMATS)
+    )
+    pipeline: ExportPipeline = "raster"
 
 
 class DocumentInfo(BaseModel):

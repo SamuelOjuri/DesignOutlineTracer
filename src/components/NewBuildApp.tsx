@@ -14,9 +14,9 @@ import {
   runAutomatedExtraction,
 } from "@/integrations/backend/client";
 import {
-  backendCandidateToCanvasOutline,
-  backendOutletsToCanvas,
-  backendRooflightsToCanvasHoles,
+  backendSchemaOutlineToCanvas,
+  backendSchemaOutletsToCanvas,
+  backendSchemaRooflightsToCanvasHoles,
 } from "@/integrations/backend/coords";
 import {
   NewBuildStep,
@@ -208,10 +208,10 @@ export const NewBuildApp = () => {
       }
 
       const result = await runAutomatedExtraction(pdfFile);
-      const schema = result.exportResult.production_schema;
-      const outline = backendCandidateToCanvasOutline(result.candidate, pdfCanvas, schema);
-      const holes = backendRooflightsToCanvasHoles(result.validatedCandidate, pdfCanvas, schema);
-      const extractedOutlets = backendOutletsToCanvas(result.validatedCandidate, pdfCanvas, schema);
+      const schema = result.schema;
+      const outline = backendSchemaOutlineToCanvas(schema, pdfCanvas);
+      const holes = backendSchemaRooflightsToCanvasHoles(schema, pdfCanvas);
+      const extractedOutlets = backendSchemaOutletsToCanvas(schema, pdfCanvas);
 
       setRoofOutlines(outline.length > 2 ? [outline] : []);
       setInteriorHoles(holes);

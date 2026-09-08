@@ -50,6 +50,37 @@ export function backendCandidateToCanvasOutline(
   return candidate.polygon_pdf.map((point) => pdfToCanvasPoint(point, pdfCanvas, schema));
 }
 
+export function backendSchemaOutlineToCanvas(
+  schema: BackendProductionSchema,
+  pdfCanvas: HTMLCanvasElement,
+): Point[] {
+  return schema.target_area.outer_polygon_mm.map((point) => pdfToCanvasPoint(point, pdfCanvas, schema));
+}
+
+export function backendSchemaRooflightsToCanvasHoles(
+  schema: BackendProductionSchema,
+  pdfCanvas: HTMLCanvasElement,
+): Point[][] {
+  return schema.constraints.rooflights.map((rooflight) =>
+    rooflight.polygon_mm.map((point) => pdfToCanvasPoint(point, pdfCanvas, schema)),
+  );
+}
+
+export function backendSchemaOutletsToCanvas(
+  schema: BackendProductionSchema,
+  pdfCanvas: HTMLCanvasElement,
+): Outlet[] {
+  return schema.constraints.rainwater_outlets.map((outlet) => {
+    const point = pdfToCanvasPoint(outlet.point_mm, pdfCanvas, schema);
+    return {
+      id: outlet.id,
+      x: point.x,
+      y: point.y,
+      diameter: 0.15,
+    };
+  });
+}
+
 export function backendRooflightsToCanvasHoles(
   candidate: BackendCandidate,
   pdfCanvas: HTMLCanvasElement,

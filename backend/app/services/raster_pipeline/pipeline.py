@@ -95,7 +95,13 @@ def run_raster_pipeline(
                         render_dpi=settings.raster_render_dpi,
                     ),
                 )
-                text_blocks.extend(blocks)
+                text_blocks.extend(
+                    _offset_ocr_tile_blocks(
+                        blocks,
+                        tile=tile,
+                        image_size=image.size,
+                    )
+                )
         text_blocks = merge_ocr_blocks(text_blocks)
         segmenter = _segmenter(settings)
         try:
@@ -192,6 +198,41 @@ def load_raster_production_schema(storage_path: Path, document_id: str) -> Produ
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     return ProductionSchema.model_validate(payload["production_schema"])
+
+
+def _offset_ocr_tile_blocks(
+    blocks: list[RasterTextBlock],
+    *,
+    tile: OcrTile,
+    image_size: tuple[int, int],
+) -> list[RasterTextBlock]:
+    image_width, image_height = image_size
+    x_offset, y_offset, _, _ = tile.bbox_px
+    offset_blocks: list[RasterTextBlock] = []
+    for block in blocks:
+        x0, y0, x1, y1 = block.bbox_px
+        bbox_px = [
+            x0 + x_offset,
+            y0 + y_offset,
+            x1 + x_offset,
+            y1 + y_offset,
+        ]
+        bbox_1000 = [
+            round((bbox_px[0] / image_width) * 1000),
+            round((bbox_px[1] / image_height) * 1000),
+            round((bbox_px[2] / image_width) * 1000),
+            round((bbox_px[3] / image_height) * 1000),
+        ]
+        offset_blocks.append(
+            block.model_copy(
+                update={
+                    "bbox_px": bbox_px,
+                    "bbox_1000": bbox_1000,
+                    "tile_id": tile.id,
+                }
+            )
+        )
+    return offset_blocks
 
 
 def _production_schema(

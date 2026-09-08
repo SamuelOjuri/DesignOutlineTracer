@@ -26,7 +26,10 @@ def main() -> None:
         candidates_response.raise_for_status()
         validation_response = client.post(f"/api/documents/{data['document_id']}/validate")
         validation_response.raise_for_status()
-        export_response = client.post(f"/api/documents/{data['document_id']}/export")
+        export_response = client.post(
+            f"/api/documents/{data['document_id']}/export",
+            json={"pipeline": "vector", "formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+        )
         export_response.raise_for_status()
 
     vector_data = vector_response.json()

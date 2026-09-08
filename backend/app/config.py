@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,17 +16,18 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
     storage_root: Path = Path("storage")
     ai_provider: str = "gemini"
-    gemini_validation_model: str = "gemini-2.5-flash"
+    default_extraction_pipeline: Literal["vector_first", "raster_first"] = "raster_first"
+    gemini_validation_model: str = "gemini-3-flash-preview"
     gemini_pro_model: str = "gemini-2.5-pro"
-    gemini_er_model: str = "gemini-robotics-er-1.5-preview"
+    gemini_er_model: str = "gemini-robotics-er-1.6-preview"
 
     google_api_key: str | None = None
     openai_api_key: str | None = None
     mistralai_api_key: str | None = None
 
-    raster_ocr_provider: str = "gemini"
+    raster_ocr_provider: str = "mock"
     raster_preview_dpi: int = 125
-    gemini_ocr_model: str = "gemini-2.5-flash"
+    gemini_ocr_model: str = "gemini-3-flash-preview"
     raster_render_dpi: int = 300
     raster_max_render_pixels: int = 80_000_000
     raster_max_tile_pixels: int = 5_000_000

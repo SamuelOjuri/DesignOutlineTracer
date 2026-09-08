@@ -25,10 +25,16 @@ def test_e2e_tp17221_vector_pipeline_export_and_audit(
         vector_response = client.get(f"/api/documents/{document_id}/vector")
         candidates_response = client.get(f"/api/documents/{document_id}/candidates")
         validation_response = client.post(f"/api/documents/{document_id}/validate")
-        blocked_dxf_response = client.post(f"/api/documents/{document_id}/export")
+        blocked_dxf_response = client.post(
+            f"/api/documents/{document_id}/export",
+            json={"pipeline": "vector", "formats": ["dxf"]},
+        )
         export_response = client.post(
             f"/api/documents/{document_id}/export",
-            json={"formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+            json={
+                "pipeline": "vector",
+                "formats": ["svg", "geojson", "mask_png", "metadata_json"],
+            },
         )
 
     assert upload_response.status_code == 201

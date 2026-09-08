@@ -80,7 +80,10 @@ def test_export_endpoint_blocks_dxf_until_review(
             files={"file": (tp17221_pdf.name, upload, "application/pdf")},
         )
         document_id = upload_response.json()["document_id"]
-        export_response = client.post(f"/api/documents/{document_id}/export")
+        export_response = client.post(
+            f"/api/documents/{document_id}/export",
+            json={"pipeline": "vector", "formats": ["dxf"]},
+        )
 
     assert upload_response.status_code == 201
     assert export_response.status_code == 409
@@ -102,7 +105,10 @@ def test_export_endpoint_writes_review_preview_formats(
         document_id = upload_response.json()["document_id"]
         export_response = client.post(
             f"/api/documents/{document_id}/export",
-            json={"formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+            json={
+                "pipeline": "vector",
+                "formats": ["svg", "geojson", "mask_png", "metadata_json"],
+            },
         )
 
     assert upload_response.status_code == 201
@@ -132,7 +138,10 @@ def test_export_endpoint_uses_original_pdf_after_validation_overlay(
         validation_response = client.post(f"/api/documents/{document_id}/validate")
         export_response = client.post(
             f"/api/documents/{document_id}/export",
-            json={"formats": ["svg", "geojson", "mask_png", "metadata_json"]},
+            json={
+                "pipeline": "vector",
+                "formats": ["svg", "geojson", "mask_png", "metadata_json"],
+            },
         )
 
     assert validation_response.status_code == 200
