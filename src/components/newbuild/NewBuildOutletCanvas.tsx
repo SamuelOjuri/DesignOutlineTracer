@@ -60,7 +60,6 @@ export const NewBuildOutletCanvas = ({
     canvas.height = pdfCanvas.height;
     canvas.style.width = `${pdfCanvas.width * fit}px`;
     canvas.style.height = `${pdfCanvas.height * fit}px`;
-    draw();
   }, [pdfCanvas, calculateFitScale]);
 
   useEffect(() => {
@@ -81,16 +80,11 @@ export const NewBuildOutletCanvas = ({
   }, [calculateFitScale]);
 
   useEffect(() => {
-    draw();
-  }, [outlets, selectedOutlet, roofOutlines, interiorHoles, drainageEdges, hoveredEdge, outletMode]);
-
-  const isDrainageEdge = (outlineIndex: number, edgeIndex: number) =>
-    drainageEdges.some((d) => d.outlineIndex === outlineIndex && d.edgeIndex === edgeIndex);
-
-  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !pdfCanvas) return;
     const ctx = canvas.getContext("2d")!;
+    const isDrainageEdge = (outlineIndex: number, edgeIndex: number) =>
+      drainageEdges.some((edge) => edge.outlineIndex === outlineIndex && edge.edgeIndex === edgeIndex);
 
     ctx.drawImage(pdfCanvas, 0, 0);
 
@@ -185,7 +179,7 @@ export const NewBuildOutletCanvas = ({
       ctx.lineTo(outlet.x, outlet.y + 5);
       ctx.stroke();
     });
-  }, [pdfCanvas, roofOutlines, outlets, selectedOutlet, drainageEdges, hoveredEdge, outletMode]);
+  }, [pdfCanvas, roofOutlines, interiorHoles, outlets, selectedOutlet, drainageEdges, hoveredEdge, outletMode]);
 
   const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point) => {
     const dx = p2.x - p1.x;
@@ -344,7 +338,7 @@ export const NewBuildOutletCanvas = ({
       <div
         ref={containerRef}
         className="flex-1 overflow-auto border border-border rounded-lg bg-muted/30"
-        onWheel={handleWheel as any}
+        onWheel={handleWheel}
       >
         <div className="min-w-fit min-h-fit p-2">
           <canvas

@@ -144,17 +144,12 @@ export const RoofIllustrationCanvas = ({
   }, [setupCanvas]);
 
   useEffect(() => {
-    draw();
-  }, [roofOutlines, interiorHoles, outlets, drainageEdges, displayScale, hoveredOutline]);
-
-  const isDrainageEdge = (oi: number, ei: number) =>
-    drainageEdges.some((d) => d.outlineIndex === oi && d.edgeIndex === ei);
-
-  const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d")!;
     const offset = getOffset();
+    const isDrainageEdge = (outlineIndex: number, edgeIndex: number) =>
+      drainageEdges.some((edge) => edge.outlineIndex === outlineIndex && edge.edgeIndex === edgeIndex);
 
     // Clear with white
     ctx.fillStyle = "hsl(0, 0%, 100%)";
@@ -274,8 +269,8 @@ export const RoofIllustrationCanvas = ({
     });
 
     // Legend
-    drawLegend(ctx, canvas.width);
-  }, [roofOutlines, outlets, drainageEdges, getBounds, hoveredOutline, interiorHoles]);
+    drawLegend(ctx, canvas.width, drainageEdges.length > 0, outlets.length > 0);
+  }, [roofOutlines, outlets, drainageEdges, getOffset, hoveredOutline, interiorHoles, displayScale]);
 
   const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point) => {
     const dx = p2.x - p1.x;
@@ -319,14 +314,14 @@ export const RoofIllustrationCanvas = ({
     }
   };
 
-  const drawLegend = (ctx: CanvasRenderingContext2D, canvasWidth: number) => {
+  const drawLegend = (ctx: CanvasRenderingContext2D, canvasWidth: number, hasDrainage: boolean, hasOutlets: boolean) => {
     const items: { color: string; label: string }[] = [
       { color: "hsl(220, 15%, 30%)", label: "Roof Edge" },
     ];
-    if (drainageEdges.length > 0) {
+    if (hasDrainage) {
       items.push({ color: "hsl(210, 85%, 50%)", label: "Drainage Edge" });
     }
-    if (outlets.length > 0) {
+    if (hasOutlets) {
       items.push({ color: "hsl(0, 75%, 45%)", label: "Outlet" });
     }
 
@@ -473,7 +468,7 @@ export const RoofIllustrationCanvas = ({
       <div
         ref={containerRef}
         className="flex-1 overflow-auto border border-border rounded-lg bg-background"
-        onWheel={handleWheel as any}
+        onWheel={handleWheel}
       >
         <div className="min-w-fit min-h-fit p-2">
           <canvas

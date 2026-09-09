@@ -134,10 +134,30 @@ Inherited limitations recorded during recovery:
 
 Phase 0 re-verification on 2026-09-09 passed clean install, 2 unit tests,
 2 browser tests, application/test type-check, production build, and focused
-test lint. Full lint still reports exactly 26 errors and 17 warnings.
+test lint. At that checkpoint, full lint reported 26 errors and 17 warnings.
 The updated lockfile reports 15 advisories (1 low, 7 moderate, 7 high), including
 two new moderate package reports in the Vitest toolchain. These are documented
 in the checkpoint record; no dependency warnings or lint rules were suppressed.
+
+### Post-Checkpoint Cleanup
+
+The focused cleanup on 2026-09-09 reduces full lint to **0 errors and 9 warnings**.
+It fixes stale upload callbacks after parent rerenders, cutout-only outlet
+redraws, and New Build drawing dependencies without coupling redraws to canvas
+initialization. Geometry/submission types, step lookups, and small lint errors
+are also corrected. The existing email payload and dependency lockfile are unchanged.
+
+Verification passes: 6 unit tests, 2 browser flows, type-check, production build,
+and focused test lint. New tests cover the upload callback, cutout redraws,
+source-page replacement, illustration legend changes, and zoom retention.
+`npm run lint:tests` includes every frontend unit-test file.
+
+The remaining warnings are two Refurbishment `DrawingCanvas` hook-dependency
+warnings and seven shared UI Fast Refresh export warnings. They remain visible,
+not suppressed; Refurbishment lifecycle changes are deferred to a separately
+tested cleanup. Dependency advisories, bundle size and mobile overflow remain
+outside this pass. See the checkpoint record for the original results and the
+separate cleanup review boundary.
 
 ## Next Development Scope
 

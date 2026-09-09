@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,7 +41,7 @@ export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }:
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || file.type !== "application/pdf") return;
 
@@ -62,7 +62,7 @@ export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }:
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  };
 
   const renderPage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number) => {
     const page = await pdf.getPage(pageNum);

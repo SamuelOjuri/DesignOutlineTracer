@@ -4,7 +4,7 @@ interface StepHeaderProps {
   currentStep: DrawingStep;
 }
 
-const steps = [
+const steps: { key: DrawingStep; label: string; number: number }[] = [
   { key: 'outline', label: 'Step 1: Draw Roof Outline', number: 1 },
   { key: 'outlets', label: 'Step 2: Define Drainage', number: 2 },
   { key: 'penetrations', label: 'Step 3: Add Penetrations', number: 3 },
@@ -12,6 +12,7 @@ const steps = [
 ];
 
 export const StepHeader = ({ currentStep }: StepHeaderProps) => {
+  const currentStepNumber = steps.find((step) => step.key === currentStep)?.number ?? 0;
   return (
     <div className="bg-card border-b border-border p-4">
       <div className="flex items-center w-full pl-4 pr-4 gap-8">
@@ -35,7 +36,7 @@ export const StepHeader = ({ currentStep }: StepHeaderProps) => {
               className={`flex items-center space-x-2 px-3 py-2 rounded-lg transition-colors ${
                 step.key === currentStep
                   ? 'bg-primary text-primary-foreground'
-                  : step.number < steps.find(s => s.key === currentStep)?.number!
+                  : step.number < currentStepNumber
                   ? 'bg-accent text-accent-foreground'
                   : 'bg-muted text-muted-foreground'
               }`}

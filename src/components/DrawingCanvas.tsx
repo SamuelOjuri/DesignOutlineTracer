@@ -85,7 +85,7 @@ export const DrawingCanvas = ({
       return { minX: 0, maxX: 0, minY: 0, maxY: 0, width: 0, height: 0 };
     }
 
-    let currentPoint = { ...outline.startPoint };
+    const currentPoint = { ...outline.startPoint };
     let minX = currentPoint.x, maxX = currentPoint.x;
     let minY = currentPoint.y, maxY = currentPoint.y;
 
@@ -222,7 +222,9 @@ export const DrawingCanvas = ({
     }
   };
 
-  const drawDrainageModeHint = (ctx: CanvasRenderingContext2D, colors: any) => {
+  type CanvasColors = ReturnType<typeof getCanvasColors>;
+
+  const drawDrainageModeHint = (ctx: CanvasRenderingContext2D, colors: CanvasColors) => {
     ctx.fillStyle = colors.accent;
     ctx.font = '14px Arial';
     ctx.textAlign = 'left';
@@ -231,7 +233,7 @@ export const DrawingCanvas = ({
     ctx.fillText(hintText, 10, 50);
   };
 
-  const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number, colors: any) => {
+  const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number, colors: CanvasColors) => {
     ctx.strokeStyle = colors.gridLine;
     ctx.lineWidth = 0.5;
     
@@ -254,7 +256,7 @@ export const DrawingCanvas = ({
     }
   };
 
-  const drawRoofOutline = (ctx: CanvasRenderingContext2D, colors: any) => {
+  const drawRoofOutline = (ctx: CanvasRenderingContext2D, colors: CanvasColors) => {
     if (outline.segments.length === 0) return;
 
     ctx.lineCap = 'round';
@@ -407,7 +409,7 @@ export const DrawingCanvas = ({
     }
   };
 
-  const drawDrainageArrows = (ctx: CanvasRenderingContext2D, startPoint: Point, endPoint: Point, colors: any) => {
+  const drawDrainageArrows = (ctx: CanvasRenderingContext2D, startPoint: Point, endPoint: Point, colors: CanvasColors) => {
     // Calculate segment direction
     const dx = endPoint.x - startPoint.x;
     const dy = endPoint.y - startPoint.y;
@@ -469,7 +471,7 @@ export const DrawingCanvas = ({
     }
   };
 
-  const drawOutlet = (ctx: CanvasRenderingContext2D, outlet: Outlet, colors: any) => {
+  const drawOutlet = (ctx: CanvasRenderingContext2D, outlet: Outlet, colors: CanvasColors) => {
     const isSelected = selectedElement?.type === 'outlet' && selectedElement.id === outlet.id;
     const isHovered = hoveredElement?.type === 'outlet' && hoveredElement.id === outlet.id;
     const transformed = transformPoint(outlet.x, outlet.y);
@@ -508,7 +510,7 @@ export const DrawingCanvas = ({
     ctx.fillText(`Ø${(outlet.diameter * 1000).toFixed(0)}mm`, transformed.x, transformed.y + radius + 15);
   };
 
-  const drawPenetration = (ctx: CanvasRenderingContext2D, penetration: Penetration, colors: any) => {
+  const drawPenetration = (ctx: CanvasRenderingContext2D, penetration: Penetration, colors: CanvasColors) => {
     const isSelected = selectedElement?.type === 'penetration' && selectedElement.id === penetration.id;
     const isHovered = hoveredElement?.type === 'penetration' && hoveredElement.id === penetration.id;
     const transformed = transformPoint(penetration.x, penetration.y);
@@ -560,7 +562,7 @@ export const DrawingCanvas = ({
     );
   };
 
-  const drawSelectionIndicators = (ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, colors: any) => {
+  const drawSelectionIndicators = (ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, colors: CanvasColors) => {
     // Draw bounding box with dashed border
     ctx.strokeStyle = colors.selectedOutline;
     ctx.lineWidth = 1;
@@ -621,7 +623,7 @@ export const DrawingCanvas = ({
     ctx.setLineDash([]);
   };
 
-  const drawPlacementHint = (ctx: CanvasRenderingContext2D, colors: any) => {
+  const drawPlacementHint = (ctx: CanvasRenderingContext2D, colors: CanvasColors) => {
     ctx.fillStyle = colors.mutedForeground;
     ctx.font = '14px Arial';
     ctx.textAlign = 'left';
@@ -656,7 +658,7 @@ export const DrawingCanvas = ({
     };
   };
 
-  const drawElementDimensions = (ctx: CanvasRenderingContext2D, elementX: number, elementY: number, type: 'outlet' | 'penetration', colors: any) => {
+  const drawElementDimensions = (ctx: CanvasRenderingContext2D, elementX: number, elementY: number, type: 'outlet' | 'penetration', colors: CanvasColors) => {
     const distances = calculateDistanceToNearestEdges(elementX, elementY);
     if (!distances) return;
 
@@ -736,7 +738,7 @@ export const DrawingCanvas = ({
     ctx.setLineDash([]);
   };
 
-  const drawPenetrationDimensions = (ctx: CanvasRenderingContext2D, penetration: Penetration, colors: any) => {
+  const drawPenetrationDimensions = (ctx: CanvasRenderingContext2D, penetration: Penetration, colors: CanvasColors) => {
     const distances = calculateDistanceToNearestEdges(penetration.x, penetration.y);
     if (!distances) return;
 

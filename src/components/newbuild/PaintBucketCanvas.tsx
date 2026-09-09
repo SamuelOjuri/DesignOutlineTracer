@@ -508,8 +508,8 @@ export const PaintBucketCanvas = ({
     if (activeTool === "adjust") {
       const drag = adjustDragRef.current;
       if (drag) {
-        let dx = pos.x - drag.startX;
-        let dy = pos.y - drag.startY;
+        const dx = pos.x - drag.startX;
+        const dy = pos.y - drag.startY;
 
         if (drag.type === "vertex") {
           let newX = drag.originalOutlines[drag.outlineIndex][drag.vertexIndex!].x + dx;
@@ -599,7 +599,7 @@ export const PaintBucketCanvas = ({
       const p = lastPreviewPosRef.current;
       if (p) computePreview(p.x, p.y);
     }, HOVER_THROTTLE);
-  }, [getCanvasPos, displayScale, computePreview, activeTool, renderRectPreview, isInitializing, roofOutlines, redrawCanvas, onOutlinesExtracted]);
+  }, [getCanvasPos, computePreview, activeTool, renderRectPreview, isInitializing, roofOutlines, redrawCanvas, onOutlinesExtracted]);
 
   const handleMouseUp = useCallback(() => {
     // Adjust tool: finalize edge drag
@@ -691,7 +691,7 @@ export const PaintBucketCanvas = ({
     clearPreview();
     redrawCanvas();
     requestAnimationFrame(() => { justDraggedRef.current = false; });
-  }, [onOutlinesExtracted, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint]);
+  }, [onHolesExtracted, emitOutlinesAndHoles, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint]);
 
   const handleMouseLeave = useCallback(() => {
     if (adjustDragRef.current) handleMouseUp();
@@ -926,7 +926,7 @@ export const PaintBucketCanvas = ({
       <div
         ref={containerRef}
         className="flex-1 overflow-auto border border-border rounded-lg bg-muted/30"
-        onWheel={handleWheel as any}
+        onWheel={handleWheel}
       >
         <div className="min-w-fit min-h-fit p-2 relative">
           <canvas ref={canvasRef} className="block mx-auto" />

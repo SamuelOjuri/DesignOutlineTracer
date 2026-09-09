@@ -84,7 +84,7 @@ Tests use condition-based waits, no fixed sleeps, and no automatic retries.
 `npx playwright show-report` opens attached step screenshots; failed runs retain
 a trace and failure screenshot under ignored report/output directories.
 
-## Known Debt And Boundaries
+## Original Checkpoint Debt And Boundaries
 
 - Full lint failures were not fixed or suppressed. ESLint ignores were extended
   only for generated build, coverage, and browser-report directories.
@@ -103,3 +103,36 @@ a trace and failure screenshot under ignored report/output directories.
   quality, authentication, persistence, and ROI networking are not certified
   by these smoke tests. Later phases must add their own targeted checks.
 - Finalizing the staged checkpoint as a commit remains a deliberate user action.
+
+## Post-Checkpoint Cleanup (2026-09-09)
+
+The requested bounded cleanup is separate from the staged Phase 0 recovery.
+Its edits and new tests remain unstaged so the baseline and follow-up can be
+reviewed independently. No commit or push was performed.
+
+- Removed the upload handler's initial-render callback capture. A regression
+  test first reproduced delivery to the old callback after a parent rerender.
+- Separated outlet redraws from source-canvas initialization and included
+  interior holes as drawing inputs. A regression test first reproduced a
+  hole-only update using stale geometry; the fixed test also checks retained
+  zoom. A companion test checks source-page-only replacement.
+- Made illustration redraw dependencies explicit and the legend helper pure;
+  tested hole/legend changes without resetting zoom. Corrected the paint-tool
+  mouse-handler dependencies without changing initialization or geometry logic.
+- Replaced untyped palette and submission props with existing/inferred domain
+  types, removed unnecessary wheel-event casts, guarded step lookups, and fixed
+  const declarations, empty interfaces and the Tailwind plugin import.
+- Kept the legacy submission shapes, React/Vite versions, dependency lockfile,
+  lint rules, backend artifacts and source documents unchanged.
+
+Current validation: `npm test` passes 6 tests; `npm run test:e2e` passes both
+desktop Chromium flows with intercepted submission; `npm run typecheck`,
+`npm run lint:tests`, and the alternate-directory production build pass.
+Full `npm run lint` succeeds with **0 errors and 9 warnings**.
+
+The nine remaining warnings are two Refurbishment drawing/auto-zoom effect
+dependencies and seven shared UI Fast Refresh export warnings. This pass does
+not claim those effects have been exhaustively verified. They remain explicit
+follow-up work; they do not block the isolated Phase 1 reference runner. The
+original dependency advisories, large bundle and mobile layout limitations
+also remain. No real email or model request was made by validation.

@@ -32,7 +32,7 @@ export const OutlineControls = ({ outline, onOutlineChange }: OutlineControlsPro
     const newSegments = [...outline.segments, newSegment];
     
     // Calculate new current point
-    let newCurrentPoint = { ...outline.currentPoint };
+    const newCurrentPoint = { ...outline.currentPoint };
     const diagonalMultiplier = Math.sqrt(2) / 2; // For 45-degree angles
     
     switch (direction) {
@@ -79,7 +79,7 @@ export const OutlineControls = ({ outline, onOutlineChange }: OutlineControlsPro
     const newSegments = outline.segments.slice(0, -1);
     
     // Recalculate current point
-    let newCurrentPoint = { ...outline.startPoint };
+    const newCurrentPoint = { ...outline.startPoint };
     const diagonalMultiplier = Math.sqrt(2) / 2;
     
     newSegments.forEach(segment => {
