@@ -1,0 +1,69 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+.env
+.env.local
+.env.*
+!.env.example
+
+.vite/
+playwright-report/
+test-results/
+coverage/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+backend/storage/
+
+# Legacy backend only; allow the planned backend/roi_app package
+/backend/app/
+/backend/tests/
+
+# Superseded planning and experimental results
+/docs/plan.md
+/docs/validation/
+
+# Drawings, screenshots, and notebooks: local until approved
+/docs/**/*.pdf
+/docs/**/*.ipynb
+/docs/**/*.png
+/docs/**/*.jpg
+/docs/**/*.jpeg
+/docs/**/*.webp
+/docs/**/*.gif
+/docs/**/*.tif
+/docs/**/*.tiff
+
+# Private key and credential containers
+*.pem
+*.key
+*.p12
+*.pfx
+
