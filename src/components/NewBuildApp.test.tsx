@@ -8,18 +8,23 @@ import type { NewBuildOutletCanvas } from "./newbuild/NewBuildOutletCanvas";
 import type { RoofIllustrationCanvas } from "./newbuild/RoofIllustrationCanvas";
 import type { ProjectDetailsForm } from "./ProjectDetailsForm";
 import { NewBuildApp } from "./NewBuildApp";
+import { syntheticPage } from "@/test/roi";
 
 const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 100, y: 300 }];
 const hole = [{ x: 150, y: 150 }, { x: 180, y: 150 }, { x: 180, y: 180 }];
 
 vi.mock("./newbuild/PdfUpload", () => ({
-  PdfUpload: ({ onPdfRendered }: ComponentProps<typeof PdfUpload>) => (
+  PdfUpload: ({ onPdfRendered, onPageRendered, onPageSelectionStart, drawingScale, onDrawingScaleChange }: ComponentProps<typeof PdfUpload>) => (
     <>
+      <output data-testid="upload-scale">{drawingScale.scaleRatio}</output>
+      <button onClick={() => onDrawingScaleChange({ ...drawingScale, scaleRatio: 50 })}>Change upload scale</button>
       {[1, 2].map((factor) => (
         <button key={factor} onClick={() => {
           const canvas = document.createElement("canvas");
           canvas.width = 800 * factor;
           canvas.height = 600 * factor;
+          onPageSelectionStart?.();
+          onPageRendered?.(syntheticPage(`page-${factor}`, factor), canvas);
           onPdfRendered(canvas);
         }}>Render PDF {factor}</button>
       ))}
@@ -28,9 +33,10 @@ vi.mock("./newbuild/PdfUpload", () => ({
 }));
 
 vi.mock("./newbuild/PaintBucketCanvas", () => ({
-  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines }: ComponentProps<typeof PaintBucketCanvas>) => (
+  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles }: ComponentProps<typeof PaintBucketCanvas>) => (
     <>
       <output data-testid="paint-outlines">{JSON.stringify(roofOutlines)}</output>
+      <output data-testid="paint-holes">{JSON.stringify(interiorHoles)}</output>
       <button onClick={() => onOutlinesExtracted([outline.slice(0, 2)])}>Select invalid outline</button>
       <button onClick={() => onOutlinesExtracted([outline])}>Select roof</button>
       <button onClick={() => onHolesExtracted([hole])}>Add cutout</button>
@@ -52,8 +58,11 @@ vi.mock("./newbuild/NewBuildOutletCanvas", () => ({
 vi.mock("./newbuild/NewBuildSidebar", () => ({ NewBuildSidebar: () => null }));
 
 vi.mock("./newbuild/RoofIllustrationCanvas", () => ({
-  RoofIllustrationCanvas: ({ roofOutlines, interiorHoles, outlets, drainageEdges }: ComponentProps<typeof RoofIllustrationCanvas>) => (
-    <output data-testid="illustration">{JSON.stringify({ roofOutlines, interiorHoles, outlets, drainageEdges })}</output>
+  RoofIllustrationCanvas: ({ roofOutlines, interiorHoles, outlets, drainageEdges, onOutlinesChange }: ComponentProps<typeof RoofIllustrationCanvas>) => (
+    <>
+      <output data-testid="illustration">{JSON.stringify({ roofOutlines, interiorHoles, outlets, drainageEdges })}</output>
+      <button onClick={() => onOutlinesChange?.(roofOutlines.map((polygon) => polygon.map((point) => ({ ...point, x: point.x + 20.5 }))))}>Move illustration</button>
+    </>
   ),
 }));
 
@@ -126,6 +135,7 @@ describe("manual New Build state", () => {
     await user.click(screen.getByRole("button", { name: "Toggle drainage" }));
     await user.click(screen.getByRole("button", { name: "Upload Another PDF" }));
     await user.click(screen.getByRole("button", { name: "Render PDF 2" }));
+    await next();
     expect(screen.getByTestId("paint-outlines")).toHaveTextContent("[]");
     await user.click(screen.getByRole("button", { name: "Select roof" }));
     await user.click(screen.getByRole("button", { name: "Add cutout" }));
@@ -143,7 +153,58 @@ describe("manual New Build state", () => {
       drainageEdges: [{ outlineIndex: 0, edgeIndex: 1 }, { outlineIndex: 1, edgeIndex: 1 }],
     });
     await user.click(screen.getByRole("button", { name: "Previous" }));
+    expect(JSON.parse(screen.getByTestId("editor-outlets").textContent!)).toEqual([
+      expect.objectContaining({ x: 200, y: 200, page_id: "page-2" }),
+    ]);
     await next();
     expect(screen.getByTestId("illustration").textContent).toBe(merged);
+    await user.click(screen.getByRole("button", { name: "Move illustration" }));
+    const moved = screen.getByTestId("illustration").textContent!;
+    expect(JSON.parse(moved).roofOutlines[1][0]).toEqual({ x: 460.5, y: 50 });
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
+    expect(JSON.parse(screen.getByTestId("paint-holes").textContent!)).toEqual([hole]);
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
+    await next();
+    expect(JSON.parse(screen.getByTestId("editor-outlets").textContent!)).toEqual([
+      expect.objectContaining({ x: 200, y: 200, page_id: "page-1" }),
+    ]);
+    await next();
+    expect(screen.getByTestId("illustration").textContent).toBe(moved);
+  });
+
+  it("isolates a new page and restores the previous page when an additional upload is cancelled", async () => {
+    const user = userEvent.setup();
+    render(<NewBuildApp />);
+    const next = () => user.click(screen.getByRole("button", { name: "Next" }));
+    const previous = () => user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Select roof" }));
+    await user.click(screen.getByRole("button", { name: "Add cutout" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Add test outlet" }));
+    await user.click(screen.getByRole("button", { name: "Upload Another PDF" }));
+    await user.click(screen.getByRole("button", { name: "Change upload scale" }));
+    expect(screen.getByTestId("upload-scale")).toHaveTextContent("50");
+    await user.click(screen.getByRole("button", { name: "Render PDF 2" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByTestId("editor-outlets")).toHaveTextContent("page-1");
+    await previous();
+    await previous();
+    expect(screen.getByTestId("upload-scale")).toHaveTextContent("100");
+    await user.click(screen.getByRole("button", { name: "Render PDF 2" }));
+    await next();
+    expect(screen.getByTestId("paint-outlines")).toHaveTextContent("[]");
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    await previous();
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
+    expect(JSON.parse(screen.getByTestId("paint-holes").textContent!)).toEqual([hole]);
   });
 });

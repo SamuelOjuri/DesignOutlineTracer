@@ -9,9 +9,10 @@ type PaintTool = "fill" | "cutout" | "adjust";
 
 interface PaintBucketCanvasProps {
   pdfCanvas: HTMLCanvasElement;
-  onOutlinesExtracted: (outlines: Point[][]) => void;
+  onOutlinesExtracted: (outlines: Point[][], editedOutlineIndex?: number) => void;
   onHolesExtracted?: (holes: Point[][]) => void;
   roofOutlines: Point[][];
+  interiorHoles?: Point[][];
 }
 
 const FILL_COLOR: [number, number, number, number] = [220, 50, 50, 160];
@@ -24,6 +25,7 @@ export const PaintBucketCanvas = ({
   onOutlinesExtracted,
   onHolesExtracted,
   roofOutlines,
+  interiorHoles = [],
 }: PaintBucketCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -72,6 +74,11 @@ export const PaintBucketCanvas = ({
     originalHoles: Point[][];
   } | null>(null);
   const interiorHolesRef = useRef<Point[][]>([]);
+  const sourceGeometry = useRef({ roofOutlines, interiorHoles });
+
+  useEffect(() => {
+    sourceGeometry.current = { roofOutlines, interiorHoles };
+  }, [roofOutlines, interiorHoles]);
 
   const emitOutlinesAndHoles = useCallback((mask: Uint8Array, w: number, h: number) => {
     const outlines = extractMultipleOutlines(mask, w, h);
@@ -121,16 +128,25 @@ export const PaintBucketCanvas = ({
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(pdfCanvas, 0, 0);
     originalImageDataRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const manual = sourceGeometry.current;
+    filledMaskRef.current = manual.roofOutlines.length
+      ? rasterizeOutlinesWithHoles(manual.roofOutlines, manual.interiorHoles, canvas.width, canvas.height) : null;
+    cutoutMaskRef.current = manual.interiorHoles.length
+      ? rasterizeOutlinesWithHoles(manual.interiorHoles, [], canvas.width, canvas.height) : null;
+    interiorHolesRef.current = manual.interiorHoles.map((hole) => hole.map((point) => ({ ...point })));
+    maskHistoryRef.current = [];
+    setFillCount(manual.roofOutlines.length ? 1 : 0);
 
     // Defer heavy edge/region computation to next frame
     setIsInitializing(true);
-    requestAnimationFrame(() => {
+    let regionFrame: number | undefined;
+    const edgeFrame = requestAnimationFrame(() => {
       const imgData = originalImageDataRef.current!;
       const edgeMap = buildEdgeMap(imgData.data, canvas.width, canvas.height);
       cachedEdgeMapRef.current = edgeMap;
 
       // Build region map in a second frame to avoid long blocking
-      requestAnimationFrame(() => {
+      regionFrame = requestAnimationFrame(() => {
         const { regionLabels, regionSeeds } = buildRegionMap(
           imgData.data, canvas.width, canvas.height, edgeMap, 45
         );
@@ -139,6 +155,12 @@ export const PaintBucketCanvas = ({
         setIsInitializing(false);
       });
     });
+    return () => {
+      cancelAnimationFrame(edgeFrame);
+      if (regionFrame !== undefined) cancelAnimationFrame(regionFrame);
+      if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
+      if (hoverTimerRef.current !== null) clearTimeout(hoverTimerRef.current);
+    };
   }, [pdfCanvas, calculateFitScale]);
 
   // Update canvas CSS size on zoom
@@ -551,7 +573,7 @@ export const PaintBucketCanvas = ({
           const w = canvas.width, h = canvas.height;
           const newMask = rasterizeOutlinesWithHoles(newOutlines, drag.originalHoles, w, h);
           filledMaskRef.current = newMask;
-          onOutlinesExtracted(newOutlines);
+          onOutlinesExtracted(newOutlines, drag.outlineIndex);
           redrawCanvas();
         } else {
           // Edge drag (existing behavior)
@@ -565,7 +587,7 @@ export const PaintBucketCanvas = ({
           const w = canvas.width, h = canvas.height;
           const newMask = rasterizeOutlinesWithHoles(newOutlines, drag.originalHoles, w, h);
           filledMaskRef.current = newMask;
-          onOutlinesExtracted(newOutlines);
+          onOutlinesExtracted(newOutlines, drag.outlineIndex);
           redrawCanvas();
         }
       } else {
@@ -734,7 +756,7 @@ export const PaintBucketCanvas = ({
       filledMaskRef.current = newMask;
     }
 
-    onOutlinesExtracted(newOutlines);
+    onOutlinesExtracted(newOutlines, edge.outlineIndex);
     setHoveredEdge(null);
     setHoveredVertex(null);
     setFillCount(c => c + 1);

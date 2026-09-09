@@ -29,6 +29,14 @@ locally from the installed dependency rather than a CDN.
 New Build does not yet have automatic ROI, penetration, or outlet suggestions.
 Its existing cutout tool is manual, not an automatic penetration detector.
 
+Phase 2 now preserves manual work per document/page for the lifetime of the open
+New Build screen. Re-uploading the same PDF bytes and selecting the same page
+restores that page's work. Additional-PDF uploads allow page selection before
+Next; combined illustration movement does not change original page coordinates.
+Sessions are not saved across reloads. See the
+[Phase 2 record](docs/Phase-2-Page-Sessions.md) for source-image, annotation,
+coordinate and review-state contracts.
+
 The original project-details form still submits to an external Supabase email
 function. It is not required for editing, and no Supabase server code was
 restored. Live email delivery was not tested; submitting real data invokes that
@@ -167,6 +175,11 @@ the pinned environment, tests, explicit single-call live command, input variants
 and domain-review protocol. No Gemini call was made during implementation;
 model/project access and a domain-reviewed real evaluation set remain pending.
 The tool does not enable frontend recommendations or import the old backend.
+
+Phase 2 frontend contracts and page-session integration are implemented without
+ROI networking. The next implementation phase is the isolated API, subject to
+the Phase 1 model-access and domain-review gates. The client-side image hash is
+provenance, not a substitute for server-side byte/dimension validation.
 
 Use the references in `docs/roi-logic/` for the new Gemini 3.6 Flash annotation
 workflow. Introduce reviewable ROI recommendations first, followed by

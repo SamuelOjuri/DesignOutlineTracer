@@ -4,7 +4,7 @@
 
 - Branch: `region-of-interest`.
 - Plan date: 2026-09-09.
-- Status: Phase 0 baseline is present on this branch. Phase 1 offline reference runner, contracts and evaluation tooling are implemented; live model access and domain-reviewed dataset gates remain pending. Frontend annotation integration has not started.
+- Status: Phase 0 baseline and Phase 1 offline reference tooling are present. Phase 2 page identity, immutable source capture, coordinate helpers, session state and manual-editor integration are implemented. Live model access and domain-reviewed dataset gates remain pending; detection networking and recommendation UI have not started.
 - Model: Gemini 3.6 Flash, using the configured identifier `gemini-3.6-flash` demonstrated in the supplied prototype.
 - Scope: enhance the existing New Build workflow with reviewable region-of-interest (ROI), roof-penetration, and rainwater-outlet recommendations.
 
@@ -267,6 +267,17 @@ are open exit criteria, not completed accuracy evidence. See the
 ### Phase 2: Introduce Page Sessions And Coordinate Contracts
 
 **Depends on:** Phase 0; use Phase 1 evidence to finalize provider-facing fields.
+
+**Delivery update (2026-09-09):** Typed PDF page callbacks now retain an immutable
+PNG and SHA-256 document/page/render identity while preserving the canvas callback.
+Pure coordinate helpers and an in-memory session reducer/hook cover fractional
+transforms, request cancellation, late-result rejection, undo and child invalidation.
+New Build retains manual page records and stable object IDs; additional-page scale
+and illustration offsets are derived display transforms, not source mutations.
+The four-step manual workflow and existing email payload remain unchanged.
+Synthetic unit and desktop browser checks cover these contracts, not detection
+accuracy. See the [Phase 2 record](Phase-2-Page-Sessions.md) for verification,
+editor boundaries and deferred work.
 
 **Implementation**
 

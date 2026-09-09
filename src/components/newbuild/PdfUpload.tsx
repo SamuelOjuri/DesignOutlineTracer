@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +14,8 @@ import { FileUp, Loader2, Ruler } from "lucide-react";
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { DrawingScale } from "@/types/roof";
+import type { RenderedPdfPage } from "@/types/roi";
+import { capturePdfPage, readBlobBytes, sha256 } from "@/utils/roiSource";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -29,43 +31,79 @@ const COMMON_SCALES = [10, 20, 25, 50, 75, 100, 125, 150, 200, 250, 300, 500];
 
 interface PdfUploadProps {
   onPdfRendered: (imageData: HTMLCanvasElement) => void;
+  onPageRendered?: (page: RenderedPdfPage, canvas: HTMLCanvasElement) => void;
+  onPageSelectionStart?: () => void;
   drawingScale: DrawingScale;
   onDrawingScaleChange: (scale: DrawingScale) => void;
 }
 
-export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }: PdfUploadProps) => {
+export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart, drawingScale, onDrawingScaleChange }: PdfUploadProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
   const [selectedPage, setSelectedPage] = useState(1);
-  const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  const [pdfDoc, setPdfDoc] = useState<{ pdf: pdfjsLib.PDFDocumentProxy; documentId: string; fileName: string } | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const renderTask = useRef<pdfjsLib.RenderTask | null>(null);
+  const loadingTask = useRef<ReturnType<typeof pdfjsLib.getDocument> | null>(null);
+  const callbacks = useRef({ onPageRendered, onPdfRendered });
+
+  useEffect(() => {
+    callbacks.current = { onPageRendered, onPdfRendered };
+  }, [onPageRendered, onPdfRendered]);
+
+  useEffect(() => () => {
+    generation.current += 1;
+    renderTask.current?.cancel();
+    void loadingTask.current?.destroy();
+  }, []);
+
+  const startSelection = () => {
+    generation.current += 1;
+    renderTask.current?.cancel();
+    setIsLoading(true);
+    setError(null);
+    setPreviewUrl(null);
+    onPageSelectionStart?.();
+    return generation.current;
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || file.type !== "application/pdf") return;
 
-    setIsLoading(true);
+    const selection = startSelection();
+    void loadingTask.current?.destroy();
+    setPdfDoc(null);
+    setPageCount(0);
     setFileName(file.name);
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      setPdfDoc(pdf);
+      const arrayBuffer = await readBlobBytes(file);
+      const documentId = `document_${await sha256(arrayBuffer)}`;
+      if (selection !== generation.current) return;
+      const task = pdfjsLib.getDocument({ data: arrayBuffer });
+      loadingTask.current = task;
+      const pdf = await task.promise;
+      if (selection !== generation.current) return;
+      const document = { pdf, documentId, fileName: file.name };
+      setPdfDoc(document);
       setPageCount(pdf.numPages);
       setSelectedPage(1);
 
-      // Render first page preview
-      await renderPage(pdf, 1);
-    } catch (error) {
-      console.error("Error loading PDF:", error);
+      await renderPage(document, 1, selection);
+    } catch {
+      if (selection === generation.current) setError("Unable to load the selected PDF page. Please try again.");
     } finally {
-      setIsLoading(false);
+      if (selection === generation.current) setIsLoading(false);
     }
   };
 
-  const renderPage = async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number) => {
-    const page = await pdf.getPage(pageNum);
+  const renderPage = async (documentContext: NonNullable<typeof pdfDoc>, pageNum: number, selection: number) => {
+    const page = await documentContext.pdf.getPage(pageNum);
+    if (selection !== generation.current) return;
     const scale = 2; // Higher resolution
     const viewport = page.getViewport({ scale });
 
@@ -74,19 +112,37 @@ export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }:
     canvas.height = viewport.height;
     const ctx = canvas.getContext("2d")!;
 
-    await page.render({ canvasContext: ctx, viewport }).promise;
+    const task = page.render({ canvasContext: ctx, viewport });
+    renderTask.current = task;
+    await task.promise;
+    if (selection !== generation.current) return;
+    const source = await capturePdfPage(canvas, {
+      document_id: documentContext.documentId,
+      file_name: documentContext.fileName,
+      page_index: pageNum - 1,
+      render_scale: viewport.scale,
+      render_rotation: viewport.rotation,
+      render_version: `pdfjs-${pdfjsLib.version}-png-v1`,
+      pdf_view_box: viewport.viewBox,
+    });
+    if (selection !== generation.current) return;
 
-    // Create preview URL
     setPreviewUrl(canvas.toDataURL());
-    onPdfRendered(canvas);
+    callbacks.current.onPageRendered?.(source, canvas);
+    callbacks.current.onPdfRendered(canvas);
   };
 
   const handlePageChange = async (pageNum: number) => {
     if (!pdfDoc || pageNum < 1 || pageNum > pageCount) return;
+    const selection = startSelection();
     setSelectedPage(pageNum);
-    setIsLoading(true);
-    await renderPage(pdfDoc, pageNum);
-    setIsLoading(false);
+    try {
+      await renderPage(pdfDoc, pageNum, selection);
+    } catch {
+      if (selection === generation.current) setError("Unable to load the selected PDF page. Please try again.");
+    } finally {
+      if (selection === generation.current) setIsLoading(false);
+    }
   };
 
   return (
@@ -113,6 +169,8 @@ export const PdfUpload = ({ onPdfRendered, drawingScale, onDrawingScaleChange }:
             <span className="text-sm text-muted-foreground">Loading PDF...</span>
           </div>
         )}
+
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
 
         {fileName && !isLoading && (
           <div className="p-3 bg-muted rounded-lg">

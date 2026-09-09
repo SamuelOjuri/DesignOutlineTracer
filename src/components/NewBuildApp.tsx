@@ -14,59 +14,33 @@ import {
   ProjectDetails,
   RoofOutline,
   DrawingScale,
-  DrainageEdge,
 } from "@/types/roof";
+import type { PageDrawing, RenderedPdfPage } from "@/types/roi";
+import { useRoiSession } from "@/hooks/useRoiSession";
+import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "@/utils/roiDrawing";
 import { FileUp } from "lucide-react";
 
-const PAPER_SIZES_MM: Record<string, { w: number; h: number }> = {
-  A0: { w: 841, h: 1189 },
-  A1: { w: 594, h: 841 },
-  A2: { w: 420, h: 594 },
-  A3: { w: 297, h: 420 },
-  A4: { w: 210, h: 297 },
-};
-
-function getMmPerPixel(canvas: HTMLCanvasElement, scale: DrawingScale): number {
-  const paper = PAPER_SIZES_MM[scale.paperSize] || PAPER_SIZES_MM.A1;
-  // Match longer canvas dimension to longer paper dimension
-  const canvasLong = Math.max(canvas.width, canvas.height);
-  const paperLongMm = Math.max(paper.w, paper.h);
-  // mm on paper per pixel, then multiply by scale ratio to get real-world mm per pixel
-  return (paperLongMm / canvasLong) * scale.scaleRatio;
-}
-
-function getBoundsOfOutlines(outlines: Point[][]) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const o of outlines) {
-    for (const p of o) {
-      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-    }
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-function scalePoints(points: Point[], factor: number): Point[] {
-  return points.map(p => ({ x: Math.round(p.x * factor), y: Math.round(p.y * factor) }));
-}
+const ignoreRenderedCanvas = () => undefined;
 
 export const NewBuildApp = () => {
   const [currentStep, setCurrentStep] = useState<NewBuildStep>("upload");
-  const [pdfCanvas, setPdfCanvas] = useState<HTMLCanvasElement | null>(null);
-  const [roofOutlines, setRoofOutlines] = useState<Point[][]>([]);
-  const [interiorHoles, setInteriorHoles] = useState<Point[][]>([]);
-  const [drawingScale, setDrawingScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
-  const [baseDrawingScale, setBaseDrawingScale] = useState<DrawingScale | null>(null);
-  const [basePdfCanvas, setBasePdfCanvas] = useState<HTMLCanvasElement | null>(null);
-  const [outlets, setOutlets] = useState<Outlet[]>([]);
+  const { state, dispatch, activePage, getActivePage } = useRoiSession();
+  const canvases = useRef(new Map<string, HTMLCanvasElement>());
+  const [uploadScale, setUploadScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
+  const [selectionPending, setSelectionPending] = useState(false);
+  const [illustrationOffsets, setIllustrationOffsets] = useState<Record<string, Point>>({});
+  const additionalReturnPage = useRef<string | null>(null);
+  const pdfCanvas = activePage ? canvases.current.get(activePage.source.page_id) ?? null : null;
+  const roofOutlines = activePage?.drawing.outlines.map((outline) => outline.points) ?? [];
+  const interiorHoles = activePage?.drawing.holes.map((hole) => hole.points) ?? [];
+  const outlets = activePage?.drawing.outlets ?? [];
+  const drainageEdges = activePage ? editorDrainage(activePage) : [];
+  const drawingScale = activePage?.drawing.drawing_scale ?? uploadScale;
+  const combined = combinePageDrawings(Object.values(state.pages), illustrationOffsets);
+  const saved = combinePageDrawings(Object.values(state.pages).filter((page) => page.source.page_id !== state.active_page_id));
   const [selectedOutlet, setSelectedOutlet] = useState<Outlet | null>(null);
-  const [drainageEdges, setDrainageEdges] = useState<DrainageEdge[]>([]);
   const [outletMode, setOutletMode] = useState<'add-outlets' | 'drainage-edge'>('add-outlets');
   const [showAdditionalUpload, setShowAdditionalUpload] = useState(false);
-  const savedOutlinesRef = useRef<Point[][]>([]);
-  const savedHolesRef = useRef<Point[][]>([]);
-  const savedOutletsRef = useRef<Outlet[]>([]);
-  const savedDrainageRef = useRef<DrainageEdge[]>([]);
   const [projectDetails, setProjectDetails] = useState<ProjectDetails>({
     name: "",
     company: "",
@@ -84,82 +58,74 @@ export const NewBuildApp = () => {
     buildMethod: "",
   });
 
-  const handlePdfRendered = (canvas: HTMLCanvasElement) => {
-    setPdfCanvas(canvas);
-    if (!baseDrawingScale) {
-      setBaseDrawingScale({ ...drawingScale });
-      setBasePdfCanvas(canvas);
-    }
+  const handlePageRendered = (source: RenderedPdfPage, canvas: HTMLCanvasElement) => {
+    canvases.current.set(source.page_id, canvas);
+    dispatch({ type: "activate", source, scale: uploadScale });
+    setSelectionPending(false);
+    setSelectedOutlet(null);
   };
 
-  const handleAdditionalPdfRendered = (canvas: HTMLCanvasElement) => {
-    savedOutlinesRef.current = [...roofOutlines];
-    savedHolesRef.current = [...interiorHoles];
-    savedOutletsRef.current = [...outlets];
-    savedDrainageRef.current = [...drainageEdges];
-    setRoofOutlines([]);
-    setInteriorHoles([]);
-    setOutlets([]);
-    setDrainageEdges([]);
-    setPdfCanvas(canvas);
-    setShowAdditionalUpload(false);
-    setCurrentStep("paint");
+  const handlePageSelectionStart = () => {
+    setUploadScale(drawingScale);
+    setSelectionPending(true);
+    setSelectedOutlet(null);
+    dispatch({ type: "select", page_id: null });
   };
 
-  // Compute rescale factor: converts new PDF pixels to equivalent first-PDF pixels
-  const getScaleFactor = () => {
-    if (!baseDrawingScale || !basePdfCanvas || !pdfCanvas) return 1;
-    const baseMmpp = getMmPerPixel(basePdfCanvas, baseDrawingScale);
-    const currentMmpp = getMmPerPixel(pdfCanvas, drawingScale);
-    return currentMmpp / baseMmpp;
+  const updateDrawing = (update: (drawing: PageDrawing) => PageDrawing) => {
+    const page = getActivePage();
+    if (!page || page.source.page_id !== activePage?.source.page_id) return;
+    dispatch({ type: "drawing", page_id: page.source.page_id, drawing: update(page.drawing) });
   };
 
-  const handleOutlinesExtracted = (outlines: Point[][]) => {
-    // During a second PDF session, only store new outlines (no merging yet)
-    // Merging + offset happens in handleNext when leaving outlets step
-    setRoofOutlines(outlines);
+  const handleDrawingScaleChange = (scale: DrawingScale) => {
+    setUploadScale(scale);
+    updateDrawing((drawing) => ({ ...drawing, drawing_scale: scale }));
   };
 
-  const handleHolesExtracted = (holes: Point[][]) => {
-    setInteriorHoles(holes);
+  const handleOutlinesExtracted = (outlines: Point[][], editedIndex?: number) => {
+    updateDrawing((drawing) => {
+      const next = reconcilePolygons(drawing.outlines, outlines, activePage!.source.page_id, editedIndex);
+      return { ...drawing, outlines: next, drainage_edges: drawing.drainage_edges.filter((edge) => {
+        const previous = drawing.outlines.find((outline) => outline.id === edge.outline_id);
+        const current = next.find((outline) => outline.id === edge.outline_id);
+        return current && previous?.points.length === current.points.length;
+      }) };
+    });
   };
+
+  const handleHolesExtracted = (holes: Point[][]) => updateDrawing((drawing) => ({ ...drawing,
+    holes: reconcilePolygons(drawing.holes, holes, activePage!.source.page_id) }));
 
   const handleAddOutlet = (x: number, y: number) => {
-    const newOutlet: Outlet = {
-      id: `outlet-${Date.now()}`,
-      x,
-      y,
-      diameter: 0.15,
-    };
-    setOutlets((prev) => [...prev, newOutlet]);
+    updateDrawing((drawing) => ({ ...drawing, outlets: [...drawing.outlets,
+      { id: crypto.randomUUID(), page_id: activePage!.source.page_id, x, y, diameter: 0.15 }] }));
   };
 
   const handleDeleteOutlet = (id: string) => {
-    setOutlets((prev) => prev.filter((o) => o.id !== id));
+    updateDrawing((drawing) => ({ ...drawing, outlets: drawing.outlets.filter((outlet) => outlet.id !== id) }));
     if (selectedOutlet?.id === id) setSelectedOutlet(null);
   };
 
   const handleMoveOutlet = (id: string, x: number, y: number) => {
-    setOutlets((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, x, y } : o))
-    );
+    updateDrawing((drawing) => ({ ...drawing, outlets: drawing.outlets.map((outlet) => outlet.id === id ? { ...outlet, x, y } : outlet) }));
     if (selectedOutlet?.id === id) {
       setSelectedOutlet((prev) => (prev ? { ...prev, x, y } : null));
     }
   };
 
   const handleToggleDrainageEdge = (outlineIndex: number, edgeIndex: number) => {
-    setDrainageEdges((prev) => {
-      const exists = prev.find(
-        (d) => d.outlineIndex === outlineIndex && d.edgeIndex === edgeIndex
-      );
-      if (exists) return prev.filter((d) => d !== exists);
-      return [...prev, { outlineIndex, edgeIndex }];
+    updateDrawing((drawing) => {
+      const outline = drawing.outlines[outlineIndex];
+      if (!outline) return drawing;
+      const exists = drawing.drainage_edges.find((edge) => edge.outline_id === outline.id && edge.edge_index === edgeIndex);
+      return { ...drawing, drainage_edges: exists ? drawing.drainage_edges.filter((edge) => edge !== exists)
+        : [...drawing.drainage_edges, { outline_id: outline.id, edge_index: edgeIndex }] };
     });
   };
 
   const buildOutlines = (): RoofOutline[] =>
-    roofOutlines.map((points) => ({
+    combined.roofOutlines.map((points) => ({
       segments: [],
       startPoint: points[0] || { x: 0, y: 0 },
       currentPoint: points[points.length - 1] || { x: 0, y: 0 },
@@ -169,83 +135,32 @@ export const NewBuildApp = () => {
   const stepOrder: NewBuildStep[] = ["upload", "paint", "outlets", "details"];
 
   const handleNext = () => {
+    if (showAdditionalUpload) {
+      setShowAdditionalUpload(false);
+      setCurrentStep("paint");
+      return;
+    }
     const idx = stepOrder.indexOf(currentStep);
     if (idx < stepOrder.length - 1) {
-      const nextStep = stepOrder[idx + 1];
-
-      // When leaving outlets step with saved data from a previous PDF, merge everything
-      if (currentStep === "outlets" && savedOutlinesRef.current.length > 0) {
-        const factor = getScaleFactor();
-        const savedOutlineCount = savedOutlinesRef.current.length;
-
-        // Scale new outlines to match first PDF's coordinate space
-        const scaledOutlines = factor !== 1
-          ? roofOutlines.map(o => scalePoints(o, factor))
-          : roofOutlines;
-
-        // Auto-offset: place new outlines to the right of saved ones
-        const savedBounds = getBoundsOfOutlines(savedOutlinesRef.current);
-        const newBounds = getBoundsOfOutlines(scaledOutlines);
-        const gap = 40;
-        const offsetX = scaledOutlines.length > 0
-          ? savedBounds.maxX - newBounds.minX + gap
-          : 0;
-
-        const mergedOutlines = [
-          ...savedOutlinesRef.current,
-          ...scaledOutlines.map(o => o.map(p => ({ x: p.x + offsetX, y: p.y }))),
-        ];
-        setRoofOutlines(mergedOutlines);
-
-        // Scale + offset holes
-        const scaledHoles = factor !== 1
-          ? interiorHoles.map(h => scalePoints(h, factor))
-          : interiorHoles;
-        const mergedHoles = [
-          ...savedHolesRef.current,
-          ...scaledHoles.map(h => h.map(p => ({ x: p.x + offsetX, y: p.y }))),
-        ];
-        setInteriorHoles(mergedHoles);
-
-        // Scale + offset outlets
-        const mergedOutlets = [
-          ...savedOutletsRef.current,
-          ...outlets.map(o => ({
-            ...o,
-            x: Math.round(o.x * factor) + offsetX,
-            y: Math.round(o.y * factor),
-          })),
-        ];
-        setOutlets(mergedOutlets);
-
-        // Adjust drainage edge indices
-        const mergedDrainage = [
-          ...savedDrainageRef.current,
-          ...drainageEdges.map(d => ({
-            ...d,
-            outlineIndex: d.outlineIndex + savedOutlineCount,
-          })),
-        ];
-        setDrainageEdges(mergedDrainage);
-
-        // Clear saved refs
-        savedOutletsRef.current = [];
-        savedDrainageRef.current = [];
-        savedOutlinesRef.current = [];
-        savedHolesRef.current = [];
-      }
-
-      setCurrentStep(nextStep);
+      setCurrentStep(stepOrder[idx + 1]);
     }
   };
 
+  const cancelAdditionalUpload = () => {
+    dispatch({ type: "select", page_id: additionalReturnPage.current });
+    setSelectionPending(false);
+    setShowAdditionalUpload(false);
+  };
 
   const handlePrev = () => {
+    if (showAdditionalUpload) return cancelAdditionalUpload();
     const idx = stepOrder.indexOf(currentStep);
     if (idx > 0) setCurrentStep(stepOrder[idx - 1]);
   };
 
   const canProceed = (): boolean => {
+    if (selectionPending || !activePage) return false;
+    if (showAdditionalUpload) return activePage.source.page_id !== additionalReturnPage.current;
     switch (currentStep) {
       case "upload":
         return pdfCanvas !== null;
@@ -267,10 +182,12 @@ export const NewBuildApp = () => {
       case "paint":
         return pdfCanvas ? (
           <PaintBucketCanvas
+            key={activePage?.source.page_id}
             pdfCanvas={pdfCanvas}
             onOutlinesExtracted={handleOutlinesExtracted}
             onHolesExtracted={handleHolesExtracted}
             roofOutlines={roofOutlines}
+            interiorHoles={interiorHoles}
           />
         ) : null;
       case "outlets":
@@ -279,13 +196,15 @@ export const NewBuildApp = () => {
             <div className="flex-1 flex items-center justify-center">
               <div className="w-96">
                 <PdfUpload
-                  onPdfRendered={handleAdditionalPdfRendered}
+                  onPdfRendered={ignoreRenderedCanvas}
+                  onPageRendered={handlePageRendered}
+                  onPageSelectionStart={handlePageSelectionStart}
                   drawingScale={drawingScale}
-                  onDrawingScaleChange={setDrawingScale}
+                  onDrawingScaleChange={handleDrawingScaleChange}
                 />
                 <Button
                   variant="outline"
-                  onClick={() => setShowAdditionalUpload(false)}
+                  onClick={cancelAdditionalUpload}
                   className="w-full mt-3"
                 >
                   Cancel
@@ -296,6 +215,7 @@ export const NewBuildApp = () => {
         }
         return pdfCanvas ? (
           <NewBuildOutletCanvas
+            key={activePage?.source.page_id}
             pdfCanvas={pdfCanvas}
             roofOutlines={roofOutlines}
             interiorHoles={interiorHoles}
@@ -318,7 +238,8 @@ export const NewBuildApp = () => {
 
   const renderSidebar = () => {
     if (currentStep === "upload") {
-      return <PdfUpload onPdfRendered={handlePdfRendered} drawingScale={drawingScale} onDrawingScaleChange={setDrawingScale} />;
+      return <PdfUpload onPdfRendered={ignoreRenderedCanvas} onPageRendered={handlePageRendered}
+        onPageSelectionStart={handlePageSelectionStart} drawingScale={drawingScale} onDrawingScaleChange={handleDrawingScaleChange} />;
     }
     if (currentStep === "details") {
       return (
@@ -327,7 +248,7 @@ export const NewBuildApp = () => {
           onProjectDetailsChange={setProjectDetails}
           onSubmit={() => alert("Project successfully sent to TaperedPlus!")}
           outline={buildOutlines()}
-          outlets={outlets}
+          outlets={combined.outlets}
           penetrations={[]}
         />
       );
@@ -343,13 +264,19 @@ export const NewBuildApp = () => {
           drainageEdges={drainageEdges}
           outletMode={outletMode}
           onOutletModeChange={setOutletMode}
-          savedOutlines={savedOutlinesRef.current}
-          savedOutlets={savedOutletsRef.current}
+          savedOutlines={saved.roofOutlines}
+          savedOutlets={saved.outlets}
         />
         {currentStep === "outlets" && !showAdditionalUpload && (
           <Button
             variant="outline"
-            onClick={() => setShowAdditionalUpload(true)}
+            onClick={() => {
+              additionalReturnPage.current = state.active_page_id;
+              setUploadScale(drawingScale);
+              dispatch({ type: "select", page_id: null });
+              setSelectedOutlet(null);
+              setShowAdditionalUpload(true);
+            }}
             className="w-full mt-4"
           >
             <FileUp className="w-4 h-4 mr-2" />
@@ -413,13 +340,16 @@ export const NewBuildApp = () => {
             renderMainContent()}
           {currentStep === "details" && (
             <RoofIllustrationCanvas
-              roofOutlines={roofOutlines}
-              interiorHoles={interiorHoles}
-              outlets={outlets}
-              drainageEdges={drainageEdges}
-              onOutlinesChange={setRoofOutlines}
-              onHolesChange={setInteriorHoles}
-              onOutletsChange={setOutlets}
+              roofOutlines={combined.roofOutlines}
+              interiorHoles={combined.interiorHoles}
+              outlets={combined.outlets}
+              drainageEdges={combined.drainageEdges}
+              onOutlinesChange={(points) => setIllustrationOffsets((previous) => shiftedOffsets(previous,
+                combined.outlineRefs, combined.roofOutlines.map((polygon) => polygon[0]), points.map((polygon) => polygon[0])))}
+              onHolesChange={(points) => setIllustrationOffsets((previous) => shiftedOffsets(previous,
+                combined.holeRefs, combined.interiorHoles.map((polygon) => polygon[0]), points.map((polygon) => polygon[0])))}
+              onOutletsChange={(points) => setIllustrationOffsets((previous) => shiftedOffsets(previous,
+                combined.outletRefs, combined.outlets, points))}
             />
           )}
         </div>

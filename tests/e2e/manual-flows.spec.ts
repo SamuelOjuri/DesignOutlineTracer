@@ -33,6 +33,7 @@ async function fillDetails(page: Page) {
 }
 
 test("New Build: PDF pages, manual fill/undo, zoom, outlet and mocked submission", async ({ page, networkGuard }, testInfo) => {
+  test.setTimeout(120_000);
   await page.goto("/new-build");
   const next = page.getByRole("button", { name: "Next", exact: true });
   await expect(next).toBeDisabled();
@@ -57,7 +58,7 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and mocked submission
   await next.click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
   await expect(next).toBeDisabled();
-  const paint = page.locator("canvas").first();
+  const paint = page.locator("canvas").nth(-2);
   const interaction = page.locator("canvas").last();
   expect(await redPixels(paint)).toBe(0);
   await clickCanvas(interaction, 0.7, 0.5);
@@ -84,6 +85,33 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and mocked submission
   await expect(page.getByText(/^Outlet 1\b/)).toBeVisible();
   await expect.poll(() => redPixels(outletCanvas)).toBeGreaterThan(outlinePixels);
   await capture(page, testInfo, "new-build-outlet");
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
+  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await clickCanvas(interaction, 0.7, 0.5);
+  await expect(next).toBeDisabled();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(next).toBeEnabled();
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
+  await page.locator('input[type="file"]').setInputFiles(await createRoofPlanPdf());
+  await expect(page.getByText("1 / 2", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(preview).toHaveAttribute("src", firstPage!);
+  await next.click();
+  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
+  await expect(next).toBeDisabled();
+  await expect.poll(() => redPixels(paint)).toBe(0);
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
+  await page.locator('input[type="file"]').setInputFiles(await createRoofPlanPdf());
+  await expect(page.getByText("1 / 2", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("button", { name: "\u2192", exact: true }).click();
+  await expect(preview).toHaveAttribute("src", secondPage!);
+  await next.click();
+  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
+  await expect(next).toBeEnabled();
+  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await capture(page, testInfo, "new-build-restored-page");
+  await next.click();
+  await expect(page.getByText(/^Outlet 1\b/)).toBeVisible();
   await next.click();
   await expect(page.getByRole("heading", { name: "Project Details", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Complete", exact: true })).toBeDisabled();
