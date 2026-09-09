@@ -28,7 +28,8 @@ const PAPER_SIZES: { label: string; widthMm: number; heightMm: number }[] = [
 const COMMON_SCALES = [10, 20, 25, 50, 75, 100, 125, 150, 200, 250, 300, 500];
 
 interface PdfUploadProps {
-  onPdfRendered: (imageData: HTMLCanvasElement) => void;
+  onPdfRendered: (imageData: HTMLCanvasElement, pageNumber: number) => void;
+  onPdfRenderStarted?: () => void;
   drawingScale: DrawingScale;
   onDrawingScaleChange: (scale: DrawingScale) => void;
   onPdfFileSelected?: (file: File) => void;
@@ -36,6 +37,7 @@ interface PdfUploadProps {
 
 export const PdfUpload = ({
   onPdfRendered,
+  onPdfRenderStarted,
   drawingScale,
   onDrawingScaleChange,
   onPdfFileSelected,
@@ -61,7 +63,8 @@ export const PdfUpload = ({
 
     // Create preview URL
     setPreviewUrl(canvas.toDataURL());
-    onPdfRendered(canvas);
+    setSelectedPage(pageNum);
+    onPdfRendered(canvas, pageNum);
   }, [onPdfRendered]);
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -69,6 +72,10 @@ export const PdfUpload = ({
     if (!file || file.type !== "application/pdf") return;
 
     setIsLoading(true);
+    onPdfRenderStarted?.();
+    setPreviewUrl(null);
+    setPdfDoc(null);
+    setPageCount(0);
     setFileName(file.name);
     onPdfFileSelected?.(file);
 
@@ -86,14 +93,19 @@ export const PdfUpload = ({
     } finally {
       setIsLoading(false);
     }
-  }, [onPdfFileSelected, renderPage]);
+  }, [onPdfFileSelected, onPdfRenderStarted, renderPage]);
 
   const handlePageChange = async (pageNum: number) => {
-    if (!pdfDoc || pageNum < 1 || pageNum > pageCount) return;
-    setSelectedPage(pageNum);
+    if (!pdfDoc || isLoading || pageNum < 1 || pageNum > pageCount) return;
     setIsLoading(true);
-    await renderPage(pdfDoc, pageNum);
-    setIsLoading(false);
+    onPdfRenderStarted?.();
+    try {
+      await renderPage(pdfDoc, pageNum);
+    } catch (error) {
+      console.error("Error rendering PDF page:", error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -110,6 +122,7 @@ export const PdfUpload = ({
             type="file"
             accept="application/pdf"
             onChange={handleFileUpload}
+            disabled={isLoading}
             className="max-w-xs mx-auto"
           />
         </div>

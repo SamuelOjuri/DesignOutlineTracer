@@ -227,24 +227,98 @@ curl -X POST \
   "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/export"
 ```
 
-Forced raster extraction:
+Raster extraction (the default for PDFs):
+
+`POST /api/documents/{id}/extract` now uses raster-first extraction for PDFs unless
+`force_pipeline` is explicitly `vector_first`. Upload classification still reports
+the source characteristics; its recommendation does not override this default.
+DWG/DXF CAD-first extraction remains unsupported.
+
+For raster extraction, `page_index` is zero-based and defaults to `0`. For example,
+send `page_index: 1` to process page 2. Negative, non-integer, and out-of-range page
+indices return HTTP 422. The selected page is used for rendering and OCR, and is
+reported in `render.page_index` and the raster extraction audit event. The original
+multi-page PDF remains stored unchanged.
+
+New Build sends the successfully rendered preview page and consumes the raster
+production schema directly; it does not call the vector candidate, validation, or
+export endpoints during automated extraction. Raster geometry still requires
+human review before CAD export. Explicit vector extraction and the dedicated
+`GET /api/documents/{id}/vector` endpoint retain their document-wide behavior.
 
 ```powershell
 Invoke-RestMethod `
   -Method Post `
   -ContentType "application/json" `
-  -Body '{"force_pipeline":"raster_first"}' `
+  -Body '{"force_pipeline":"raster_first","page_index":0}' `
   "http://127.0.0.1:8000/api/documents/$($upload.document_id)/extract"
 ```
 
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"force_pipeline":"raster_first"}' \
+  -d '{"force_pipeline":"raster_first","page_index":0}' \
   "http://127.0.0.1:8000/api/documents/$DOCUMENT_ID/extract"
 ```
 
-Raster approval gate:
+### Live Raster Providers
+
+Gemini OCR and Gemini ER grounding are implemented using `google-genai` structured
+responses. To enable them, configure the backend environment:
+
+```dotenv
+RASTER_OCR_PROVIDER=gemini
+SEGMENTATION_PROVIDER=gemini_er
+ALLOW_LIVE_AI_CALLS=1
+GEMINI_ER_MODEL=gemini-robotics-er-2-preview
+GEMINI_ER_MAX_IMAGE_DIMENSION=2048
+GEMINI_ER_CACHE_DIR=cache/gemini_er
+OCR_CACHE_DIR=cache/ocr
+OCR_TILE_SIZE_PX=2048
+OCR_TILE_OVERLAP_PX=256
+OCR_MAX_TILES=12
+RASTER_MAX_TILE_PIXELS=5000000
+```
+
+Set `GOOGLE_API_KEY` through your local environment or secret manager, and set
+`GEMINI_OCR_MODEL` to an image-capable structured-output model enabled for your
+Google project. `GEMINI_ER_MODEL` is also configurable. Model availability, quota,
+and account access must be verified separately; the automated tests use fake SDK
+clients and do not contact Google. Restart the backend after changing settings.
+For offline development, use `RASTER_OCR_PROVIDER=mock`,
+`SEGMENTATION_PROVIDER=noop`, and `ALLOW_LIVE_AI_CALLS=0`. Unknown provider names
+are rejected instead of silently selecting a mock/no-op implementation.
+
+OCR covers the selected page with overlapping tiles. If the configured tile grid
+would exceed `OCR_MAX_TILES`, source tiles are enlarged to fit that budget, then
+each request image is resized as needed to respect `RASTER_MAX_TILE_PIXELS`.
+`OCR_TILING_ADAPTED` warns when this happens: coverage is preserved, but downscaling
+can reduce small-text accuracy. Increase the tile budget to retain more detail
+at the cost of more requests. OCR boxes are reprojected from request-image pixels
+to full-page pixels before overlap deduplication. OCR errors stop extraction and
+return HTTP 422 with a sanitized model/error description in the JSON `detail`.
+Inspect that response body when the server access log only shows a status code.
+
+ER supplies roof search boxes, not final geometry. OpenCV finds image-supported
+contours within those search regions and returns review-required candidates.
+The model's boxes are never directly converted into roof polygons. If ER fails,
+the response retains its call/error audit and emits `SEGMENTATION_UNAVAILABLE`;
+if no supported contour is found, it emits `GEMINI_ER_NO_CONTOUR`. The pipeline
+continues with its existing fallback candidates, which require manual review.
+
+Both providers cache validated JSON using image content, model, and prompt version
+as the cache key. Relative cache directories resolve under `STORAGE_ROOT`; the
+legacy `OCR_CACHE_DIR=storage/cache/ocr` is also accepted when `STORAGE_ROOT=storage`.
+OCR caches contain drawing text and ER caches contain spatial hints. Protect and
+retain these local files according to your document-data policy. API responses
+report `ocr_audit`, `segmentation_audit`, and generic segmentation call/cache counts
+in `raster_audit`; Falcon-specific counters remain separate.
+
+These provider changes do not make raster output CAD-ready: the current production
+schema still contains approximate calibration and placeholder rooflight geometry.
+Review dimensions, outlines, openings, and outlets before approving any export.
+
+### Raster Approval Gate
 
 ```powershell
 Invoke-RestMethod `

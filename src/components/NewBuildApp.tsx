@@ -13,11 +13,7 @@ import {
   checkBackendHealth,
   runAutomatedExtraction,
 } from "@/integrations/backend/client";
-import {
-  backendCandidateToCanvasOutline,
-  backendOutletsToCanvas,
-  backendRooflightsToCanvasHoles,
-} from "@/integrations/backend/coords";
+import { backendRasterToCanvasGeometry } from "@/integrations/backend/coords";
 import {
   NewBuildStep,
   Outlet,
@@ -67,6 +63,7 @@ export const NewBuildApp = () => {
   const [currentStep, setCurrentStep] = useState<NewBuildStep>("upload");
   const [pdfCanvas, setPdfCanvas] = useState<HTMLCanvasElement | null>(null);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfPageNumber, setPdfPageNumber] = useState<number | null>(null);
   const [roofOutlines, setRoofOutlines] = useState<Point[][]>([]);
   const [interiorHoles, setInteriorHoles] = useState<Point[][]>([]);
   const [drawingScale, setDrawingScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
@@ -100,8 +97,20 @@ export const NewBuildApp = () => {
     buildMethod: "",
   });
 
-  const handlePdfRendered = (canvas: HTMLCanvasElement) => {
+  const handlePdfRenderStarted = () => {
+    setPdfCanvas(null);
+    setPdfPageNumber(null);
+    setBackendExtraction(null);
+    setRoofOutlines([]);
+    setInteriorHoles([]);
+    setOutlets([]);
+    setSelectedOutlet(null);
+    setDrainageEdges([]);
+  };
+
+  const handlePdfRendered = (canvas: HTMLCanvasElement, pageNumber: number) => {
     setPdfCanvas(canvas);
+    setPdfPageNumber(pageNumber);
     setBackendExtraction(null);
     if (!baseDrawingScale) {
       setBaseDrawingScale({ ...drawingScale });
@@ -109,7 +118,7 @@ export const NewBuildApp = () => {
     }
   };
 
-  const handleAdditionalPdfRendered = (canvas: HTMLCanvasElement) => {
+  const handleAdditionalPdfRendered = (canvas: HTMLCanvasElement, pageNumber: number) => {
     savedOutlinesRef.current = [...roofOutlines];
     savedHolesRef.current = [...interiorHoles];
     savedOutletsRef.current = [...outlets];
@@ -119,6 +128,8 @@ export const NewBuildApp = () => {
     setOutlets([]);
     setDrainageEdges([]);
     setPdfCanvas(canvas);
+    setPdfPageNumber(pageNumber);
+    setBackendExtraction(null);
     setShowAdditionalUpload(false);
     setCurrentStep("paint");
   };
@@ -193,7 +204,7 @@ export const NewBuildApp = () => {
   };
 
   const handleAutomatedExtraction = async () => {
-    if (!pdfFile || !pdfCanvas) return;
+    if (!pdfFile || !pdfCanvas || pdfPageNumber === null) return;
 
     setIsExtracting(true);
     try {
@@ -207,11 +218,15 @@ export const NewBuildApp = () => {
         return;
       }
 
-      const result = await runAutomatedExtraction(pdfFile);
-      const schema = result.exportResult.production_schema;
-      const outline = backendCandidateToCanvasOutline(result.candidate, pdfCanvas, schema);
-      const holes = backendRooflightsToCanvasHoles(result.candidate, pdfCanvas, schema);
-      const extractedOutlets = backendOutletsToCanvas(result.candidate, pdfCanvas, schema);
+      const result = await runAutomatedExtraction(pdfFile, pdfPageNumber - 1);
+      if (result.render.page_index !== pdfPageNumber - 1) {
+        throw new Error("Backend returned geometry for a different PDF page.");
+      }
+      const schema = result.production_schema;
+      const { outline, holes, outlets: extractedOutlets } = backendRasterToCanvasGeometry(schema, pdfCanvas);
+      if (outline.length < 3) {
+        throw new Error("Backend did not return a usable roof outline.");
+      }
 
       setRoofOutlines(outline.length > 2 ? [outline] : []);
       setInteriorHoles(holes);
@@ -365,7 +380,7 @@ export const NewBuildApp = () => {
               <div className="flex gap-3 justify-center">
                 <Button
                   onClick={handleAutomatedExtraction}
-                  disabled={!pdfFile || !pdfCanvas || isExtracting}
+                  disabled={!pdfFile || !pdfCanvas || pdfPageNumber === null || isExtracting}
                 >
                   {isExtracting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Use Automated Extraction
@@ -398,6 +413,7 @@ export const NewBuildApp = () => {
               <div className="w-96">
                 <PdfUpload
                   onPdfRendered={handleAdditionalPdfRendered}
+                  onPdfFileSelected={setPdfFile}
                   drawingScale={drawingScale}
                   onDrawingScaleChange={setDrawingScale}
                 />
@@ -439,6 +455,7 @@ export const NewBuildApp = () => {
       return (
         <PdfUpload
           onPdfRendered={handlePdfRendered}
+          onPdfRenderStarted={handlePdfRenderStarted}
           drawingScale={drawingScale}
           onDrawingScaleChange={setDrawingScale}
           onPdfFileSelected={setPdfFile}
@@ -502,14 +519,14 @@ export const NewBuildApp = () => {
             <Button
               variant="outline"
               onClick={handlePrev}
-              disabled={currentStep === "upload"}
+              disabled={currentStep === "upload" || isExtracting}
               className="flex-1"
             >
               Previous
             </Button>
             <Button
               onClick={handleNext}
-              disabled={currentStep === "details" || !canProceed()}
+              disabled={currentStep === "details" || isExtracting || !canProceed()}
               className="flex-1"
             >
               {currentStep === "details" ? "Complete" : "Next"}

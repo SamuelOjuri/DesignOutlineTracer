@@ -71,6 +71,7 @@ export interface BackendProductionSchema {
   };
   target_area: {
     outer_polygon_mm: number[][];
+    holes?: number[][][];
     area_m2_estimated: number;
     confidence: number;
     review_required: boolean;
@@ -108,17 +109,16 @@ export interface BackendRasterExtractionResponse {
   document_id: string;
   pipeline: "raster_first";
   human_review_status: "required";
+  render: {
+    page_index: number;
+    width_px: number;
+    height_px: number;
+  };
   production_schema: BackendProductionSchema;
   warnings: Array<{ code: string; message: string }>;
 }
 
-export interface AutomatedExtractionResult {
-  documentId: string;
-  candidate: BackendCandidate;
-  candidates: BackendCandidateDocument;
-  validation: BackendValidationResponse;
-  exportResult: BackendExportResponse;
-}
+export type AutomatedExtractionResult = BackendRasterExtractionResponse;
 
 async function backendFetch<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`${BACKEND_URL}${path}`, options);
@@ -172,11 +172,14 @@ export function exportDocument(
   });
 }
 
-export function extractRasterDocument(documentId: string): Promise<BackendRasterExtractionResponse> {
+export function extractRasterDocument(
+  documentId: string,
+  pageIndex = 0,
+): Promise<BackendRasterExtractionResponse> {
   return backendFetch<BackendRasterExtractionResponse>(`/api/documents/${documentId}/extract`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ force_pipeline: "raster_first" }),
+    body: JSON.stringify({ force_pipeline: "raster_first", page_index: pageIndex }),
   });
 }
 
@@ -202,30 +205,15 @@ export function approveDocument(schema: BackendProductionSchema): Promise<{
   });
 }
 
-export async function runAutomatedExtraction(file: File): Promise<AutomatedExtractionResult> {
-  const upload = await uploadDocument(file);
-  const [candidates, validation] = await Promise.all([
-    getCandidates(upload.document_id),
-    validateDocument(upload.document_id),
-  ]);
-  const exportResult = await exportDocument(upload.document_id, [
-    "svg",
-    "geojson",
-    "mask_png",
-    "metadata_json",
-  ]);
-  const selectedId = validation.validation.selected_candidate_id || candidates.summary.top_candidate_id;
-  const candidate = candidates.candidate_regions.find((item) => item.id === selectedId);
-  if (!candidate) {
-    throw new Error("Backend did not return the selected candidate geometry.");
+export async function runAutomatedExtraction(
+  file: File,
+  pageIndex = 0,
+): Promise<AutomatedExtractionResult> {
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    throw new Error("A valid PDF page index is required.");
   }
-  return {
-    documentId: upload.document_id,
-    candidate,
-    candidates,
-    validation,
-    exportResult,
-  };
+  const upload = await uploadDocument(file);
+  return extractRasterDocument(upload.document_id, pageIndex);
 }
 
 export function pointsFromNumberPairs(points: number[][]): Point[] {

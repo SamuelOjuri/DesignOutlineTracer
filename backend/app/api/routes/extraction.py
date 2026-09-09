@@ -75,13 +75,14 @@ async def extract_document(
         forced_pipeline = body.force_pipeline if body else None
         classification = classify_source(source_path, original_filename=source_path.name)
         should_run_raster = forced_pipeline == "raster_first" or (
-            forced_pipeline is None and classification.recommended_pipeline == "raster_first"
+            forced_pipeline is None and classification.recommended_pipeline != "cad_first"
         )
         if should_run_raster:
             raster_response = run_raster_pipeline(
                 source_path=source_path,
                 document_id=document_id,
                 settings=settings,
+                page_index=body.page_index if body else 0,
             )
             record_audit_event(
                 storage_path=settings.storage_path,
@@ -89,6 +90,7 @@ async def extract_document(
                 event_type="raster_extracted",
                 payload={
                     "classification": classification.model_dump(mode="json"),
+                    "page_index": raster_response.render.page_index,
                     **raster_response.raster_audit.model_dump(mode="json"),
                 },
                 request=request,

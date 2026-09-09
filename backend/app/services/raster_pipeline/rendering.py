@@ -22,6 +22,10 @@ def render_pdf_for_raster(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     with fitz.open(source_path) as document:
+        if page_index < 0 or page_index >= document.page_count:
+            raise ValueError(
+                f"page_index {page_index} is out of range for a {document.page_count}-page PDF"
+            )
         page = document[page_index]
         preview = _render_page(page, settings.raster_preview_dpi, settings.raster_max_render_pixels)
         full = _render_page(page, settings.raster_render_dpi, settings.raster_max_render_pixels)

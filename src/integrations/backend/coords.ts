@@ -50,6 +50,34 @@ export function backendCandidateToCanvasOutline(
   return candidate.polygon_pdf.map((point) => pdfToCanvasPoint(point, pdfCanvas, schema));
 }
 
+export function backendRasterToCanvasGeometry(
+  schema: BackendProductionSchema,
+  pdfCanvas: HTMLCanvasElement,
+): { outline: Point[]; holes: Point[][]; outlets: Outlet[] } {
+  const mmPerRasterPixel = schema.coordinate_systems.cad.mm_per_pdf_unit;
+  const { page_width: width, page_height: height } = schema.coordinate_systems.pdf;
+  if (![mmPerRasterPixel, width, height].every(value => Number.isFinite(value) && value > 0)) {
+    throw new Error("Raster extraction returned invalid coordinate dimensions.");
+  }
+  const toCanvasPoint = (point: number[]): Point => pdfToCanvasPoint(
+    [point[0] / mmPerRasterPixel, point[1] / mmPerRasterPixel],
+    pdfCanvas,
+    schema,
+  );
+  return {
+    outline: schema.target_area.outer_polygon_mm.map(toCanvasPoint),
+    holes: [
+      ...(schema.target_area.holes || []),
+      ...schema.constraints.rooflights.map(rooflight => rooflight.polygon_mm),
+    ].map(polygon => polygon.map(toCanvasPoint)),
+    outlets: schema.constraints.rainwater_outlets.map(outlet => ({
+      id: outlet.id,
+      ...toCanvasPoint(outlet.point_mm),
+      diameter: 0.15,
+    })),
+  };
+}
+
 export function backendRooflightsToCanvasHoles(
   candidate: BackendCandidate,
   pdfCanvas: HTMLCanvasElement,

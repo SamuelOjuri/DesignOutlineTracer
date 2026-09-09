@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 from PIL import Image
@@ -17,8 +18,26 @@ def generate_ocr_tiles(
     tile_size_px: int,
     overlap_px: int,
     max_tiles: int,
+    adapt_to_budget: bool = False,
 ) -> list[OcrTile]:
     width, height = image.size
+    if tile_size_px <= 0 or not 0 <= overlap_px < tile_size_px or max_tiles <= 0:
+        raise ValueError(
+            "OCR requires positive tile size/budget and overlap smaller than tile size"
+        )
+    if adapt_to_budget:
+        lower = tile_size_px
+        upper = max(tile_size_px, width, height)
+        while lower < upper:
+            proposed_size = (lower + upper) // 2
+            proposed_stride = proposed_size - overlap_px
+            columns = max(1, math.ceil((width - proposed_size) / proposed_stride) + 1)
+            rows = max(1, math.ceil((height - proposed_size) / proposed_stride) + 1)
+            if columns * rows <= max_tiles:
+                upper = proposed_size
+            else:
+                lower = proposed_size + 1
+        tile_size_px = lower
     if width <= tile_size_px and height <= tile_size_px:
         return [OcrTile(id="tile_001", bbox_px=(0, 0, width, height))]
 

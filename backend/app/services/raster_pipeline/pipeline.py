@@ -26,18 +26,24 @@ from app.models.raster import (
     RasterRenderResult,
     RasterTextBlock,
     RasterWarning,
-    SegmentationAudit,
     SegmentationHints,
 )
 from app.services.raster_pipeline.candidates import generate_raster_candidates
 from app.services.raster_pipeline.falcon_perception import SelfHostedFalconSegmenter
+from app.services.raster_pipeline.gemini_er import GeminiErSegmenter
 from app.services.raster_pipeline.image_geometry import extract_image_geometry
+from app.services.raster_pipeline.ocr_extraction import extract_tiled_ocr
 from app.services.raster_pipeline.ocr_merge import merge_ocr_blocks
 from app.services.raster_pipeline.ocr_provider import get_ocr_provider, ocr_audit
-from app.services.raster_pipeline.ocr_tiling import OcrTile, generate_ocr_tiles
+from app.services.raster_pipeline.ocr_tiling import OcrTile
 from app.services.raster_pipeline.preprocessing import preprocess_raster_render
 from app.services.raster_pipeline.rendering import raster_root, render_pdf_for_raster
-from app.services.raster_pipeline.segmentation import MockSegmenter, NoopSegmenter, Segmenter
+from app.services.raster_pipeline.segmentation import (
+    FutureManagedApiSegmenter,
+    MockSegmenter,
+    NoopSegmenter,
+    Segmenter,
+)
 from app.services.raster_pipeline.viewport import detect_raster_sheet_regions
 
 
@@ -50,11 +56,13 @@ def run_raster_pipeline(
     source_path: Path,
     document_id: str,
     settings: Settings,
+    page_index: int = 0,
 ) -> RasterPipelineResponse:
     render = render_pdf_for_raster(
         source_path=source_path,
         document_id=document_id,
         settings=settings,
+        page_index=page_index,
     )
     debug_dir = raster_root(settings.storage_path, document_id) / "debug"
     preprocess_outputs = preprocess_raster_render(Path(render.render_viewport_path), debug_dir)
@@ -62,6 +70,7 @@ def run_raster_pipeline(
 
     with Image.open(render.render_viewport_path) as image:
         provider = get_ocr_provider(settings)
+        warnings: list[RasterWarning] = []
         if provider.name == "mock":
             tiles = [OcrTile(id="full_image", bbox_px=(0, 0, image.width, image.height))]
             text_blocks = provider.extract_text_blocks(
@@ -69,28 +78,22 @@ def run_raster_pipeline(
                 OcrHints(
                     document_id=document_id,
                     source_file=source_path.name,
+                    page_index=page_index,
                     render_dpi=settings.raster_render_dpi,
                 ),
             )
         else:
-            tiles = generate_ocr_tiles(
+            text_blocks, tiles, warnings = extract_tiled_ocr(
                 image,
-                tile_size_px=settings.ocr_tile_size_px,
-                overlap_px=settings.ocr_tile_overlap_px,
-                max_tiles=settings.ocr_max_tiles,
+                provider,
+                OcrHints(
+                    document_id=document_id,
+                    source_file=source_path.name,
+                    page_index=page_index,
+                    render_dpi=settings.raster_render_dpi,
+                ),
+                settings,
             )
-            text_blocks = []
-            for tile in tiles:
-                crop = image.crop(tile.bbox_px)
-                blocks = provider.extract_text_blocks(
-                    crop,
-                    OcrHints(
-                        document_id=document_id,
-                        source_file=source_path.name,
-                        render_dpi=settings.raster_render_dpi,
-                    ),
-                )
-                text_blocks.extend(blocks)
         text_blocks = merge_ocr_blocks(text_blocks)
         segmenter = _segmenter(settings)
         try:
@@ -100,23 +103,34 @@ def run_raster_pipeline(
                 hints=SegmentationHints(document_id=document_id, source_file=source_path.name),
             )
             segmentation_audit = segmenter.audit()
-            warnings: list[RasterWarning] = []
         except Exception as exc:
             segmentation_candidates = []
-            segmentation_audit = SegmentationAudit(
-                provider=settings.segmentation_provider,
-                available=False,
-                errors=[str(exc)],
+            segmentation_audit = segmenter.audit()
+            segmentation_audit.available = False
+            if str(exc) not in segmentation_audit.errors:
+                segmentation_audit.errors.append(str(exc))
+            warnings.extend(
+                [
+                    RasterWarning(
+                        code=(
+                            "FALCON_SEGMENTATION_UNAVAILABLE"
+                            if settings.segmentation_provider == "self_hosted_falcon"
+                            else "SEGMENTATION_UNAVAILABLE"
+                        ),
+                        message=(
+                            f"Segmentation provider '{settings.segmentation_provider}' failed; "
+                            "raster pipeline continued with review-required fallback candidates."
+                        ),
+                    )
+                ]
             )
-            warnings = [
+        if settings.segmentation_provider == "gemini_er" and not segmentation_candidates:
+            warnings.append(
                 RasterWarning(
-                    code="FALCON_SEGMENTATION_UNAVAILABLE",
-                    message=(
-                        "Falcon Perception service was not configured or not ready; "
-                        "raster pipeline continued with OpenCV-derived candidates."
-                    ),
+                    code="GEMINI_ER_NO_CONTOUR",
+                    message="No image-supported Gemini ER contour found; review the fallback.",
                 )
-            ]
+            )
 
     primitives = extract_image_geometry(Path(preprocess_outputs["line_enhanced"]), sheet_regions)
     candidate_document = generate_raster_candidates(
@@ -142,9 +156,24 @@ def run_raster_pipeline(
         ocr_cache_hits=audit.cache_hits,
         ocr_cache_misses=audit.cache_misses,
         segmentation_provider=segmentation_audit.provider,
-        falcon_live_calls=segmentation_audit.live_calls,
-        falcon_cache_hits=segmentation_audit.cache_hits,
-        falcon_cache_misses=segmentation_audit.cache_misses,
+        segmentation_live_calls=segmentation_audit.live_calls,
+        segmentation_cache_hits=segmentation_audit.cache_hits,
+        segmentation_cache_misses=segmentation_audit.cache_misses,
+        falcon_live_calls=(
+            segmentation_audit.live_calls
+            if segmentation_audit.provider == "self_hosted_falcon"
+            else 0
+        ),
+        falcon_cache_hits=(
+            segmentation_audit.cache_hits
+            if segmentation_audit.provider == "self_hosted_falcon"
+            else 0
+        ),
+        falcon_cache_misses=(
+            segmentation_audit.cache_misses
+            if segmentation_audit.provider == "self_hosted_falcon"
+            else 0
+        ),
         candidate_count=candidate_document.summary.candidate_count,
         selected_candidate_id=candidate_document.candidate_regions[0].id,
         human_review_status="required",
@@ -271,11 +300,17 @@ def _production_schema(
 
 
 def _segmenter(settings: Settings) -> Segmenter:
+    if settings.segmentation_provider == "gemini_er":
+        return GeminiErSegmenter(settings)
     if settings.segmentation_provider == "mock":
         return MockSegmenter()
     if settings.segmentation_provider == "self_hosted_falcon":
         return SelfHostedFalconSegmenter(settings)
-    return NoopSegmenter()
+    if settings.segmentation_provider == "noop":
+        return NoopSegmenter()
+    if settings.segmentation_provider == "future_api":
+        return FutureManagedApiSegmenter()
+    raise ValueError(f"Unsupported segmentation provider: {settings.segmentation_provider}")
 
 
 def _falcon_prompts() -> list[str]:

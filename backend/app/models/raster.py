@@ -28,7 +28,7 @@ RasterPrimitiveType = Literal[
     "fall_arrow",
     "scale_bar",
 ]
-SegmentationProviderName = Literal["noop", "mock", "self_hosted_falcon", "future_api"]
+SegmentationProviderName = Literal["noop", "mock", "self_hosted_falcon", "future_api", "gemini_er"]
 
 
 class RasterSheetRegion(BaseModel):
@@ -145,6 +145,9 @@ class RasterAudit(BaseModel):
     ocr_cache_hits: int
     ocr_cache_misses: int
     segmentation_provider: str
+    segmentation_live_calls: int = 0
+    segmentation_cache_hits: int = 0
+    segmentation_cache_misses: int = 0
     falcon_live_calls: int
     falcon_cache_hits: int
     falcon_cache_misses: int
@@ -186,3 +189,4 @@ class ApprovalResponse(BaseModel):
 
 class ExtractRequest(BaseModel):
     force_pipeline: Literal["vector_first", "raster_first"] | None = None
+    page_index: int = Field(default=0, ge=0, strict=True)

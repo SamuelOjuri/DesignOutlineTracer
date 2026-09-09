@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     allow_gemini_pro_escalation: bool = False
     gemini_pro_escalation_confidence_threshold: float = 0.75
     segmentation_provider: str = "noop"
+    gemini_er_model: str = "gemini-robotics-er-2-preview"
+    gemini_er_max_image_dimension: int = Field(default=2048, ge=128, le=8192)
+    gemini_er_cache_dir: Path = Path("cache/gemini_er")
     falcon_perception_base_url: str | None = None
     falcon_perception_timeout_seconds: int = 60
     falcon_perception_max_image_dimension: int = 1024

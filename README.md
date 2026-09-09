@@ -50,6 +50,21 @@ npm run dev
 - Click on "New codespace" to launch a new Codespace environment.
 - Edit files directly within the Codespace and commit and push your changes once you're done.
 
+## New Build Automated Extraction
+
+Set `VITE_ENABLE_BACKEND=1` and optionally `VITE_BACKEND_URL` (default:
+`http://localhost:8000`) before starting Vite. See [backend setup](backend/README.md)
+for running the API and configuring OCR providers.
+
+Upload a PDF, select the roof-plan page, and choose **Use Automated Extraction**.
+New Build uploads the original PDF, then requests raster-first extraction of only
+the selected page. The returned outline, holes/rooflights, and outlets are mapped
+into the preview canvas for review. Backend failures retain the manual tracing
+fallback. Raster output remains approximate and requires human review; the
+existing backend mock OCR/default calibration limitations still apply.
+
+Run frontend regression tests with `npm test` and build with `npm run build`.
+
 ## What technologies are used for this project?
 
 This project is built with:
