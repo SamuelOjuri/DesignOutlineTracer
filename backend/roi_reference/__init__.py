@@ -1,0 +1,1 @@
+"""Offline-first Gemini reference tooling, independent of the legacy backend."""

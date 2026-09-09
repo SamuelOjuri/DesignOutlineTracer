@@ -161,6 +161,13 @@ separate cleanup review boundary.
 
 ## Next Development Scope
 
+Phase 1 now includes an isolated, offline-first Python reference runner and
+evaluation tooling. See the [Phase 1 runbook](docs/roi-evaluation/README.md) for
+the pinned environment, tests, explicit single-call live command, input variants,
+and domain-review protocol. No Gemini call was made during implementation;
+model/project access and a domain-reviewed real evaluation set remain pending.
+The tool does not enable frontend recommendations or import the old backend.
+
 Use the references in `docs/roi-logic/` for the new Gemini 3.6 Flash annotation
 workflow. Introduce reviewable ROI recommendations first, followed by
 ROI-associated penetration and outlet suggestions. Do not interpret a suggested

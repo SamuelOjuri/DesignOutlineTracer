@@ -41,6 +41,8 @@ __pycache__/
 venv/
 .venv/
 backend/storage/
+/backend/roi_reference/private/
+/docs/roi-evaluation/private/
 
 # Legacy backend only; allow the planned backend/roi_app package
 /backend/app/

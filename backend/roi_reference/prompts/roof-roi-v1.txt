@@ -1,0 +1,4 @@
+
+Annotate the proposed flat roof / tapered insulation scope area(s) in the roof plan
+
+Do not return a box for the whole drawing sheet or the whole roof plan. Return only the specific proposed flat roof / tapered insulation scope area(s).

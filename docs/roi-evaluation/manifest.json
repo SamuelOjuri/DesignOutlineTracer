@@ -1,0 +1,70 @@
+{
+  "schema_version": "evaluation-v1",
+  "policy_status": "draft",
+  "policy_review": null,
+  "original_jpeg_status": "unavailable",
+  "cases": [
+    {
+      "id": "tp17202-pdfjs-derivative",
+      "document_id": "tp17202",
+      "split": "development",
+      "tags": ["multiple_disconnected", "boundary_outlet", "dense_notes"],
+      "input_variant": "pdfjs_page",
+      "image_path": null,
+      "source_sha256": null,
+      "status": "awaiting_source",
+      "review": null,
+      "expected": {"roof_roi": null, "penetration": null, "rainwater_outlet": null}
+    },
+    {
+      "id": "unmarked-nonrectangular",
+      "document_id": "pending-unmarked-development",
+      "split": "development",
+      "tags": ["unmarked", "nonrectangular", "interior_rooflight", "small_vent"],
+      "input_variant": "pdfjs_page",
+      "image_path": null,
+      "status": "awaiting_source",
+      "expected": {"roof_roi": null, "penetration": null, "rainwater_outlet": null}
+    },
+    {
+      "id": "rotated-ambiguous-scope",
+      "document_id": "pending-rotated-development",
+      "split": "development",
+      "tags": ["rotation", "ambiguous_scope", "dense_notes"],
+      "input_variant": "pdfjs_page",
+      "image_path": null,
+      "status": "awaiting_source",
+      "expected": {"roof_roi": null, "penetration": null, "rainwater_outlet": null}
+    },
+    {
+      "id": "development-no-targets",
+      "document_id": "pending-negative-development",
+      "split": "development",
+      "tags": ["no_targets", "unmarked"],
+      "input_variant": "pdfjs_page",
+      "image_path": null,
+      "status": "awaiting_source",
+      "expected": {"roof_roi": null, "penetration": null, "rainwater_outlet": null}
+    },
+    {
+      "id": "held-out-unmarked-positive",
+      "document_id": "pending-positive-held-out",
+      "split": "held_out",
+      "tags": ["unmarked", "multiple_disconnected", "boundary_outlet", "small_vent"],
+      "input_variant": "pdfjs_page",
+      "image_path": null,
+      "status": "awaiting_source",
+      "expected": {"roof_roi": null, "penetration": null, "rainwater_outlet": null}
+    },
+    {
+      "id": "held-out-no-targets",
+      "document_id": "pending-negative-held-out",
+      "split": "held_out",
+      "tags": ["no_targets", "unmarked"],
+      "input_variant": "pdfjs_page",
+      "image_path": null,
+      "status": "awaiting_source",
+      "expected": {"roof_roi": null, "penetration": null, "rainwater_outlet": null}
+    }
+  ]
+}

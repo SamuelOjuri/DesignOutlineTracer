@@ -1,0 +1,38 @@
+{
+  "schema_version": "response-fixtures-v1",
+  "evidence": "synthetic_contract_only",
+  "cases": [
+    {
+      "id": "disconnected-roof-positive",
+      "task": "roof_roi",
+      "response": "```json\n[{\"label\":\"Synthetic west roof\",\"box_2d\":[100,100,400,350]},{\"label\":\"Synthetic east roof\",\"box_2d\":[500,600,800,900]}]\n```",
+      "expected": [
+        {"label": "Synthetic west roof", "box_2d": [100, 100, 400, 350]},
+        {"label": "Synthetic east roof", "box_2d": [500, 600, 800, 900]}
+      ]
+    },
+    {"id": "roof-negative", "task": "roof_roi", "response": "[]", "expected": []},
+    {
+      "id": "rooflight-and-small-vent-positive",
+      "task": "penetration",
+      "parent_ids": ["west", "east"],
+      "response": "[{\"label\":\"Synthetic rooflight\",\"box_2d\":[200,200,240,250],\"roi_id\":\"west\",\"subtype\":\"rooflight\"},{\"label\":\"Synthetic vent\",\"box_2d\":[600.5,700,604,704],\"roi_id\":\"east\",\"subtype\":\"vent\"}]",
+      "expected": [
+        {"label": "Synthetic rooflight", "box_2d": [200, 200, 240, 250], "roi_id": "west", "subtype": "rooflight"},
+        {"label": "Synthetic vent", "box_2d": [600.5, 700, 604, 704], "roi_id": "east", "subtype": "vent"}
+      ]
+    },
+    {"id": "out-of-roof-penetration-negative", "task": "penetration", "parent_ids": ["west"], "response": "[]", "expected": []},
+    {
+      "id": "boundary-outlet-positive",
+      "task": "rainwater_outlet",
+      "parent_ids": ["west"],
+      "response": "[{\"label\":\"Synthetic boundary outlet\",\"box_2d\":[397,345,405,355],\"roi_id\":\"west\",\"subtype\":\"parapet_outlet\"}]",
+      "expected": [{"label": "Synthetic boundary outlet", "box_2d": [397, 345, 405, 355], "roi_id": "west", "subtype": "parapet_outlet"}]
+    },
+    {"id": "unrelated-rwp-negative", "task": "rainwater_outlet", "parent_ids": ["west"], "response": "[]", "expected": []},
+    {"id": "malformed-output", "task": "roof_roi", "response": "[{", "expected_error": "invalid_json"},
+    {"id": "inverted-box", "task": "roof_roi", "response": "[{\"label\":\"Invalid\",\"box_2d\":[500,100,400,350]}]", "expected_error": "invalid_box"},
+    {"id": "unknown-parent", "task": "penetration", "parent_ids": ["west"], "response": "[{\"label\":\"Synthetic vent\",\"box_2d\":[100,100,110,110],\"roi_id\":\"other\",\"subtype\":\"vent\"}]", "expected_error": "unknown_parent"}
+  ]
+}

@@ -4,7 +4,7 @@
 
 - Branch: `region-of-interest`.
 - Plan date: 2026-09-09.
-- Status: Phase 0 regression harness implemented and verified; frontend checkpoint prepared for review/commit. Gemini annotation integration has not started.
+- Status: Phase 0 baseline is present on this branch. Phase 1 offline reference runner, contracts and evaluation tooling are implemented; live model access and domain-reviewed dataset gates remain pending. Frontend annotation integration has not started.
 - Model: Gemini 3.6 Flash, using the configured identifier `gemini-3.6-flash` demonstrated in the supplied prototype.
 - Scope: enhance the existing New Build workflow with reviewable region-of-interest (ROI), roof-penetration, and rainwater-outlet recommendations.
 
@@ -237,6 +237,17 @@ preserved artifacts, and the current dependency/lint debt.
 ### Phase 1: Establish The Gemini Reference And Evaluation Set
 
 **Depends on:** Phase 0.
+
+**Delivery update (2026-09-09):** An isolated, explicitly invoked runner under
+`backend/roi_reference/` now provides the original simple ROI reference profile,
+separate JSON/thinking experiments, draft conditioned child prompts, bounded image
+preparation, private run provenance, strict parsing, and an offline evaluation CLI.
+Dependencies are pinned separately from the legacy backend. Synthetic contract
+fixtures and a pending-source/review manifest are included. No live Gemini call
+was made; the original JPEG is unavailable locally, and the sample/category policy
+and real positive/negative held-out set still require domain adjudication. These
+are open exit criteria, not completed accuracy evidence. See the
+[Phase 1 runbook](roi-evaluation/README.md) for commands and review requirements.
 
 **Implementation**
 

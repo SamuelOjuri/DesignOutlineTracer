@@ -1,0 +1,21 @@
+{
+  "version": "reference-v1",
+  "model": "gemini-3.6-flash",
+  "temperature": 0.5,
+  "max_image_side": 1024,
+  "max_input_bytes": 20971520,
+  "max_decoded_pixels": 40000000,
+  "max_output_tokens": 4096,
+  "timeout_ms": 60000,
+  "attempts": 1,
+  "api_versions": {"developer": "v1beta", "vertex": "v1"},
+  "coordinate_order": ["ymin", "xmin", "ymax", "xmax"],
+  "coordinate_range": [0, 1000],
+  "schema_version": "reference-boxes-v1",
+  "policy_version": "scope-policy-draft-v1",
+  "profiles": {
+    "reference": {"structured_json": false, "thinking_config": null},
+    "json": {"structured_json": true, "thinking_config": null},
+    "json-minimal": {"structured_json": true, "thinking_config": {"thinking_level": "MINIMAL"}}
+  }
+}
