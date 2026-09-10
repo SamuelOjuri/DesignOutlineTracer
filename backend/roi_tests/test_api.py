@@ -150,6 +150,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                                      accepted_rois=[{**parent, "id": "other"}])
         self.assertEqual(response.json()["error"]["code"], "malformed_output")
 
+    async def test_two_scope_replay_preserves_boxes_and_prompt_provenance(self):
+        await self.upload()
+        boxes = [[288, 202, 461, 276], [496, 202, 668, 276]]
+        self.provider.result = ProviderResult(json.dumps([
+            {"label": "proposed flat roof / tapered insulation scope area", "box_2d": box}
+            for box in boxes
+        ]))
+        response = await self.detect()
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["prompt_version"], "roof-roi-v2")
+        self.assertEqual(result["run"]["prompt_version"], "roof-roi-v2")
+        self.assertEqual([annotation["box_2d"] for annotation in result["annotations"]], boxes)
+        self.assertEqual([annotation["proposed_box_2d"] for annotation in result["annotations"]], boxes)
+        self.assertEqual(len({annotation["id"] for annotation in result["annotations"]}), 2)
+        for annotation in result["annotations"]:
+            self.assertEqual(annotation["review_status"], "suggested")
+            self.assertEqual(annotation["page_id"], "page")
+        self.assertEqual(len(self.provider.calls), 1)
+        self.assertIn("Do not return a box for the whole drawing sheet or the whole roof plan.", self.provider.calls[0][1])
+        cached = (await self.detect(request_id="replay-cached")).json()
+        self.assertTrue(cached["run"]["cached"])
+        self.assertEqual(cached["annotations"], result["annotations"])
+        self.assertEqual(len(self.provider.calls), 1)
+
     async def test_empty_partial_truncation_and_bounded_follow_up(self):
         await self.upload()
         self.provider.result = ProviderResult("[]")

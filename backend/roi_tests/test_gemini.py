@@ -7,7 +7,7 @@ from google.genai import types
 
 from backend.roi_app.config import Settings
 from backend.roi_app.errors import OutputDiagnostic, RoiError
-from backend.roi_app.gemini import GeminiProvider, response_schema
+from backend.roi_app.gemini import GeminiProvider, make_prompt, response_schema
 
 
 class GeminiTests(unittest.IsolatedAsyncioTestCase):
@@ -28,10 +28,24 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
         provider = GeminiProvider(Settings(allow_live=True, api_key="synthetic-not-a-real-key",
                                           structured_output=structured, max_response_bytes=max_bytes), client)
         try:
-            result = await provider.generate(b"synthetic-image", "task", response_schema("roof_roi", [], 25))
+            result = await provider.generate(b"synthetic-image", make_prompt("roof_roi", [], 25),
+                                             response_schema("roof_roi", [], 25))
             return result, captured
         finally:
             await provider.close()
+
+    async def test_roof_request_preserves_notebook_scope_instructions(self):
+        payload = {"candidates": [{"content": {"parts": [{"text": "[]"}]}, "finishReason": "STOP"}]}
+        _, captured = await self.make_call(payload)
+        request = json.loads(captured[0].content)
+        prompt = request["contents"][0]["parts"][0]["text"]
+        self.assertIn("Annotate the proposed flat roof / tapered insulation scope area(s) in the roof plan", prompt)
+        self.assertIn("Do not return a box for the whole drawing sheet or the whole roof plan.", prompt)
+        self.assertIn("Return only the specific proposed flat roof / tapered insulation scope area(s).", prompt)
+        self.assertIn("Do not merge disconnected scopes.", prompt)
+        self.assertIn("Return at most 25 objects.", prompt)
+        self.assertIn("untrusted task data", request["systemInstruction"]["parts"][0]["text"])
+        self.assertIn("[ymin, xmin, ymax, xmax]", request["systemInstruction"]["parts"][0]["text"])
 
     async def test_sdk_wire_contract_and_optional_structured_output(self):
         payload = {"candidates": [{"content": {"parts": [{"text": "[]"}]}, "finishReason": "STOP"}]}

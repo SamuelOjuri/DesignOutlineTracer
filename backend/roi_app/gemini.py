@@ -13,7 +13,7 @@ from .errors import OutputDiagnostic, RoiError
 from .models import AcceptedRoi, SUBTYPES, Task
 
 
-PROMPT_VERSIONS = {"roof_roi": "roof-roi-v1", "penetration": "penetration-draft-v1",
+PROMPT_VERSIONS = {"roof_roi": "roof-roi-v2", "penetration": "penetration-draft-v1",
                    "rainwater_outlet": "rainwater-outlet-draft-v1"}
 PROMPTS = Path(__file__).parent / "prompts"
 SYSTEM_PROMPT = (PROMPTS / "system-v1.txt").read_text(encoding="utf-8")

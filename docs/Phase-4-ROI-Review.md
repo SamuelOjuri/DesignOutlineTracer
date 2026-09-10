@@ -129,6 +129,57 @@ pass, including CRLF-fenced output through the API, multi-chunk stream assembly,
 safe categorized logs, unchanged error envelopes, retained accepted work, and
 explicit-only retries. No live Gemini request was made to verify this fix.
 
+## Notebook And App Scope Comparison
+
+On 2026-09-10, the user supplied a successful notebook result with two separate
+scope boxes for TP17202, while the app screenshot showed one broad recommendation
+covering the roof plan. The app reported a successful response, so this is a
+scope-selection discrepancy, not the earlier `malformed_output` failure.
+
+The selected notebook ROI cell explicitly says:
+
+```text
+Do not return a box for the whole drawing sheet or the whole roof plan. Return only the specific proposed flat roof / tapered insulation scope area(s).
+```
+
+The app's `roof-roi-v1` only excluded unrelated drawing-sheet content and omitted
+that explicit whole-roof restriction. `roof-roi-v2.txt` restores the quoted
+instruction while preserving independent scopes, rooflight handling and the
+distinction between working boxes and exact geometry. `PROMPT_VERSIONS` now
+selects v2; v1 and the notebook remain unchanged. No fixed number of roofs,
+sample-specific coordinates, color heuristic or size-based rejection was added
+to detection logic. Run provenance reports `roof-roi-v2`, and cache identity
+already includes both prompt version and prompt hash.
+
+Other request differences remain deliberately visible:
+
+| Input Or Setting | Notebook | App |
+| --- | --- | --- |
+| Source image | Local JPEG, observed 2482x1755 | Pristine PDF.js page raster uploaded as PNG |
+| Preparation | Aspect-preserving LANCZOS thumbnail; observed 1024x724 | Aspect-preserving LANCZOS thumbnail, maximum side 1024, white RGB PNG |
+| Model / temperature | `gemini-3.6-flash` / 0.5 in the supplied ROI cell | Same configured model / 0.5 |
+| Instructions / output | Notebook system text and explicit safety setting; no output-token cap in the shown call | App system safeguards, strict schema validation, configured output-token cap, optional structured output, streamed response |
+
+The notebook's JPEG is now available locally, but the two requests' exact input
+pixels and complete provider outputs have not been compared. Model variability
+also remains possible. Restoring the missing instruction is not proof that it
+alone caused the broad box or that the revised prompt produces correct live
+results. Do not weaken the app's system safeguards to make the calls identical.
+
+Offline verification: a mocked SDK-wire test failed for v1's missing instruction
+and passed after selecting v2. Replaying the two box coordinates visible in the
+notebook screenshot through a fake provider preserves two distinct suggested
+annotations, their original geometry and cached IDs. This is a response-handling
+fixture, not a detection-accuracy test or adjudicated architectural ground truth.
+All 41 backend tests and 15 focused client/reconciliation tests pass.
+
+An intentional API restart is needed to load v2 and resets the in-memory call
+budget. For an approved live retest, keep the one-attempt limits and check the
+detection response's `prompt_version` is `roof-roi-v2`. Reruns preserve existing
+annotations: reject or delete the earlier broad proposal when comparing the new
+suggestions. The assistant did not restart the server, modify budgets, execute
+the notebook or make a live Gemini request for this comparison.
+
 ## Verification
 
 ```powershell
