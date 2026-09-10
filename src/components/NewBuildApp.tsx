@@ -15,8 +15,12 @@ import {
   RoofOutline,
   DrawingScale,
 } from "@/types/roof";
-import type { PageDrawing, RenderedPdfPage } from "@/types/roi";
+import type { Box2D, PageDrawing, RenderedPdfPage } from "@/types/roi";
 import { useRoiSession } from "@/hooks/useRoiSession";
+import { useRoiDetection } from "@/hooks/useRoiDetection";
+import { roiClient } from "@/integrations/roi/client";
+import { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
+import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "@/utils/roiDrawing";
 import { FileUp } from "lucide-react";
 
@@ -24,7 +28,13 @@ const ignoreRenderedCanvas = () => undefined;
 
 export const NewBuildApp = () => {
   const [currentStep, setCurrentStep] = useState<NewBuildStep>("upload");
-  const { state, dispatch, activePage, getActivePage } = useRoiSession();
+  const session = useRoiSession();
+  const { state, dispatch, activePage, getActivePage } = session;
+  const detection = useRoiDetection(session);
+  const [selectedRoiId, setSelectedRoiId] = useState<string | null>(null);
+  const [addingRoi, setAddingRoi] = useState(false);
+  const roofRegions = activePage?.annotations.filter((annotation) => annotation.kind === "roof_roi") ?? [];
+  const acceptedRegions = roofRegions.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current");
   const canvases = useRef(new Map<string, HTMLCanvasElement>());
   const [uploadScale, setUploadScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
   const [selectionPending, setSelectionPending] = useState(false);
@@ -63,6 +73,8 @@ export const NewBuildApp = () => {
     dispatch({ type: "activate", source, scale: uploadScale });
     setSelectionPending(false);
     setSelectedOutlet(null);
+    setSelectedRoiId(null);
+    setAddingRoi(false);
   };
 
   const handlePageSelectionStart = () => {
@@ -132,12 +144,31 @@ export const NewBuildApp = () => {
       polygonPoints: points,
     }));
 
-  const stepOrder: NewBuildStep[] = ["upload", "paint", "outlets", "details"];
+  const stepOrder: NewBuildStep[] = roiClient.enabled ? ["upload", "roi", "paint", "outlets", "details"]
+    : ["upload", "paint", "outlets", "details"];
+
+  const editRoi = (id: string, box_2d: Box2D) => {
+    if (activePage) dispatch({ type: "review", page_id: activePage.source.page_id, id, patch: { box_2d } });
+  };
+
+  const addRoi = (box: Box2D) => {
+    if (!activePage) return;
+    const id = crypto.randomUUID();
+    dispatch({ type: "add", page_id: activePage.source.page_id, annotation: {
+      id, page_id: activePage.source.page_id, kind: "roof_roi", label: `Roof area ${roofRegions.length + 1}`,
+      box_2d: box, proposed_box_2d: box, roi_id: null, origin: "manual", review_status: "accepted", validity: "current",
+      revision: 1, edits: [], warnings: [],
+    } });
+    setSelectedRoiId(id);
+    setAddingRoi(false);
+  };
 
   const handleNext = () => {
+    detection.cancel();
+    setAddingRoi(false);
     if (showAdditionalUpload) {
       setShowAdditionalUpload(false);
-      setCurrentStep("paint");
+      setCurrentStep(roiClient.enabled ? "roi" : "paint");
       return;
     }
     const idx = stepOrder.indexOf(currentStep);
@@ -153,6 +184,8 @@ export const NewBuildApp = () => {
   };
 
   const handlePrev = () => {
+    detection.cancel();
+    setAddingRoi(false);
     if (showAdditionalUpload) return cancelAdditionalUpload();
     const idx = stepOrder.indexOf(currentStep);
     if (idx > 0) setCurrentStep(stepOrder[idx - 1]);
@@ -163,6 +196,7 @@ export const NewBuildApp = () => {
     if (showAdditionalUpload) return activePage.source.page_id !== additionalReturnPage.current;
     switch (currentStep) {
       case "upload":
+      case "roi":
         return pdfCanvas !== null;
       case "paint":
         return roofOutlines.length > 0 && roofOutlines.some((o) => o.length > 2);
@@ -179,6 +213,10 @@ export const NewBuildApp = () => {
     switch (currentStep) {
       case "upload":
         return null;
+      case "roi":
+        return pdfCanvas ? <RoiReviewCanvas key={activePage?.source.page_id} pdfCanvas={pdfCanvas} annotations={roofRegions}
+          selectedId={selectedRoiId} adding={addingRoi} onAddingChange={setAddingRoi} onSelect={setSelectedRoiId}
+          onEdit={editRoi} onAdd={addRoi} /> : null;
       case "paint":
         return pdfCanvas ? (
           <PaintBucketCanvas
@@ -188,6 +226,8 @@ export const NewBuildApp = () => {
             onHolesExtracted={handleHolesExtracted}
             roofOutlines={roofOutlines}
             interiorHoles={interiorHoles}
+            acceptedRegions={roiClient.enabled ? acceptedRegions : undefined}
+            regionLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
           />
         ) : null;
       case "outlets":
@@ -237,6 +277,10 @@ export const NewBuildApp = () => {
   };
 
   const renderSidebar = () => {
+    if (currentStep === "roi" && activePage) {
+      return <RoiReviewSidebar page={activePage} selectedId={selectedRoiId} adding={addingRoi}
+        onSelect={setSelectedRoiId} onAddingChange={setAddingRoi} dispatch={dispatch} detection={detection} />;
+    }
     if (currentStep === "upload") {
       return <PdfUpload onPdfRendered={ignoreRenderedCanvas} onPageRendered={handlePageRendered}
         onPageSelectionStart={handlePageSelectionStart} drawingScale={drawingScale} onDrawingScaleChange={handleDrawingScaleChange} />;
@@ -289,17 +333,17 @@ export const NewBuildApp = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      <NewBuildStepHeader currentStep={currentStep} />
+      <NewBuildStepHeader currentStep={currentStep} steps={stepOrder} />
 
-      <div className="flex h-[calc(100vh-80px)]">
+      <div className={`flex h-[calc(100vh-80px)] ${currentStep === "roi" ? "flex-col md:flex-row" : ""}`}>
         <div
           className={`${
-            currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
-          } border-r border-border bg-card p-4 overflow-y-auto`}
+            currentStep === "roi" ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
+          } shrink-0 border-r border-border bg-card p-4 ${currentStep === "roi" ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}
         >
-          {renderSidebar()}
+          <div className={currentStep === "roi" ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
 
-          <div className="mt-6 flex gap-2">
+          <div className="mt-6 flex gap-2 shrink-0">
             <Button
               variant="outline"
               onClick={handlePrev}
@@ -311,14 +355,14 @@ export const NewBuildApp = () => {
             <Button
               onClick={handleNext}
               disabled={currentStep === "details" || !canProceed()}
-              className="flex-1"
+              className="flex-1 min-w-0 whitespace-normal h-auto min-h-10 py-2"
             >
-              {currentStep === "details" ? "Complete" : "Next"}
+              {currentStep === "details" ? "Complete" : currentStep === "roi" ? "Define roof manually" : "Next"}
             </Button>
           </div>
         </div>
 
-        <div className={`flex-1 p-4 flex overflow-hidden ${currentStep === "paint" || currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>
+        <div className={`flex-1 min-w-0 p-4 flex overflow-hidden ${currentStep === "roi" ? "flex-col min-h-[360px] md:min-h-0" : currentStep === "paint" || currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>
           {currentStep === "upload" && pdfCanvas && (
             <div className="text-center">
               <p className="text-muted-foreground mb-4">
@@ -336,7 +380,7 @@ export const NewBuildApp = () => {
               Upload a PDF to get started
             </p>
           )}
-          {(currentStep === "paint" || currentStep === "outlets") &&
+          {(currentStep === "roi" || currentStep === "paint" || currentStep === "outlets") &&
             renderMainContent()}
           {currentStep === "details" && (
             <RoofIllustrationCanvas

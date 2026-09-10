@@ -3,6 +3,8 @@ import { Point } from "@/types/roof";
 import { floodFill, floodFillPreview, eraseFill, extractMultipleOutlines, extractInteriorHoles, buildEdgeMap, buildRegionMap } from "@/utils/floodFill";
 import { findClosestEdge, findClosestVertex, movePolygonEdge, rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
 import { Button } from "@/components/ui/button";
+import type { RoiAnnotation } from "@/types/roi";
+import { AnnotationOverlay } from "./AnnotationOverlay";
 import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2 } from "lucide-react";
 
 type PaintTool = "fill" | "cutout" | "adjust";
@@ -13,6 +15,8 @@ interface PaintBucketCanvasProps {
   onHolesExtracted?: (holes: Point[][]) => void;
   roofOutlines: Point[][];
   interiorHoles?: Point[][];
+  acceptedRegions?: RoiAnnotation[];
+  regionLabels?: Record<string, string>;
 }
 
 const FILL_COLOR: [number, number, number, number] = [220, 50, 50, 160];
@@ -26,6 +30,8 @@ export const PaintBucketCanvas = ({
   onHolesExtracted,
   roofOutlines,
   interiorHoles = [],
+  acceptedRegions = [],
+  regionLabels,
 }: PaintBucketCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -963,6 +969,10 @@ export const PaintBucketCanvas = ({
             className={`absolute top-2 left-1/2 -translate-x-1/2 ${activeTool === "adjust" ? "cursor-move" : activeTool === "cutout" ? "cursor-pointer" : "cursor-crosshair"}`}
             style={{ pointerEvents: "auto" }}
           />
+          {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            <AnnotationOverlay annotations={acceptedRegions} labels={regionLabels} />
+          </div>}
         </div>
       </div>
 

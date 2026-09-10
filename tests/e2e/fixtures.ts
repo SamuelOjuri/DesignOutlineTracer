@@ -2,6 +2,7 @@ import { test as base, expect } from "@playwright/test";
 
 interface NetworkGuard {
   submissions: unknown[];
+  expectedConsoleErrors: string[];
 }
 
 export const test = base.extend<{ networkGuard: NetworkGuard }>({
@@ -9,6 +10,7 @@ export const test = base.extend<{ networkGuard: NetworkGuard }>({
     const submissions: unknown[] = [];
     const unexpectedRequests: string[] = [];
     const runtimeErrors: string[] = [];
+    const expectedConsoleErrors: string[] = [];
     const origin = new URL(baseURL!).origin;
     page.on("pageerror", (error) => runtimeErrors.push(error.message));
     page.on("console", (message) => {
@@ -36,9 +38,9 @@ export const test = base.extend<{ networkGuard: NetworkGuard }>({
         await route.abort("blockedbyclient");
       }
     });
-    await use({ submissions });
+    await use({ submissions, expectedConsoleErrors });
     expect(unexpectedRequests, "No backend, Gemini, or unmocked external requests").toEqual([]);
-    expect(runtimeErrors, "No uncaught browser errors").toEqual([]);
+    expect(runtimeErrors.filter((message) => !expectedConsoleErrors.includes(message)), "No unexpected browser errors").toEqual([]);
   }, { auto: true }],
 });
 

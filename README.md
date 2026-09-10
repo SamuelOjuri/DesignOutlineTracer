@@ -1,8 +1,8 @@
 # TaperedPlus Frontend Baseline
 
 The `region-of-interest` branch restores the original React 18, TypeScript,
-Vite 5, Tailwind, and shadcn/ui frontend. Gemini ROI recommendations are not
-implemented in this baseline.
+Vite 5, Tailwind, and shadcn/ui frontend. Opt-in ROI review and detection
+orchestration are implemented; live model and domain-quality gates remain open.
 
 ## Run Locally
 
@@ -26,8 +26,8 @@ locally from the installed dependency rather than a CDN.
   cutouts and outline adjustment, outlet/drainage editing, and project details.
 - `/refurbishment`: the original dimension-based roof drawing interface.
 
-New Build does not yet have automatic ROI, penetration, or outlet suggestions.
-Its existing cutout tool is manual, not an automatic penetration detector.
+New Build offers roof ROI recommendations when explicitly enabled. Penetration
+and outlet suggestions are not wired. The cutout tool remains manual.
 
 Phase 2 now preserves manual work per document/page for the lifetime of the open
 New Build screen. Re-uploading the same PDF bytes and selecting the same page
@@ -36,6 +36,19 @@ Next; combined illustration movement does not change original page coordinates.
 Sessions are not saved across reloads. See the
 [Phase 2 record](docs/Phase-2-Page-Sessions.md) for source-image, annotation,
 coordinate and review-state contracts.
+
+Phase 3 adds an isolated localhost-only annotation API and a feature-flagged,
+cancellable client. Live calls are disabled by default; model/project and
+domain-review gates remain pending. See the
+[Phase 3 record](docs/Phase-3-Annotation-API.md) for the independently locked Python
+environment, startup, limits, ownership contract, and offline tests.
+
+Phase 4 adds `upload -> roi -> paint -> outlets -> details` behind
+`VITE_ROI_ENABLED=true`. Explicit detection, reviewable boxes, manual regions,
+corrections, undo, and failure fallbacks preserve page-specific work. Accepted
+boxes are context, not filled roof geometry. See the
+[Phase 4 record](docs/Phase-4-ROI-Review.md) for startup, verification and limits.
+With the flag disabled, the original manual workflow requires no ROI service.
 
 The original project-details form still submits to an external Supabase email
 function. It is not required for editing, and no Supabase server code was
@@ -72,6 +85,7 @@ npm ci
 npx playwright install chromium
 npm test
 npm run test:e2e
+npm run test:e2e:roi
 npm run typecheck
 npm run build -- --outDir .vite/frontend-baseline-check
 npm run lint:tests
@@ -94,6 +108,8 @@ The normal `npm run build` command instead regenerates `dist/`.
   Refurbishment, using an in-memory, synthetic two-page PDF. No private drawing
   or backend service is required.
 - `npm run test:e2e:ui`: interactive Playwright runner.
+- `npm run test:e2e:roi`: opt-in ROI review browser suite with mocked API
+  responses, source-pixel checks and desktop/mobile review screenshots.
 - `npm run typecheck`: checks application code, tests, and test configuration.
 - `npm run lint:tests`: focused lint gate for the new harness. Full application
   lint remains a separate, unsuppressed inherited-debt report.
@@ -176,10 +192,12 @@ and domain-review protocol. No Gemini call was made during implementation;
 model/project access and a domain-reviewed real evaluation set remain pending.
 The tool does not enable frontend recommendations or import the old backend.
 
-Phase 2 frontend contracts and page-session integration are implemented without
-ROI networking. The next implementation phase is the isolated API, subject to
-the Phase 1 model-access and domain-review gates. The client-side image hash is
-provenance, not a substitute for server-side byte/dimension validation.
+Phase 2 frontend contracts and page-session integration and the Phase 3 isolated
+API/client are implemented. The API validates uploaded bytes, image dimensions,
+and ownership independently. Phase 4 now supplies opt-in ROI review and explicit
+detection orchestration, verified offline. The next implementation phase is
+penetration review after this ROI slice is reviewed. Phase 1 model-access and
+domain-review gates remain open; ordinary CI never calls the live model.
 
 Use the references in `docs/roi-logic/` for the new Gemini 3.6 Flash annotation
 workflow. Introduce reviewable ROI recommendations first, followed by

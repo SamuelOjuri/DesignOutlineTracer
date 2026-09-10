@@ -11,6 +11,7 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:e2e": "playwright test",
+        "test:e2e:roi": "playwright test --config playwright.roi.config.ts",
         "test:e2e:ui": "playwright test --ui",
         "lint:tests": "eslint src/test \"src/**/*.test.{ts,tsx}\" tests vitest.config.ts playwright.config.ts",
         "lint": "eslint .",

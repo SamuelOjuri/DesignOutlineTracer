@@ -4,7 +4,7 @@
 
 - Branch: `region-of-interest`.
 - Plan date: 2026-09-09.
-- Status: Phase 0 baseline and Phase 1 offline reference tooling are present. Phase 2 page identity, immutable source capture, coordinate helpers, session state and manual-editor integration are implemented. Live model access and domain-reviewed dataset gates remain pending; detection networking and recommendation UI have not started.
+- Status: Phases 0-3 provide the frontend baseline, offline reference tooling, page/session contracts, and isolated annotation API/client. Phase 4 now adds opt-in ROI review and explicit detection orchestration, verified with offline fixtures and browser flows. Live model access and domain-reviewed dataset gates remain pending; penetration/outlet recommendation wiring and persistence are not enabled.
 - Model: Gemini 3.6 Flash, using the configured identifier `gemini-3.6-flash` demonstrated in the supplied prototype.
 - Scope: enhance the existing New Build workflow with reviewable region-of-interest (ROI), roof-penetration, and rainwater-outlet recommendations.
 
@@ -296,6 +296,18 @@ editor boundaries and deferred work.
 
 **Depends on:** Phases 1 and 2.
 
+**Delivery update (2026-09-09):** `backend/roi_app/` now implements bounded
+upload/detection/deletion and nonbillable health, strict Pydantic/image validation,
+the exact-model provider adapter, session ownership, expiry, proposal caching,
+request deduplication, bounded transient retries and a single explicit partial
+follow-up. Dependencies are isolated and hash-locked. The opt-in frontend client
+validates responses and supports cancellation without changing manual screens or
+submission. 32 offline backend tests, 52 frontend tests, both desktop manual
+flows, type-check, build and lint (0 errors, 9 inherited warnings) pass. Live
+provider access/settings and domain-quality gates remain unverified; the service
+is deliberately localhost-only, with live calls disabled by default. See the
+[Phase 3 record](Phase-3-Annotation-API.md) for contracts, limits and setup.
+
 **Implementation**
 
 1. Create `backend/roi_app/` with a small application entry point, configuration, request/response models, image preparation, provider adapter, and task-specific prompt files. Keep its dependency/test setup isolated from leftover backend modules.
@@ -315,6 +327,20 @@ editor boundaries and deferred work.
 ### Phase 4: Deliver ROI Recommendations In New Build
 
 **Depends on:** Phases 2 and 3.
+
+**Delivery update (2026-09-09):** The feature flag now enables
+`upload -> roi -> paint -> outlets -> details`, including additional PDFs.
+Explicit pristine-image upload/detection supports cancellation, retry, empty and
+partial results, and one follow-up per upload incarnation. Independent overlays
+and sidebar review support acceptance, rejection, fractional drag/resize and
+numeric correction, manual regions, deletion, and undo. Reruns preserve prior
+decisions and flag possible duplicates or sheet-wide proposals. Accepted boxes
+remain passive paint context, never filled polygons. 66 frontend unit tests,
+three mocked ROI browser flows and both feature-disabled manual flows pass;
+type-check/build pass and lint remains at 0 errors / 9 inherited warnings.
+Desktop/mobile ROI screenshots and source-pixel checks are included, but the
+whole workflow remains a desktop-only localhost pilot. Live provider and
+domain-quality gates remain open. See the [Phase 4 record](Phase-4-ROI-Review.md).
 
 **Implementation**
 

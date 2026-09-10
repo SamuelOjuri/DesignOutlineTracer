@@ -1,5 +1,5 @@
 import type { DrawingScale } from "@/types/roof";
-import type { AnnotationKind, DetectionRequest, DetectionRun, PageDrawing, PageSession, RenderedPdfPage, RoiAnnotation, RoiSessionState } from "@/types/roi";
+import type { AnnotationKind, Box2D, DetectionRequest, DetectionRun, PageDrawing, PageSession, RenderedPdfPage, RoiAnnotation, RoiSessionState } from "@/types/roi";
 import { validateBox } from "./roiCoordinates";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
@@ -81,6 +81,16 @@ function matchesRequest(page: PageSession, request: DetectionRequest): boolean {
       : request.roi_revision === page.roi_revision && request.geometry_revision === page.geometry_revision);
 }
 
+function boxArea(box: Box2D): number {
+  return (box[2] - box[0]) * (box[3] - box[1]);
+}
+
+function similarBoxes(first: Box2D, second: Box2D): boolean {
+  const intersection = Math.max(0, Math.min(first[2], second[2]) - Math.max(first[0], second[0]))
+    * Math.max(0, Math.min(first[3], second[3]) - Math.max(first[1], second[1]));
+  return intersection / (boxArea(first) + boxArea(second) - intersection) >= 0.8;
+}
+
 export function roiSessionReducer(state: RoiSessionState, action: RoiSessionAction): RoiSessionState {
   if (action.type === "select") {
     return action.page_id === null || state.pages[action.page_id] ? selectPage(state, action.page_id) : state;
@@ -123,10 +133,15 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
     for (const candidate of action.annotations) {
       if (annotations.some((annotation) => annotation.id === candidate.id)) continue;
       const duplicate = annotations.some((annotation) => annotation.kind === candidate.kind
-        && annotation.roi_id === candidate.roi_id && JSON.stringify(annotation.box_2d) === JSON.stringify(candidate.box_2d));
+        && annotation.roi_id === candidate.roi_id && (similarBoxes(annotation.box_2d, candidate.box_2d)
+          || similarBoxes(annotation.proposed_box_2d, candidate.box_2d)));
       const proposal = checkAssociation({ ...cloneAnnotation(candidate), origin: "gemini", review_status: "suggested",
         proposed_box_2d: [...candidate.box_2d], edits: [], revision: page.revision + 1 }, annotations);
-      annotations.push(duplicate ? { ...proposal, warnings: [...proposal.warnings, "Possible duplicate; reconcile with existing annotation"] } : proposal);
+      if (duplicate) proposal.warnings.push("Possible duplicate; reconcile with existing annotation");
+      if (candidate.kind === "roof_roi" && boxArea(candidate.box_2d) >= 850000) {
+        proposal.warnings.push("Covers most of the sheet; verify the intended roof scope");
+      }
+      annotations.push(proposal);
     }
     return storePage(state, { ...page, pending, annotations, revision: page.revision + 1,
       runs: [...page.runs, { ...run, settings: { ...run.settings }, warnings: [...run.warnings] }] });
@@ -155,17 +170,17 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
       const restored = checkAssociation({ ...cloneAnnotation(entry.before), revision,
         validity: staleChild || current?.validity === "needs_review" ? "needs_review" : entry.before.validity,
         edits: [...(current?.edits ?? entry.before.edits), { revision, action: "undo" }] }, annotations);
-      annotations.push(restored);
+      annotations.splice(Math.min(entry.index, annotations.length), 0, restored);
     }
   } else if (action.type === "add") {
     if (action.annotation.page_id !== pageId || annotations.some((annotation) => annotation.id === action.annotation.id)) return state;
     const annotation = checkAssociation({ ...cloneAnnotation(action.annotation), revision }, annotations);
     annotations.push(annotation);
-    history.push({ id: annotation.id, before: null, roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
+    history.push({ id: annotation.id, index: annotations.length - 1, before: null, roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
   } else {
     const current = annotations.find((annotation) => annotation.id === action.id);
     if (!current) return state;
-    history.push({ id: current.id, before: cloneAnnotation(current), roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
+    history.push({ id: current.id, index: annotations.indexOf(current), before: cloneAnnotation(current), roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
     if (action.type === "remove") annotations = annotations.filter((annotation) => annotation.id !== action.id);
     else {
       const updated = checkAssociation(cloneAnnotation({ ...current, ...action.patch, revision,

@@ -4,11 +4,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PdfUpload } from "./newbuild/PdfUpload";
 import type { PaintBucketCanvas } from "./newbuild/PaintBucketCanvas";
+import type { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
 import type { NewBuildOutletCanvas } from "./newbuild/NewBuildOutletCanvas";
 import type { RoofIllustrationCanvas } from "./newbuild/RoofIllustrationCanvas";
 import type { ProjectDetailsForm } from "./ProjectDetailsForm";
 import { NewBuildApp } from "./NewBuildApp";
 import { syntheticPage } from "@/test/roi";
+import { roiClient } from "@/integrations/roi/client";
 
 const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 100, y: 300 }];
 const hole = [{ x: 150, y: 150 }, { x: 180, y: 150 }, { x: 180, y: 180 }];
@@ -33,15 +35,23 @@ vi.mock("./newbuild/PdfUpload", () => ({
 }));
 
 vi.mock("./newbuild/PaintBucketCanvas", () => ({
-  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles }: ComponentProps<typeof PaintBucketCanvas>) => (
+  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, acceptedRegions }: ComponentProps<typeof PaintBucketCanvas>) => (
     <>
       <output data-testid="paint-outlines">{JSON.stringify(roofOutlines)}</output>
+      <output data-testid="paint-regions">{JSON.stringify(acceptedRegions)}</output>
       <output data-testid="paint-holes">{JSON.stringify(interiorHoles)}</output>
       <button onClick={() => onOutlinesExtracted([outline.slice(0, 2)])}>Select invalid outline</button>
       <button onClick={() => onOutlinesExtracted([outline])}>Select roof</button>
       <button onClick={() => onHolesExtracted([hole])}>Add cutout</button>
     </>
   ),
+}));
+
+vi.mock("./newbuild/RoiReviewCanvas", () => ({
+  RoiReviewCanvas: ({ annotations, onAdd }: ComponentProps<typeof RoiReviewCanvas>) => <>
+    <output data-testid="review-regions">{JSON.stringify(annotations)}</output>
+    <button onClick={() => onAdd([100.25, 200.5, 400.75, 600.5])}>Add test region</button>
+  </>,
 }));
 
 vi.mock("./newbuild/NewBuildOutletCanvas", () => ({
@@ -77,10 +87,52 @@ vi.mock("./ProjectDetailsForm", () => ({
 }));
 
 beforeEach(() => {
+  roiClient.enabled = false;
   vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,AA==");
 });
 
 describe("manual New Build state", () => {
+  it("routes additional pages through ROI review and keeps each page's regions separate from manual geometry", async () => {
+    roiClient.enabled = true;
+    const upload = vi.spyOn(roiClient, "uploadPage");
+    const user = userEvent.setup();
+    render(<NewBuildApp />);
+    const next = () => user.click(screen.getByRole("button", { name: "Next" }));
+    const previous = () => user.click(screen.getByRole("button", { name: "Previous" }));
+    const paint = () => user.click(screen.getByRole("button", { name: "Define roof manually" }));
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    expect(screen.getByRole("heading", { name: "Roof Areas" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add test region" }));
+    const firstRegions = screen.getByTestId("review-regions").textContent!;
+    await paint();
+    expect(screen.getByTestId("paint-regions").textContent).toBe(firstRegions);
+    expect(screen.getByTestId("paint-outlines")).toHaveTextContent("[]");
+    expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Select roof" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Add test outlet" }));
+    await user.click(screen.getByRole("button", { name: "Upload Another PDF" }));
+    await user.click(screen.getByRole("button", { name: "Render PDF 2" }));
+    await next();
+    expect(screen.getByTestId("review-regions")).toHaveTextContent("[]");
+    await user.click(screen.getByRole("button", { name: "Add test region" }));
+    await paint();
+    expect(screen.getByTestId("paint-regions")).toHaveTextContent("page-2");
+    await previous();
+    await previous();
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await user.click(screen.getByRole("button", { name: "Change upload scale" }));
+    await next();
+    expect(screen.getByTestId("review-regions").textContent).toBe(firstRegions);
+    await paint();
+    expect(screen.getByTestId("paint-regions").textContent).toBe(firstRegions);
+    expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
+    await next();
+    expect(screen.getByTestId("editor-outlets")).toHaveTextContent("page-1");
+    expect(upload).not.toHaveBeenCalled();
+  });
+
   it("requires a rendered PDF and a polygon, then preserves manual work through navigation", async () => {
     const user = userEvent.setup();
     render(<NewBuildApp />);

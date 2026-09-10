@@ -96,7 +96,7 @@ export interface PageSession {
   pending: Partial<Record<AnnotationKind, DetectionRequest>>;
   used_request_ids: string[];
   runs: DetectionRun[];
-  history: { id: string; before: RoiAnnotation | null; roi_revision: number; geometry_revision: number }[];
+  history: { id: string; index: number; before: RoiAnnotation | null; roi_revision: number; geometry_revision: number }[];
   drawing: PageDrawing;
 }
 
