@@ -4,6 +4,7 @@ export type Box2D = readonly [ymin: number, xmin: number, ymax: number, xmax: nu
 export type AnnotationKind = "roof_roi" | "penetration" | "rainwater_outlet";
 export type ReviewStatus = "suggested" | "accepted" | "rejected";
 export type AnnotationValidity = "current" | "needs_review";
+export const penetrationSubtypes = ["rooflight", "vent", "flue", "access_hatch"] as const;
 
 export interface PageContext {
   readonly document_id: string;

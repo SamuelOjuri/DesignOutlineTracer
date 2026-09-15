@@ -4,7 +4,7 @@
 
 - Branch: `region-of-interest`.
 - Plan date: 2026-09-09.
-- Status: Phases 0-3 provide the frontend baseline, offline reference tooling, page/session contracts, and isolated annotation API/client. Phase 4 now adds opt-in ROI review and explicit detection orchestration, verified with offline fixtures and browser flows. Live model access and domain-reviewed dataset gates remain pending; penetration/outlet recommendation wiring and persistence are not enabled.
+- Status: Phases 0-3 provide the frontend baseline, offline reference tooling, page/session contracts, and isolated annotation API/client. Phases 4-5 add opt-in ROI and conditioned penetration review, verified with offline fixtures and browser flows. Live evaluation and domain-reviewed dataset/category gates remain pending; outlet recommendation wiring and persistence are not enabled.
 - Model: Gemini 3.6 Flash, using the configured identifier `gemini-3.6-flash` demonstrated in the supplied prototype.
 - Scope: enhance the existing New Build workflow with reviewable region-of-interest (ROI), roof-penetration, and rainwater-outlet recommendations.
 
@@ -361,6 +361,21 @@ domain-quality gates remain open. See the [Phase 4 record](Phase-4-ROI-Review.md
 ### Phase 5: Add Penetration Recommendations
 
 **Depends on:** Phase 4.
+
+**Delivery update (2026-09-10):** The enabled workflow now includes
+`upload -> roi -> paint -> penetrations -> outlets -> details`. Explicit full-page
+child requests use accepted/current parent boxes and revision guards. The versioned
+`penetration-v1` prompt retains the provisional four-subtype policy. Shared review
+controls support correction, reassignment, manual addition, acceptance/rejection
+and undo; polygon/cutout overlap supplies warnings, never semantic approval.
+Parent/roof edits preserve children as needing re-review. A page/ROI-grouped
+summary retains annotations without creating holes or changing the email payload.
+80 frontend tests, 43 offline backend tests, six mocked annotation browser flows,
+both disabled manual flows, type-check and build pass; lint remains 0 errors /
+9 inherited warnings. Desktop/mobile review screenshots and pixel/label checks
+are included. Live full-page recall, domain category approval and any measured
+crop refinement remain open; this is still a desktop-only localhost pilot.
+See the [Phase 5 record](Phase-5-Penetration-Review.md).
 
 **Implementation**
 

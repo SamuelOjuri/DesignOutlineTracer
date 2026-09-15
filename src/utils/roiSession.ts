@@ -1,6 +1,7 @@
 import type { DrawingScale } from "@/types/roof";
 import type { AnnotationKind, Box2D, DetectionRequest, DetectionRun, PageDrawing, PageSession, RenderedPdfPage, RoiAnnotation, RoiSessionState } from "@/types/roi";
 import { validateBox } from "./roiCoordinates";
+import { penetrationAssociationWarnings } from "./penetrationAssociation";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
@@ -137,6 +138,7 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
           || similarBoxes(annotation.proposed_box_2d, candidate.box_2d)));
       const proposal = checkAssociation({ ...cloneAnnotation(candidate), origin: "gemini", review_status: "suggested",
         proposed_box_2d: [...candidate.box_2d], edits: [], revision: page.revision + 1 }, annotations);
+      if (penetrationAssociationWarnings(proposal, page).length) proposal.validity = "needs_review";
       if (duplicate) proposal.warnings.push("Possible duplicate; reconcile with existing annotation");
       if (candidate.kind === "roof_roi" && boxArea(candidate.box_2d) >= 850000) {
         proposal.warnings.push("Covers most of the sheet; verify the intended roof scope");
@@ -175,6 +177,7 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
   } else if (action.type === "add") {
     if (action.annotation.page_id !== pageId || annotations.some((annotation) => annotation.id === action.annotation.id)) return state;
     const annotation = checkAssociation({ ...cloneAnnotation(action.annotation), revision }, annotations);
+    if (penetrationAssociationWarnings(annotation, page).length) annotation.validity = "needs_review";
     annotations.push(annotation);
     history.push({ id: annotation.id, index: annotations.length - 1, before: null, roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
   } else {
@@ -183,7 +186,12 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
     history.push({ id: current.id, index: annotations.indexOf(current), before: cloneAnnotation(current), roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
     if (action.type === "remove") annotations = annotations.filter((annotation) => annotation.id !== action.id);
     else {
+      const associationEdited = current.kind === "penetration" && (
+        (action.patch.box_2d !== undefined && JSON.stringify(action.patch.box_2d) !== JSON.stringify(current.box_2d))
+        || (action.patch.roi_id !== undefined && action.patch.roi_id !== current.roi_id)
+        || (action.patch.subtype !== undefined && action.patch.subtype !== current.subtype));
       const updated = checkAssociation(cloneAnnotation({ ...current, ...action.patch, revision,
+        validity: associationEdited ? "needs_review" : action.patch.validity ?? current.validity,
         edits: [...current.edits, { revision, action: action.patch.box_2d ? "edit" : "review" }] }), annotations);
       annotations = annotations.map((annotation) => annotation.id === current.id ? updated : annotation);
     }

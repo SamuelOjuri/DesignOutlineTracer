@@ -1,7 +1,7 @@
 # TaperedPlus Frontend Baseline
 
 The `region-of-interest` branch restores the original React 18, TypeScript,
-Vite 5, Tailwind, and shadcn/ui frontend. Opt-in ROI review and detection
+Vite 5, Tailwind, and shadcn/ui frontend. Opt-in ROI/penetration review and detection
 orchestration are implemented; live model and domain-quality gates remain open.
 
 ## Run Locally
@@ -26,8 +26,8 @@ locally from the installed dependency rather than a CDN.
   cutouts and outline adjustment, outlet/drainage editing, and project details.
 - `/refurbishment`: the original dimension-based roof drawing interface.
 
-New Build offers roof ROI recommendations when explicitly enabled. Penetration
-and outlet suggestions are not wired. The cutout tool remains manual.
+New Build offers roof ROI and conditioned penetration recommendations when
+explicitly enabled. Outlet suggestions are not wired. The cutout tool remains manual.
 
 Phase 2 now preserves manual work per document/page for the lifetime of the open
 New Build screen. Re-uploading the same PDF bytes and selecting the same page
@@ -49,6 +49,14 @@ corrections, undo, and failure fallbacks preserve page-specific work. Accepted
 boxes are context, not filled roof geometry. See the
 [Phase 4 record](docs/Phase-4-ROI-Review.md) for startup, verification and limits.
 With the flag disabled, the original manual workflow requires no ROI service.
+
+Phase 5 extends the enabled sequence to
+`upload -> roi -> paint -> penetrations -> outlets -> details`. Penetration review
+supports parent/subtype corrections, manual additions, scope warnings and explicit
+acceptance. Project Details displays a page/ROI-grouped annotation summary without
+creating holes or changing the external submission payload. See the
+[Phase 5 record](docs/Phase-5-Penetration-Review.md) for commands, verification and
+the remaining live-evaluation/category-policy gates.
 
 The original project-details form still submits to an external Supabase email
 function. It is not required for editing, and no Supabase server code was
@@ -194,10 +202,11 @@ The tool does not enable frontend recommendations or import the old backend.
 
 Phase 2 frontend contracts and page-session integration and the Phase 3 isolated
 API/client are implemented. The API validates uploaded bytes, image dimensions,
-and ownership independently. Phase 4 now supplies opt-in ROI review and explicit
-detection orchestration, verified offline. The next implementation phase is
-penetration review after this ROI slice is reviewed. Phase 1 model-access and
-domain-review gates remain open; ordinary CI never calls the live model.
+and ownership independently. Phases 4-5 supply opt-in ROI and penetration review
+and explicit detection orchestration, verified offline. The next implementation
+phase is outlet recommendations with an explicit editor adapter. Phase 1
+model-access, full-page recall and domain-review gates remain open; ordinary CI
+never calls the live model.
 
 Use the references in `docs/roi-logic/` for the new Gemini 3.6 Flash annotation
 workflow. Introduce reviewable ROI recommendations first, followed by

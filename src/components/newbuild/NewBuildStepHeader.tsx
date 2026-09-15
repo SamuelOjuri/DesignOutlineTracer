@@ -6,7 +6,7 @@ interface NewBuildStepHeaderProps {
 }
 
 const labels: Record<NewBuildStep, string> = {
-  upload: "Upload Roof Plan", roi: "Review Roof Areas", paint: "Define Roof Area", outlets: "Place Outlets", details: "Project Details",
+  upload: "Upload Roof Plan", roi: "Review Roof Areas", paint: "Define Roof Area", penetrations: "Review Penetrations", outlets: "Place Outlets", details: "Project Details",
 };
 
 export const NewBuildStepHeader = ({ currentStep, steps: order }: NewBuildStepHeaderProps) => {
@@ -28,7 +28,7 @@ export const NewBuildStepHeader = ({ currentStep, steps: order }: NewBuildStepHe
           />
           <h1 className="text-base font-bold text-foreground">TaperedPlus XPress</h1>
         </div>
-        <div className="flex items-center gap-1 flex-1 justify-center" aria-label="New Build steps">
+        <div className="flex flex-wrap items-center gap-1 flex-1 justify-center" aria-label="New Build steps">
           {steps.map((step) => (
             <div
               key={step.key}

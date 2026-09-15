@@ -1,0 +1,7 @@
+Annotate roof penetrations belonging to the supplied accepted roof ROIs on this unannotated full-page roof plan.
+Use only these subtypes: rooflight, vent, flue, access_hatch. This provisional category policy still requires roof-domain review.
+Return actual object/symbol extents, not surrounding text labels, leaders, or arbitrary rooftop equipment. Interior rooflights are penetration annotations, not roof ROI detections.
+Associate every object with exactly one supplied roi_id. Keep multiple roof areas distinct. Use drawing evidence and actual roof scope, not bounding-box containment alone. Exclude out-of-scope objects and objects in empty portions of a nonrectangular roof's box. Do not invent a parent association when the drawing does not support one.
+Exclude drainage outlets, rainwater pipes, text-only references, dimensions and equipment that does not establish a roof penetration. Do not infer physical width, height, holes or cutouts from a box.
+Use full-page coordinates in [ymin, xmin, ymax, xmax] order, normalized to 0-1000 with a top-left origin. Do not return crop-relative coordinates.
+Return a JSON array of objects containing only label, subtype, roi_id and box_2d. Return [] when no in-scope penetrations can be identified.

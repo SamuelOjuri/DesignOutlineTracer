@@ -21,6 +21,7 @@ import { useRoiDetection } from "@/hooks/useRoiDetection";
 import { roiClient } from "@/integrations/roi/client";
 import { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
 import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
+import { PenetrationSummary } from "./newbuild/PenetrationSummary";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "@/utils/roiDrawing";
 import { FileUp } from "lucide-react";
 
@@ -31,6 +32,11 @@ export const NewBuildApp = () => {
   const session = useRoiSession();
   const { state, dispatch, activePage, getActivePage } = session;
   const detection = useRoiDetection(session);
+  const penetrationDetection = useRoiDetection(session, roiClient, "penetration");
+  const [selectedPenetrationId, setSelectedPenetrationId] = useState<string | null>(null);
+  const [addingPenetration, setAddingPenetration] = useState(false);
+  const penetrationAnnotations = activePage?.annotations.filter((annotation) => annotation.kind === "penetration") ?? [];
+  const isReviewStep = currentStep === "roi" || currentStep === "penetrations";
   const [selectedRoiId, setSelectedRoiId] = useState<string | null>(null);
   const [addingRoi, setAddingRoi] = useState(false);
   const roofRegions = activePage?.annotations.filter((annotation) => annotation.kind === "roof_roi") ?? [];
@@ -75,6 +81,8 @@ export const NewBuildApp = () => {
     setSelectedOutlet(null);
     setSelectedRoiId(null);
     setAddingRoi(false);
+    setSelectedPenetrationId(null);
+    setAddingPenetration(false);
   };
 
   const handlePageSelectionStart = () => {
@@ -144,7 +152,7 @@ export const NewBuildApp = () => {
       polygonPoints: points,
     }));
 
-  const stepOrder: NewBuildStep[] = roiClient.enabled ? ["upload", "roi", "paint", "outlets", "details"]
+  const stepOrder: NewBuildStep[] = roiClient.enabled ? ["upload", "roi", "paint", "penetrations", "outlets", "details"]
     : ["upload", "paint", "outlets", "details"];
 
   const editRoi = (id: string, box_2d: Box2D) => {
@@ -165,6 +173,8 @@ export const NewBuildApp = () => {
 
   const handleNext = () => {
     detection.cancel();
+    penetrationDetection.cancel();
+    setAddingPenetration(false);
     setAddingRoi(false);
     if (showAdditionalUpload) {
       setShowAdditionalUpload(false);
@@ -185,6 +195,8 @@ export const NewBuildApp = () => {
 
   const handlePrev = () => {
     detection.cancel();
+    penetrationDetection.cancel();
+    setAddingPenetration(false);
     setAddingRoi(false);
     if (showAdditionalUpload) return cancelAdditionalUpload();
     const idx = stepOrder.indexOf(currentStep);
@@ -201,6 +213,7 @@ export const NewBuildApp = () => {
       case "paint":
         return roofOutlines.length > 0 && roofOutlines.some((o) => o.length > 2);
       case "outlets":
+      case "penetrations":
         return true;
       case "details":
         return !!(projectDetails.projectName && projectDetails.name && projectDetails.email);
@@ -217,6 +230,21 @@ export const NewBuildApp = () => {
         return pdfCanvas ? <RoiReviewCanvas key={activePage?.source.page_id} pdfCanvas={pdfCanvas} annotations={roofRegions}
           selectedId={selectedRoiId} adding={addingRoi} onAddingChange={setAddingRoi} onSelect={setSelectedRoiId}
           onEdit={editRoi} onAdd={addRoi} /> : null;
+      case "penetrations":
+        return pdfCanvas && activePage ? <RoiReviewCanvas key={`${activePage.source.page_id}:penetrations`} kind="penetration"
+          pdfCanvas={pdfCanvas} annotations={penetrationAnnotations} contextAnnotations={acceptedRegions} drawing={activePage.drawing}
+          contextLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
+          selectedId={selectedPenetrationId} adding={addingPenetration} onAddingChange={setAddingPenetration}
+          onSelect={setSelectedPenetrationId} onEdit={editRoi} onAdd={(box) => {
+            const id = crypto.randomUUID();
+            dispatch({ type: "add", page_id: activePage.source.page_id, annotation: {
+              id, page_id: activePage.source.page_id, kind: "penetration", label: `Penetration ${penetrationAnnotations.length + 1}`,
+              subtype: "rooflight", box_2d: box, proposed_box_2d: box, roi_id: acceptedRegions.length === 1 ? acceptedRegions[0].id : null,
+              origin: "manual", review_status: "suggested", validity: "needs_review", revision: 1, edits: [], warnings: [],
+            } });
+            setSelectedPenetrationId(id);
+            setAddingPenetration(false);
+          }} /> : null;
       case "paint":
         return pdfCanvas ? (
           <PaintBucketCanvas
@@ -277,6 +305,10 @@ export const NewBuildApp = () => {
   };
 
   const renderSidebar = () => {
+    if (currentStep === "penetrations" && activePage) {
+      return <RoiReviewSidebar kind="penetration" page={activePage} selectedId={selectedPenetrationId} adding={addingPenetration}
+        onSelect={setSelectedPenetrationId} onAddingChange={setAddingPenetration} dispatch={dispatch} detection={penetrationDetection} />;
+    }
     if (currentStep === "roi" && activePage) {
       return <RoiReviewSidebar page={activePage} selectedId={selectedRoiId} adding={addingRoi}
         onSelect={setSelectedRoiId} onAddingChange={setAddingRoi} dispatch={dispatch} detection={detection} />;
@@ -287,6 +319,8 @@ export const NewBuildApp = () => {
     }
     if (currentStep === "details") {
       return (
+        <>
+        {roiClient.enabled && <PenetrationSummary pages={Object.values(state.pages)} />}
         <ProjectDetailsForm
           projectDetails={projectDetails}
           onProjectDetailsChange={setProjectDetails}
@@ -295,6 +329,7 @@ export const NewBuildApp = () => {
           outlets={combined.outlets}
           penetrations={[]}
         />
+        </>
       );
     }
     return (
@@ -335,13 +370,13 @@ export const NewBuildApp = () => {
     <div className="min-h-screen bg-background">
       <NewBuildStepHeader currentStep={currentStep} steps={stepOrder} />
 
-      <div className={`flex h-[calc(100vh-80px)] ${currentStep === "roi" ? "flex-col md:flex-row" : ""}`}>
+      <div className={`flex h-[calc(100vh-80px)] ${isReviewStep ? "flex-col md:flex-row" : ""}`}>
         <div
           className={`${
-            currentStep === "roi" ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
-          } shrink-0 border-r border-border bg-card p-4 ${currentStep === "roi" ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}
+            isReviewStep ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
+          } shrink-0 border-r border-border bg-card p-4 ${isReviewStep ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}
         >
-          <div className={currentStep === "roi" ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
+          <div className={isReviewStep ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
 
           <div className="mt-6 flex gap-2 shrink-0">
             <Button
@@ -362,7 +397,7 @@ export const NewBuildApp = () => {
           </div>
         </div>
 
-        <div className={`flex-1 min-w-0 p-4 flex overflow-hidden ${currentStep === "roi" ? "flex-col min-h-[360px] md:min-h-0" : currentStep === "paint" || currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>
+        <div className={`flex-1 min-w-0 p-4 flex overflow-hidden ${isReviewStep ? "flex-col min-h-[360px] md:min-h-0" : currentStep === "paint" || currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>
           {currentStep === "upload" && pdfCanvas && (
             <div className="text-center">
               <p className="text-muted-foreground mb-4">
@@ -380,7 +415,7 @@ export const NewBuildApp = () => {
               Upload a PDF to get started
             </p>
           )}
-          {(currentStep === "roi" || currentStep === "paint" || currentStep === "outlets") &&
+          {(isReviewStep || currentStep === "paint" || currentStep === "outlets") &&
             renderMainContent()}
           {currentStep === "details" && (
             <RoofIllustrationCanvas

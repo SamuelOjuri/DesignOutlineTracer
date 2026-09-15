@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { roiClient, RoiApiError } from "@/integrations/roi/client";
+import type { AnnotationKind, PageSession } from "@/types/roi";
 import type { useRoiSession } from "./useRoiSession";
 
 interface DetectionFeedback {
@@ -9,30 +10,35 @@ interface DetectionFeedback {
   followUpOf?: string;
 }
 
-export function useRoiDetection(session: ReturnType<typeof useRoiSession>, client = roiClient) {
+export function useRoiDetection(session: ReturnType<typeof useRoiSession>, client = roiClient, task: AnnotationKind = "roof_roi") {
   const [feedback, setFeedback] = useState<Record<string, DetectionFeedback>>({});
   const [followedRequests] = useState(() => new Set<string>());
   const [followedUploads] = useState(() => new Set<string>());
   const [partialUploads] = useState(() => new Map<string, string>());
-  const pageId = session.activePage?.source.page_id;
+  const feedbackKey = (page: PageSession) => task === "roof_roi" ? `${page.source.page_id}:${task}`
+    : `${page.source.page_id}:${task}:${page.roi_revision}:${page.geometry_revision}`;
 
   const cancel = () => {
     const page = session.getActivePage();
-    const request = page?.pending.roof_roi;
+    const request = page?.pending[task];
     if (!request) return;
     session.dispatch({ type: "cancel", ...request });
-    setFeedback((previous) => ({ ...previous, [request.page_id]: { status: "cancelled" } }));
+    setFeedback((previous) => ({ ...previous, [feedbackKey(page)]: { status: "cancelled" } }));
   };
 
   const detect = async (followUpOf?: string) => {
     const page = session.getActivePage();
-    if (!client.enabled || !page || page.pending.roof_roi) return;
+    if (!client.enabled || !page || page.pending[task]) return;
+    const acceptedRois = task === "roof_roi" ? [] : page.annotations.filter((annotation) => annotation.kind === "roof_roi"
+      && annotation.review_status === "accepted" && annotation.validity === "current");
+    if (task !== "roof_roi" && acceptedRois.length === 0) return;
+    if (followUpOf && feedback[feedbackKey(page)]?.followUpOf !== followUpOf) return;
     if (followUpOf && followedRequests.has(followUpOf)) return;
     if (followUpOf) followedRequests.add(followUpOf);
-    const { request, signal } = session.beginRequest("roof_roi");
-    const update = (value: DetectionFeedback) => setFeedback((previous) => ({ ...previous, [request.page_id]: value }));
+    const { request, signal } = session.beginRequest(task);
+    const update = (value: DetectionFeedback) => setFeedback((previous) => ({ ...previous, [feedbackKey(page)]: value }));
     const isCurrent = () => !signal.aborted
-      && session.getActivePage()?.pending.roof_roi?.request_id === request.request_id;
+      && session.getActivePage()?.pending[task]?.request_id === request.request_id;
     update({ status: "uploading" });
     try {
       const receipt = await client.uploadPage(page.source, signal);
@@ -43,7 +49,7 @@ export function useRoiDetection(session: ReturnType<typeof useRoiSession>, clien
         followedUploads.add(receipt.upload_id);
       }
       update({ status: "detecting" });
-      const result = await client.detect(request, { signal, followUpOf });
+      const result = await client.detect(request, { signal, followUpOf, acceptedRois });
       if (!isCurrent()) return;
       session.dispatch({ type: "result", run: result.run, annotations: result.annotations });
       const allowFollowUp = result.status === "partial" && !followUpOf && !followedUploads.has(receipt.upload_id);
@@ -57,9 +63,9 @@ export function useRoiDetection(session: ReturnType<typeof useRoiSession>, clien
     }
   };
 
-  const currentFeedback = pageId ? feedback[pageId] : undefined;
-  const staleLoading = !session.activePage?.pending.roof_roi
+  const currentFeedback = session.activePage ? feedback[feedbackKey(session.activePage)] : undefined;
+  const staleLoading = !session.activePage?.pending[task]
     && (currentFeedback?.status === "uploading" || currentFeedback?.status === "detecting");
   return { detect, cancel, feedback: staleLoading ? { status: "cancelled" as const } : currentFeedback,
-    busy: Boolean(session.activePage?.pending.roof_roi) };
+    busy: Boolean(session.activePage?.pending[task]) };
 }

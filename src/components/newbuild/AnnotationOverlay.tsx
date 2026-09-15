@@ -8,6 +8,7 @@ interface AnnotationOverlayProps {
   draft?: { id: string; box: Box2D } | null;
   interactive?: boolean;
   labels?: Record<string, string>;
+  labelsAbove?: boolean;
   onSelect?: (id: string) => void;
   onEdit?: (id: string, box: Box2D) => void;
 }
@@ -16,7 +17,7 @@ const boxStyle = (box: Box2D): CSSProperties => ({
   top: `${box[0] / 10}%`, left: `${box[1] / 10}%`, height: `${(box[2] - box[0]) / 10}%`, width: `${(box[3] - box[1]) / 10}%`,
 });
 
-export const AnnotationOverlay = ({ annotations, selectedId, draft, interactive = false, labels, onSelect, onEdit }: AnnotationOverlayProps) => {
+export const AnnotationOverlay = ({ annotations, selectedId, draft, interactive = false, labels, labelsAbove = false, onSelect, onEdit }: AnnotationOverlayProps) => {
   const keyboardEdit = (event: KeyboardEvent, annotation: RoiAnnotation, handle: BoxHandle) => {
     const amount = event.shiftKey ? 10 : 1;
     const deltas = { ArrowLeft: { x: -amount, y: 0 }, ArrowRight: { x: amount, y: 0 },
@@ -32,7 +33,7 @@ export const AnnotationOverlay = ({ annotations, selectedId, draft, interactive 
       {annotations.map((annotation, index) => {
         const box = draft?.id === annotation.id ? draft.box : annotation.box_2d;
         const selected = annotation.id === selectedId;
-        const label = labels?.[annotation.id] ?? `Roof area ${index + 1}`;
+        const label = labels?.[annotation.id] ?? `${annotation.kind === "penetration" ? "Penetration" : "Roof area"} ${index + 1}`;
         const status = annotation.validity === "needs_review" ? "Needs review" : annotation.review_status;
         const color = annotation.review_status === "accepted" ? "border-emerald-700 text-emerald-900"
           : annotation.review_status === "rejected" ? "border-gray-500 text-gray-700" : "border-sky-700 text-sky-900";
@@ -48,9 +49,10 @@ export const AnnotationOverlay = ({ annotations, selectedId, draft, interactive 
                 className="absolute inset-0 w-full h-full pointer-events-auto cursor-move focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
                 onClick={() => onSelect?.(annotation.id)} onKeyDown={(event) => keyboardEdit(event, annotation, "move")} />
             ) : null}
-            <span className="absolute top-0 whitespace-nowrap bg-white/95 px-1 text-xs font-semibold leading-5"
-              style={box[1] > 500 ? { right: 0 } : { left: 0 }} title={`${label}: ${status}`}>
-              {label}
+            <span className={`absolute ${labelsAbove && box[0] > 40 ? "bottom-full" : "top-0"} whitespace-nowrap bg-white/95 px-1 text-xs font-semibold leading-5`}
+              style={annotation.kind === "penetration" ? (box[3] < 900 ? { left: "calc(100% + 8px)" } : { right: "calc(100% + 8px)" })
+                : box[1] > 500 ? { right: 0 } : { left: 0 }} title={`${label}: ${status}`}>
+              {annotation.kind === "penetration" ? `P${index + 1}` : label}
             </span>
             {interactive && selected && (["nw", "ne", "sw", "se"] as const).map((handle) => (
               <button key={handle} type="button" aria-label={`Resize ${label} ${handle}`} title={`Resize ${label} ${handle}`}

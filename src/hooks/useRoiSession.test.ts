@@ -78,6 +78,7 @@ describe("page-bound annotation sessions", () => {
     add(syntheticAnnotation("roi-2"));
     add(syntheticAnnotation("child-1", { kind: "rainwater_outlet", roi_id: "roi-1" }));
     add(syntheticAnnotation("child-2", { kind: "penetration", roi_id: "roi-2" }));
+    dispatch({ type: "review", page_id: "page-1", id: "child-2", patch: { review_status: "accepted", validity: "current" } });
     dispatch({ type: "review", page_id: "page-1", id: "roi-1", patch: { review_status: "rejected" } });
     expect(page().annotations.find((annotation) => annotation.id === "child-1")?.validity).toBe("needs_review");
     expect(page().annotations.find((annotation) => annotation.id === "child-2")?.validity).toBe("current");

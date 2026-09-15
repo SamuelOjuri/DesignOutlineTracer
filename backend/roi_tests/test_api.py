@@ -150,6 +150,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                                      accepted_rois=[{**parent, "id": "other"}])
         self.assertEqual(response.json()["error"]["code"], "malformed_output")
 
+    async def test_penetration_replay_keeps_multiple_parents_and_empty_results_distinct(self):
+        await self.upload()
+        parents = [{"id": "roof-a", "revision": 2, "box_2d": [100, 100, 500, 400]},
+                   {"id": "roof-b", "revision": 3, "box_2d": [100, 600, 500, 900]}]
+        proposals = [{"label": "Rooflight", "subtype": "rooflight", "roi_id": "roof-a", "box_2d": [200.25, 200, 230, 240]},
+                     {"label": "Vent", "subtype": "vent", "roi_id": "roof-b", "box_2d": [200, 700, 210, 710]}]
+        self.provider.result = ProviderResult(json.dumps(proposals))
+        response = await self.detect(task="penetration", roi_revision=4, accepted_rois=parents)
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["prompt_version"], "penetration-v1")
+        self.assertEqual(result["run"]["roi_revision"], 4)
+        self.assertEqual([annotation["roi_id"] for annotation in result["annotations"]], ["roof-a", "roof-b"])
+        self.assertEqual([annotation["box_2d"] for annotation in result["annotations"]],
+                         [proposal["box_2d"] for proposal in proposals])
+        self.assertTrue(all(annotation["review_status"] == "suggested" for annotation in result["annotations"]))
+        self.assertIn("category_policy_pending_domain_review", result["warnings"])
+        self.assertEqual(len(self.provider.calls), 1)
+        self.assertIn("unannotated full-page", self.provider.calls[0][1])
+        self.provider.result = ProviderResult("[]")
+        empty = await self.detect(task="penetration", request_id="empty-child", roi_revision=4,
+                                  geometry_revision=1, accepted_rois=parents)
+        self.assertEqual(empty.json()["status"], "no_detections")
+        self.assertEqual(empty.json()["annotations"], [])
+
     async def test_two_scope_replay_preserves_boxes_and_prompt_provenance(self):
         await self.upload()
         boxes = [[288, 202, 461, 276], [496, 202, 668, 276]]

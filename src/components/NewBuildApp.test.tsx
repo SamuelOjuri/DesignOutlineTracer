@@ -9,7 +9,7 @@ import type { NewBuildOutletCanvas } from "./newbuild/NewBuildOutletCanvas";
 import type { RoofIllustrationCanvas } from "./newbuild/RoofIllustrationCanvas";
 import type { ProjectDetailsForm } from "./ProjectDetailsForm";
 import { NewBuildApp } from "./NewBuildApp";
-import { syntheticPage } from "@/test/roi";
+import { syntheticAnnotation, syntheticPage, syntheticRun } from "@/test/roi";
 import { roiClient } from "@/integrations/roi/client";
 
 const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 100, y: 300 }];
@@ -111,6 +111,8 @@ describe("manual New Build state", () => {
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Select roof" }));
     await next();
+    expect(screen.getByRole("heading", { name: "Penetrations" })).toBeInTheDocument();
+    await next();
     await user.click(screen.getByRole("button", { name: "Add test outlet" }));
     await user.click(screen.getByRole("button", { name: "Upload Another PDF" }));
     await user.click(screen.getByRole("button", { name: "Render PDF 2" }));
@@ -129,8 +131,55 @@ describe("manual New Build state", () => {
     expect(screen.getByTestId("paint-regions").textContent).toBe(firstRegions);
     expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
     await next();
+    await next();
     expect(screen.getByTestId("editor-outlets")).toHaveTextContent("page-1");
     expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("retains reviewed penetrations in the summary without changing geometry or the legacy payload", async () => {
+    roiClient.enabled = true;
+    vi.spyOn(roiClient, "uploadPage").mockResolvedValue({ page: {
+      ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
+    }, upload_id: "upload", expires_in_seconds: 900 });
+    vi.spyOn(roiClient, "detect").mockImplementation(async (request, options) => ({
+      schema_version: "1", ...request, status: "complete", model: "gemini-3.6-flash", prompt_version: "penetration-v1",
+      annotations: [syntheticAnnotation("child", { label: "Rooflight A", kind: "penetration", subtype: "rooflight",
+        roi_id: options!.acceptedRois![0].id, review_status: "suggested", box_2d: [220, 250, 250, 280],
+        proposed_box_2d: [220, 250, 250, 280] })], warnings: [],
+      run: { ...syntheticRun(request), cached: false, provider_attempts: 1 },
+    }));
+    const user = userEvent.setup();
+    render(<NewBuildApp />);
+    const next = () => user.click(screen.getByRole("button", { name: "Next" }));
+    const previous = () => user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Add test region" }));
+    await user.click(screen.getByRole("button", { name: "Define roof manually" }));
+    await user.click(screen.getByRole("button", { name: "Select roof" }));
+    await user.click(screen.getByRole("button", { name: "Add cutout" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Detect penetrations" }));
+    await user.click(await screen.findByRole("button", { name: /Penetration 1 suggested/ }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await next();
+    expect(screen.getByTestId("editor-outlets")).toHaveTextContent("[]");
+    await next();
+    expect(screen.getByRole("region", { name: "Penetration annotation summary" })).toHaveTextContent("Rooflight A");
+    expect(screen.getByRole("region", { name: "Penetration annotation summary" })).toHaveTextContent("accepted / Current");
+    expect(screen.getByTestId("penetrations")).toHaveTextContent("[]");
+    expect(JSON.parse(screen.getByTestId("illustration").textContent!)).toMatchObject({ roofOutlines: [outline], interiorHoles: [hole] });
+    await previous();
+    await previous();
+    expect(JSON.parse(screen.getByTestId("review-regions").textContent!)[0]).toMatchObject({ id: "child", review_status: "accepted", validity: "current" });
+    await previous();
+    await previous();
+    await user.clear(screen.getByRole("textbox", { name: "Region label" }));
+    await user.type(screen.getByRole("textbox", { name: "Region label" }), "Revised roof");
+    await user.click(screen.getByRole("button", { name: "Apply correction" }));
+    await user.click(screen.getByRole("button", { name: "Define roof manually" }));
+    await next();
+    expect(JSON.parse(screen.getByTestId("review-regions").textContent!)[0]).toMatchObject({ id: "child", review_status: "accepted", validity: "needs_review" });
   });
 
   it("requires a rendered PDF and a polygon, then preserves manual work through navigation", async () => {

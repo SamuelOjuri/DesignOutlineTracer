@@ -2,12 +2,16 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { Hand, Maximize, MousePointer2, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Box2D, RoiAnnotation } from "@/types/roi";
+import type { Box2D, PageDrawing, RoiAnnotation } from "@/types/roi";
 import type { Point } from "@/types/roof";
 import { drawnRoiBox, editRoiBox, type BoxHandle } from "@/utils/roiBoxEditing";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 
 interface RoiReviewCanvasProps {
+  kind?: "roof_roi" | "penetration";
+  contextAnnotations?: RoiAnnotation[];
+  contextLabels?: Record<string, string>;
+  drawing?: PageDrawing;
   pdfCanvas: HTMLCanvasElement;
   annotations: RoiAnnotation[];
   selectedId: string | null;
@@ -27,7 +31,8 @@ interface Gesture {
   scroll: Point;
 }
 
-export const RoiReviewCanvas = ({ pdfCanvas, annotations, selectedId, adding, onAddingChange, onSelect, onEdit, onAdd }: RoiReviewCanvasProps) => {
+export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], contextLabels, drawing,
+  pdfCanvas, annotations, selectedId, adding, onAddingChange, onSelect, onEdit, onAdd }: RoiReviewCanvasProps) => {
   const viewport = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -103,13 +108,13 @@ export const RoiReviewCanvas = ({ pdfCanvas, annotations, selectedId, adding, on
   };
 
   const tools = [
-    { label: "Select regions", icon: MousePointer2, active: !adding && !panning, action: () => { onAddingChange(false); setPanning(false); } },
+    { label: kind === "penetration" ? "Select penetrations" : "Select regions", icon: MousePointer2, active: !adding && !panning, action: () => { onAddingChange(false); setPanning(false); } },
     { label: "Pan drawing", icon: Hand, active: !adding && panning, action: () => { onAddingChange(false); setPanning(true); } },
-    { label: "Draw roof region", icon: Plus, active: adding, action: () => onAddingChange(!adding) },
+    { label: kind === "penetration" ? "Draw penetration" : "Draw roof region", icon: Plus, active: adding, action: () => onAddingChange(!adding) },
   ];
 
   return (
-    <section className="flex flex-col flex-1 min-h-0 min-w-0 gap-3" aria-label="Roof region review">
+    <section className="flex flex-col flex-1 min-h-0 min-w-0 gap-3" aria-label={kind === "penetration" ? "Penetration review" : "Roof region review"}>
       <TooltipProvider delayDuration={200}>
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-1" role="group" aria-label="Region tools">
@@ -138,6 +143,14 @@ export const RoiReviewCanvas = ({ pdfCanvas, annotations, selectedId, adding, on
           onKeyDown={(event) => { if (event.key === "Escape") { clearGesture(); onAddingChange(false); } }}>
           <canvas ref={canvas} width={pdfCanvas.width} height={pdfCanvas.height} className="block w-full h-full"
             aria-label="Unannotated roof plan" data-testid="roi-source-canvas" />
+          {drawing && <svg viewBox={`0 0 ${pdfCanvas.width} ${pdfCanvas.height}`} preserveAspectRatio="none"
+            aria-label="Manual roof geometry" className="absolute inset-0 w-full h-full pointer-events-none">
+            {drawing.outlines.map((outline) => <polygon key={outline.id} points={outline.points.map((point) => `${point.x},${point.y}`).join(" ")}
+              fill="none" stroke="#047857" strokeWidth={2} vectorEffect="non-scaling-stroke" />)}
+            {drawing.holes.map((hole) => <polygon key={hole.id} points={hole.points.map((point) => `${point.x},${point.y}`).join(" ")}
+              fill="none" stroke="#b91c1c" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />)}
+          </svg>}
+          {contextAnnotations.length > 0 && <AnnotationOverlay annotations={contextAnnotations} labels={contextLabels} labelsAbove />}
           <AnnotationOverlay annotations={annotations} selectedId={selectedId} draft={draft} interactive={!adding && !panning}
             onSelect={onSelect} onEdit={onEdit} />
         </div>

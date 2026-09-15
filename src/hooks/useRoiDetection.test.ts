@@ -2,10 +2,11 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { createRoiClient, RoiApiError, type RoiDetectionResult } from "@/integrations/roi/client";
 import { syntheticAnnotation, syntheticPage, syntheticRun } from "@/test/roi";
+import type { AnnotationKind } from "@/types/roi";
 import { useRoiSession } from "./useRoiSession";
 import { useRoiDetection } from "./useRoiDetection";
 
-function setup(enabled = true) {
+function setup(enabled = true, task: AnnotationKind = "roof_roi") {
   const client = createRoiClient({ enabled });
   const upload = vi.spyOn(client, "uploadPage").mockResolvedValue({
     page: { ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 800, 600] }, upload_id: "upload", expires_in_seconds: 900,
@@ -17,13 +18,49 @@ function setup(enabled = true) {
   }));
   const hook = renderHook(() => {
     const session = useRoiSession();
-    return { session, detection: useRoiDetection(session, client) };
+    return { session, detection: useRoiDetection(session, client, task) };
   });
   act(() => hook.result.current.session.dispatch({ type: "activate", source: syntheticPage(), scale: { paperSize: "A1", scaleRatio: 100 } }));
   return { ...hook, upload, detect };
 }
 
 describe("explicit ROI detection", () => {
+  it("does not upload for child detection without an accepted current parent", async () => {
+    const { result, upload } = setup(true, "penetration");
+    act(() => result.current.session.dispatch({ type: "add", page_id: "page-1",
+      annotation: syntheticAnnotation("unreviewed", { review_status: "suggested" }) }));
+    await act(() => result.current.detection.detect());
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("conditions penetration detection on accepted parents and ignores results after a parent edit", async () => {
+    const { result, detect } = setup(true, "penetration");
+    act(() => {
+      result.current.session.dispatch({ type: "add", page_id: "page-1", annotation: syntheticAnnotation("parent") });
+      result.current.session.dispatch({ type: "add", page_id: "page-1",
+        annotation: syntheticAnnotation("suggested", { review_status: "suggested" }) });
+    });
+    let resolve!: (value: RoiDetectionResult) => void;
+    detect.mockImplementationOnce(() => new Promise((finish) => { resolve = finish; }));
+    let pending!: Promise<void>;
+    await act(async () => { pending = result.current.detection.detect(); });
+    const request = result.current.session.activePage!.pending.penetration!;
+    expect(request.task).toBe("penetration");
+    expect(request.roi_revision).toBe(result.current.session.activePage!.roi_revision);
+    expect(detect.mock.calls[0][1].acceptedRois?.map((parent) => parent.id)).toEqual(["parent"]);
+    act(() => result.current.session.dispatch({ type: "review", page_id: "page-1", id: "parent",
+      patch: { box_2d: [100, 100, 700, 700] } }));
+    expect(detect.mock.calls[0][1].signal!.aborted).toBe(true);
+    await act(async () => {
+      resolve({ schema_version: "1", ...request, status: "complete", model: "gemini-3.6-flash", prompt_version: "penetration-v1",
+        warnings: [], annotations: [syntheticAnnotation("child", { kind: "penetration", subtype: "rooflight", roi_id: "parent" })],
+        run: { ...syntheticRun(request), cached: false, provider_attempts: 1 } });
+      await pending;
+    });
+    expect(result.current.session.activePage!.annotations.map((annotation) => annotation.id)).toEqual(["parent", "suggested"]);
+    expect(result.current.detection.feedback).toBeUndefined();
+  });
+
   it("uploads only on demand and offers one follow-up while keeping manual geometry empty", async () => {
     const { result, upload, detect } = setup();
     expect(upload).not.toHaveBeenCalled();

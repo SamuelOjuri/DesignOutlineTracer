@@ -7,10 +7,28 @@ from google.genai import types
 
 from backend.roi_app.config import Settings
 from backend.roi_app.errors import OutputDiagnostic, RoiError
-from backend.roi_app.gemini import GeminiProvider, make_prompt, response_schema
+from backend.roi_app.gemini import GeminiProvider, PROMPT_VERSIONS, make_prompt, response_schema
+from backend.roi_app.models import AcceptedRoi
 
 
 class GeminiTests(unittest.IsolatedAsyncioTestCase):
+    def test_penetration_prompt_and_schema_preserve_scope_and_parent_identity(self):
+        parents = [AcceptedRoi(id="roof-b", revision=3, box_2d=[100.5, 600, 400, 900]),
+                   AcceptedRoi(id="roof-a", revision=2, box_2d=[100, 100, 500, 400])]
+        prompt = make_prompt("penetration", parents, 25)
+        self.assertEqual(PROMPT_VERSIONS["penetration"], "penetration-v1")
+        for instruction in ("unannotated full-page", "actual object/symbol extents", "out-of-scope objects",
+                            "empty portions of a nonrectangular roof's box", "Do not infer physical",
+                            "[ymin, xmin, ymax, xmax]", "Return at most 25 objects."):
+            self.assertIn(instruction, prompt)
+        serialized_parents = json.loads(prompt.split("Accepted ROIs: ")[1])
+        self.assertEqual(serialized_parents, [parents[1].model_dump(mode="json"), parents[0].model_dump(mode="json")])
+        schema = response_schema("penetration", parents, 25)
+        self.assertEqual(schema["items"]["properties"]["roi_id"]["enum"], ["roof-a", "roof-b"])
+        self.assertEqual(set(schema["items"]["properties"]["subtype"]["enum"]),
+                         {"rooflight", "vent", "flue", "access_hatch"})
+        self.assertEqual(set(schema["items"]["required"]), {"label", "box_2d", "roi_id", "subtype"})
+
     async def make_call(self, payload=None, status=200, structured=False, max_bytes=262144, chunks=None):
         captured = []
 

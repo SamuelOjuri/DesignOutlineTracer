@@ -6,6 +6,43 @@ import { initialRoiState, roiSessionReducer } from "@/utils/roiSession";
 import { RoiReviewSidebar } from "./RoiReviewSidebar";
 
 describe("ROI failure feedback", () => {
+  it("supports penetration correction, parent reassignment and explicit uncertain association review", async () => {
+    const source = syntheticPage();
+    let state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });
+    for (const annotation of [syntheticAnnotation(), syntheticAnnotation("second-roof"),
+      syntheticAnnotation("child", { kind: "penetration", subtype: "rooflight", roi_id: "roi-1", review_status: "suggested" })]) {
+      state = roiSessionReducer(state, { type: "add", page_id: source.page_id, annotation });
+    }
+    const dispatch = vi.fn();
+    render(<RoiReviewSidebar kind="penetration" page={state.pages[source.page_id]} selectedId="child" adding={false}
+      onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={dispatch}
+      detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Parent roof area" }), "second-roof");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Subtype" }), "vent");
+    await user.clear(screen.getByRole("textbox", { name: "Penetration label" }));
+    await user.type(screen.getByRole("textbox", { name: "Penetration label" }), "Reviewed vent");
+    await user.click(screen.getByRole("button", { name: "Apply correction" }));
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "review", page_id: source.page_id, id: "child",
+      patch: { label: "Reviewed vent", box_2d: [100, 200, 600, 700], subtype: "vent", roi_id: "second-roof" } });
+    await user.click(screen.getByRole("button", { name: "Confirm association" }));
+    expect(dispatch).toHaveBeenLastCalledWith({ type: "review", page_id: source.page_id, id: "child",
+      patch: { review_status: "accepted", validity: "current" } });
+  });
+
+  it("keeps manual penetration entry available without allowing detection or acceptance without a parent", () => {
+    const source = syntheticPage();
+    let state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });
+    state = roiSessionReducer(state, { type: "add", page_id: source.page_id,
+      annotation: syntheticAnnotation("child", { kind: "penetration", subtype: "vent", review_status: "suggested" }) });
+    render(<RoiReviewSidebar kind="penetration" page={state.pages[source.page_id]} selectedId="child" adding={false}
+      onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()}
+      detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
+    expect(screen.getByRole("button", { name: "Detect penetrations" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Confirm association" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Manual penetration" })).toBeEnabled();
+  });
+
   it.each([
     ["malformed_output", "The model response could not be validated. No new regions were added."],
     ["truncated_output", "The model response ended before valid annotations were complete. No new regions were added."],
