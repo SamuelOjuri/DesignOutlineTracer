@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    model: Literal["gemini-3.6-flash"] = "gemini-3.6-flash"
+    model: Literal["gemini-3.7-flash"] = "gemini-3.7-flash"
     allow_live: bool = False
     api_key: SecretStr | None = Field(default=None, exclude=True)
     structured_output: bool = False
