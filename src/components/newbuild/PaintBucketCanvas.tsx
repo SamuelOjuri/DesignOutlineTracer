@@ -3,7 +3,8 @@ import { Point } from "@/types/roof";
 import { floodFill, floodFillPreview, eraseFill, extractMultipleOutlines, extractInteriorHoles, buildEdgeMap, buildRegionMap } from "@/utils/floodFill";
 import { findClosestEdge, findClosestVertex, movePolygonEdge, rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
 import { Button } from "@/components/ui/button";
-import type { RoiAnnotation } from "@/types/roi";
+import type { Box2D, RoiAnnotation } from "@/types/roi";
+import { buildRoiFillMask } from "@/utils/roiFillMask";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2 } from "lucide-react";
 
@@ -41,6 +42,10 @@ export const PaintBucketCanvas = ({
   const [fillCount, setFillCount] = useState(0);
   const [activeTool, setActiveTool] = useState<PaintTool>("fill");
   const [isInitializing, setIsInitializing] = useState(true);
+  const [selectionMessage, setSelectionMessage] = useState<string | null>(null);
+  // The parent recreates annotation arrays on drawing updates; only changed boxes should rebuild the mask.
+  const regionBoxesKey = JSON.stringify(acceptedRegions.map((region) => region.box_2d));
+  const allowedMaskRef = useRef<Uint8Array | undefined>(undefined);
 
   const originalImageDataRef = useRef<ImageData | null>(null);
   const filledMaskRef = useRef<Uint8Array | null>(null);
@@ -87,10 +92,10 @@ export const PaintBucketCanvas = ({
   }, [roofOutlines, interiorHoles]);
 
   const emitOutlinesAndHoles = useCallback((mask: Uint8Array, w: number, h: number) => {
-    const outlines = extractMultipleOutlines(mask, w, h);
+    const outlines = extractMultipleOutlines(mask, w, h, allowedMaskRef.current);
     onOutlinesExtracted(outlines);
     if (onHolesExtracted) {
-      const holes = extractInteriorHoles(mask, w, h);
+      const holes = extractInteriorHoles(mask, w, h, 200, allowedMaskRef.current);
       interiorHolesRef.current = holes;
       onHolesExtracted(holes);
     }
@@ -134,6 +139,8 @@ export const PaintBucketCanvas = ({
     const ctx = canvas.getContext("2d")!;
     ctx.drawImage(pdfCanvas, 0, 0);
     originalImageDataRef.current = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    allowedMaskRef.current = buildRoiFillMask(JSON.parse(regionBoxesKey) as Box2D[], canvas);
+    setSelectionMessage(null);
     const manual = sourceGeometry.current;
     filledMaskRef.current = manual.roofOutlines.length
       ? rasterizeOutlinesWithHoles(manual.roofOutlines, manual.interiorHoles, canvas.width, canvas.height) : null;
@@ -154,7 +161,7 @@ export const PaintBucketCanvas = ({
       // Build region map in a second frame to avoid long blocking
       regionFrame = requestAnimationFrame(() => {
         const { regionLabels, regionSeeds } = buildRegionMap(
-          imgData.data, canvas.width, canvas.height, edgeMap, 45
+          imgData.data, canvas.width, canvas.height, edgeMap, 45, allowedMaskRef.current
         );
         regionLabelsRef.current = regionLabels;
         regionSeedsRef.current = regionSeeds;
@@ -166,8 +173,10 @@ export const PaintBucketCanvas = ({
       if (regionFrame !== undefined) cancelAnimationFrame(regionFrame);
       if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
       if (hoverTimerRef.current !== null) clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+      isComputingRef.current = false;
     };
-  }, [pdfCanvas, calculateFitScale]);
+  }, [pdfCanvas, calculateFitScale, regionBoxesKey]);
 
   // Update canvas CSS size on zoom
   useEffect(() => {
@@ -344,7 +353,7 @@ export const PaintBucketCanvas = ({
       const edgeMap = cachedEdgeMapRef.current;
       if (!edgeMap) { isComputingRef.current = false; return; }
 
-      const result = floodFillPreview(origData.data, w, h, hx, hy, edgeMap, currentMask || undefined, 45);
+      const result = floodFillPreview(origData.data, w, h, hx, hy, edgeMap, currentMask || undefined, 45, allowedMaskRef.current);
       if (result.filledPixelCount < 50) { clearPreview(); isComputingRef.current = false; return; }
 
       const previewMask = new Uint8Array(w * h);
@@ -377,8 +386,11 @@ export const PaintBucketCanvas = ({
     if (cutoutMaskRef.current && cutoutMaskRef.current[y * w + x]) return false;
 
     const imageData = new ImageData(new Uint8ClampedArray(origData.data), w, h);
-    const result = floodFill(imageData, x, y, FILL_COLOR, currentMask || undefined, 45, true);
-    if (result.filledPixelCount < 50) return false;
+    const result = floodFill(imageData, x, y, FILL_COLOR, currentMask || undefined, 45, true, allowedMaskRef.current);
+    if (result.filledPixelCount < 50) {
+      setSelectionMessage("No area found at this spot. Click a clear part of the roof away from lines and symbols.");
+      return false;
+    }
 
     const cutout = cutoutMaskRef.current;
     if (cutout) {
@@ -388,6 +400,7 @@ export const PaintBucketCanvas = ({
     }
 
     filledMaskRef.current = result.filledMask;
+    setSelectionMessage(null);
     return true;
   }, []);
 
@@ -481,6 +494,13 @@ export const PaintBucketCanvas = ({
     if (!canvas || !originalImageDataRef.current) return;
     const w = canvas.width;
     const currentMask = filledMaskRef.current;
+
+    if (activeTool === "fill" && allowedMaskRef.current && !allowedMaskRef.current[pos.y * w + pos.x]) {
+      setSelectionMessage("Click inside a green roof region to select an area.");
+      clearPreview();
+      return;
+    }
+    setSelectionMessage(null);
 
     // Adjust tool: start dragging an edge
     if (activeTool === "adjust") {
@@ -950,6 +970,11 @@ export const PaintBucketCanvas = ({
         )}
       </div>
 
+      {acceptedRegions.length > 0 && <p className="text-xs text-muted-foreground px-1 mb-2">
+        Selection stays inside the green roof regions. Use Cut Out or Adjust to refine the roof boundary.
+      </p>}
+      {selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
+
       {/* Canvas area */}
       <div
         ref={containerRef}
@@ -957,9 +982,10 @@ export const PaintBucketCanvas = ({
         onWheel={handleWheel}
       >
         <div className="min-w-fit min-h-fit p-2 relative">
-          <canvas ref={canvasRef} className="block mx-auto" />
+          <canvas ref={canvasRef} className="block mx-auto" data-testid="paint-source-canvas" />
           <canvas
             ref={previewCanvasRef}
+            data-testid="paint-interaction-canvas"
             onClick={handleCanvasClick}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}

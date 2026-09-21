@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { createPenetrationPlanPdf, createRoofPlanPdf } from "../fixtures/roofPlan";
+import { createOpenRoofPlanPdf, createPenetrationPlanPdf, createRoofPlanPdf } from "../fixtures/roofPlan";
 import type { Box2D, DetectionRequest, PageContext } from "../../src/types/roi";
 
 type Mode = "complete" | "no_detections" | "partial" | "offline" | "delayed";
@@ -89,6 +89,77 @@ async function canvasInk(canvas: Locator) {
   });
 }
 const continueManually = (page: Page) => page.getByRole("button", { name: "Define roof manually", exact: true });
+
+test("ROI bounds constrain hover, click, drag and saved polygons on an open roof", async ({ page }) => {
+  await enterReview(page, createOpenRoofPlanPdf);
+  await page.getByRole("button", { name: "Manual region", exact: true }).click();
+  const source = (await page.getByTestId("roi-source-canvas").boundingBox())!;
+  await page.mouse.move(source.x + source.width * 0.2, source.y + source.height * 0.2);
+  await page.mouse.down();
+  await page.mouse.move(source.x + source.width * 0.8, source.y + source.height * 0.8);
+  await page.mouse.up();
+  const box = JSON.parse((await page.locator('[data-testid^="annotation-box-"]').getAttribute("data-box"))!) as Box2D;
+  await continueManually(page).click();
+  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
+  const preview = page.getByTestId("paint-interaction-canvas");
+  const next = page.getByRole("button", { name: "Next", exact: true });
+  const move = async (x: number, y: number) => {
+    const bounds = (await preview.boundingBox())!;
+    await page.mouse.move(bounds.x + bounds.width * x, bounds.y + bounds.height * y);
+  };
+  const previewPixels = () => preview.evaluate((canvas: HTMLCanvasElement, roi) => {
+    const pixels = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
+    let inside = 0, outside = 0;
+    for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
+      const i = (y * canvas.width + x) * 4;
+      // Canvas premultiplication can round translucent RGB channels by one or two levels.
+      if (Math.abs(pixels[i] - 50) > 2 || Math.abs(pixels[i + 1] - 130) > 2
+        || Math.abs(pixels[i + 2] - 220) > 2 || pixels[i + 3] !== 100) continue;
+      if (x >= roi[1] / 1000 * canvas.width && x + 1 <= roi[3] / 1000 * canvas.width
+        && y >= roi[0] / 1000 * canvas.height && y + 1 <= roi[2] / 1000 * canvas.height) inside++;
+      else outside++;
+    }
+    return { inside, outside };
+  }, box);
+  await move(0.35, 0.4);
+  await expect.poll(async () => (await previewPixels()).inside).toBeGreaterThan(500);
+  expect((await previewPixels()).outside).toBe(0);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(next).toBeEnabled();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(next).toBeDisabled();
+  await move(0.1, 0.1);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByRole("status")).toHaveText("Click inside a green roof region to select an area.");
+  await expect(next).toBeDisabled();
+  await page.getByTitle("Zoom in", { exact: true }).click();
+  await move(0.35, 0.4);
+  await expect.poll(async () => (await previewPixels()).inside).toBeGreaterThan(500);
+  expect((await previewPixels()).outside).toBe(0);
+  await page.mouse.down();
+  await move(0.9, 0.9);
+  expect((await previewPixels()).outside).toBe(0);
+  await page.mouse.up();
+  await expect(next).toBeEnabled();
+  await next.click();
+  const geometry = page.getByLabel("Manual roof geometry").locator("polygon");
+  const polygons = await geometry.evaluateAll(elements => elements.map(element => element.getAttribute("points")!));
+  expect(polygons.length).toBeGreaterThan(0);
+  for (const polygon of polygons) for (const point of polygon.split(" ")) {
+    const [x, y] = point.split(",").map(Number);
+    expect(x).toBeGreaterThanOrEqual(box[1] / 1000 * 600);
+    expect(x).toBeLessThanOrEqual(box[3] / 1000 * 600);
+    expect(y).toBeGreaterThanOrEqual(box[0] / 1000 * 400);
+    expect(y).toBeLessThanOrEqual(box[2] / 1000 * 400);
+  }
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
+  await expect(next).toBeEnabled();
+  await move(0.1, 0.1);
+  await expect.poll(async () => (await previewPixels()).outside).toBe(0);
+});
 
 async function enterPenetrations(page: Page, withParents = true) {
   await enterReview(page, createPenetrationPlanPdf);

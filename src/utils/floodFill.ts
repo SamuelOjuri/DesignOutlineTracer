@@ -105,7 +105,8 @@ export function floodFill(
   fillColor: [number, number, number, number] = [255, 0, 0, 100],
   existingMask?: Uint8Array,
   sensitivity: number = 50,
-  preserveInteriorHoles: boolean = false
+  preserveInteriorHoles: boolean = false,
+  allowedMask?: Uint8Array
 ): FloodFillResult {
   const { width, height, data } = imageData;
   const size = width * height;
@@ -120,14 +121,16 @@ export function floodFill(
   const targetB = data[startIdx + 2];
 
   const combinedMask = existingMask ? new Uint8Array(existingMask) : new Uint8Array(size);
+  restrictToMask(combinedMask, allowedMask);
 
-  if (existingMask && existingMask[startY * width + startX]) {
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height
+    || (allowedMask && !allowedMask[startY * width + startX]) || combinedMask[startY * width + startX]) {
     const result = new ImageData(new Uint8ClampedArray(data), width, height);
     return {
       filledImageData: result,
-      boundaryPoints: extractBoundary(existingMask, width, height),
+      boundaryPoints: extractBoundary(combinedMask, width, height),
       filledPixelCount: 0,
-      filledMask: existingMask,
+      filledMask: combinedMask,
     };
   }
 
@@ -142,6 +145,7 @@ export function floodFill(
   stack[stackPtr++] = startY;
 
   function canFill(pixelIdx: number): boolean {
+    if (allowedMask && !allowedMask[pixelIdx]) return false;
     if (combinedMask[pixelIdx]) return true;
     if (edgeMap[pixelIdx] > edgeThreshold) return false;
     const idx = pixelIdx * 4;
@@ -198,6 +202,7 @@ export function floodFill(
     morphologicalCloseSeparable(combinedMask, width, height, 6);
     fillSmallHoles(combinedMask, width, height, newFilledCount * 0.3);
   }
+  restrictToMask(combinedMask, allowedMask);
 
   // Build result image
   const result = new ImageData(new Uint8ClampedArray(data), width, height);
@@ -226,7 +231,8 @@ export function buildRegionMap(
   width: number,
   height: number,
   edgeMap: Uint8Array,
-  sensitivity: number = 45
+  sensitivity: number = 45,
+  allowedMask?: Uint8Array
 ): { regionLabels: Int32Array; regionSeeds: Map<number, { x: number; y: number }> } {
   const size = width * height;
   const sensRatio = sensitivity / 50;
@@ -244,6 +250,7 @@ export function buildRegionMap(
     for (let startX = 0; startX < width; startX++) {
       const startPixel = startY * width + startX;
       if (labels[startPixel] !== 0) continue;
+      if (allowedMask && !allowedMask[startPixel]) { labels[startPixel] = -1; continue; }
       if (edgeMap[startPixel] > edgeThreshold) { labels[startPixel] = -1; continue; }
 
       const startIdx = startPixel * 4;
@@ -263,6 +270,7 @@ export function buildRegionMap(
         if (sx < 0 || sx >= width || sy < 0 || sy >= height) continue;
         const pi = sy * width + sx;
         if (labels[pi] !== 0) continue;
+        if (allowedMask && !allowedMask[pi]) { labels[pi] = -1; continue; }
         if (edgeMap[pi] > edgeThreshold) { labels[pi] = -1; continue; }
 
         const idx = pi * 4;
@@ -306,7 +314,8 @@ export function floodFillPreview(
   startY: number,
   cachedEdgeMap: Uint8Array,
   existingMask?: Uint8Array,
-  sensitivity: number = 50
+  sensitivity: number = 50,
+  allowedMask?: Uint8Array
 ): { filledMask: Uint8Array; filledPixelCount: number } {
   const size = width * height;
   const sensRatio = sensitivity / 50;
@@ -314,8 +323,11 @@ export function floodFillPreview(
   const edgeThreshold = Math.max(15, DEFAULT_EDGE_THRESHOLD + (sensitivity - 50) * 1.0);
 
   const startPixel = startY * width + startX;
-  if (existingMask && existingMask[startPixel]) {
-    return { filledMask: existingMask, filledPixelCount: 0 };
+  const combinedMask = existingMask ? new Uint8Array(existingMask) : new Uint8Array(size);
+  restrictToMask(combinedMask, allowedMask);
+  if (startX < 0 || startX >= width || startY < 0 || startY >= height
+    || (allowedMask && !allowedMask[startPixel]) || combinedMask[startPixel]) {
+    return { filledMask: combinedMask, filledPixelCount: 0 };
   }
 
   const startIdx = startPixel * 4;
@@ -323,7 +335,6 @@ export function floodFillPreview(
   const targetG = data[startIdx + 1];
   const targetB = data[startIdx + 2];
 
-  const combinedMask = existingMask ? new Uint8Array(existingMask) : new Uint8Array(size);
   const visited = new Uint8Array(size);
   let newFilledCount = 0;
 
@@ -333,6 +344,7 @@ export function floodFillPreview(
   stack[stackPtr++] = startY;
 
   function canFill(pixelIdx: number): boolean {
+    if (allowedMask && !allowedMask[pixelIdx]) return false;
     if (combinedMask[pixelIdx]) return true;
     if (cachedEdgeMap[pixelIdx] > edgeThreshold) return false;
     const idx = pixelIdx * 4;
@@ -462,8 +474,8 @@ export function eraseFill(
  * For outline generation, thin internal separator lines are bridged so
  * adjacent filled roof areas can produce a single outer roof boundary.
  */
-export function extractMultipleOutlines(mask: Uint8Array, width: number, height: number): Point[][] {
-  const outlineMask = createOutlineMergeMask(mask, width, height);
+export function extractMultipleOutlines(mask: Uint8Array, width: number, height: number, allowedMask?: Uint8Array): Point[][] {
+  const outlineMask = createOutlineMergeMask(mask, width, height, allowedMask);
   const size = width * height;
   const visited = new Uint8Array(size);
   const outlines: Point[][] = [];
@@ -513,10 +525,11 @@ export function extractMultipleOutlines(mask: Uint8Array, width: number, height:
  * Extract interior holes (penetrations) from the filled mask.
  * Returns polygons for unfilled regions completely surrounded by filled pixels.
  */
-export function extractInteriorHoles(mask: Uint8Array, width: number, height: number, minHoleSize: number = 200): Point[][] {
+export function extractInteriorHoles(mask: Uint8Array, width: number, height: number, minHoleSize: number = 200,
+  allowedMask?: Uint8Array): Point[][] {
   // Use the same merged/dilated mask as outline extraction so thin gaps
   // around penetrations are sealed and holes are properly detected as interior.
-  const mergedMask = createOutlineMergeMask(mask, width, height);
+  const mergedMask = createOutlineMergeMask(mask, width, height, allowedMask);
   const size = width * height;
   const visited = new Uint8Array(size);
   const holes: Point[][] = [];
@@ -541,6 +554,7 @@ export function extractInteriorHoles(mask: Uint8Array, width: number, height: nu
         const cy = Math.floor(ci / width);
 
         if (cx === 0 || cx === width - 1 || cy === 0 || cy === height - 1) touchesBorder = true;
+        if (allowedMask && !allowedMask[ci]) touchesBorder = true;
 
         const neighbors = [ci + 1, ci - 1, ci + width, ci - width];
         const valid = [cx < width - 1, cx > 0, cy < height - 1, cy > 0];
@@ -569,8 +583,14 @@ export function extractInteriorHoles(mask: Uint8Array, width: number, height: nu
 
 // --- Internal helpers ---
 
-function createOutlineMergeMask(mask: Uint8Array, width: number, height: number): Uint8Array {
+function restrictToMask(mask: Uint8Array, allowedMask?: Uint8Array): void {
+  if (!allowedMask) return;
+  for (let i = 0; i < mask.length; i++) if (!allowedMask[i]) mask[i] = 0;
+}
+
+function createOutlineMergeMask(mask: Uint8Array, width: number, height: number, allowedMask?: Uint8Array): Uint8Array {
   const merged = new Uint8Array(mask);
+  restrictToMask(merged, allowedMask);
   // Bridge thin gaps between adjacent filled areas
   bridgeThinGaps(merged, width, height, 10, "horizontal");
   bridgeThinGaps(merged, width, height, 10, "vertical");
@@ -578,6 +598,7 @@ function createOutlineMergeMask(mask: Uint8Array, width: number, height: number)
   dilate(merged, width, height, 5);
   // Fill small internal holes left by bridging
   fillSmallHoles(merged, width, height, 1500);
+  restrictToMask(merged, allowedMask);
   return merged;
 }
 

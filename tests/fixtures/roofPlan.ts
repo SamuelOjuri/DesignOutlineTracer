@@ -37,3 +37,18 @@ export async function createPenetrationPlanPdf() {
   }
   return { name: "synthetic-penetrations.pdf", mimeType: "application/pdf", buffer: Buffer.from(await document.save()) };
 }
+
+export async function createOpenRoofPlanPdf() {
+  const document = await PDFDocument.create();
+  for (let index = 0; index < 2; index++) {
+    const page = document.addPage([300, 200]);
+    // An open top lets unrestricted filling reach the page background.
+    for (const [start, end] of [
+      [{ x: 60, y: 160 }, { x: 60, y: 40 }],
+      [{ x: 60, y: 40 }, { x: 240, y: 40 }],
+      [{ x: 240, y: 40 }, { x: 240, y: 160 }],
+    ]) page.drawLine({ start, end, thickness: 1 });
+    page.drawRectangle({ x: 140, y: 90, width: 20, height: 20, borderWidth: 1, borderColor: rgb(0, 0, 0) });
+  }
+  return { name: "synthetic-open-roof.pdf", mimeType: "application/pdf", buffer: Buffer.from(await document.save()) };
+}
