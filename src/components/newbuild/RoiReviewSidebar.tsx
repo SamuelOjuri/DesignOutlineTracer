@@ -113,7 +113,7 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
       <p className="text-xs text-muted-foreground mt-1">Assisted annotation / {accepted} accepted</p>
     </div>
     <div className="space-y-2">
-      <p className="text-xs text-muted-foreground">Detection sends this page image to the annotation service and Google Gemini for processing.</p>
+      <p className="text-xs text-muted-foreground">Detection sends this page image to the annotation model for processing.</p>
       {isPenetration && !parents.length && <p role="status" className="text-sm">No accepted roof areas. Detection is unavailable.</p>}
       {busy ? <Button variant="outline" className="w-full" onClick={detection.cancel}><Square className="w-4 h-4 mr-2" />Cancel detection</Button>
         : <Button className="w-full" disabled={isPenetration && !parents.length} onClick={() => void detection.detect()}>
@@ -186,7 +186,7 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
                 : annotation.review_status === "rejected" ? <X className="w-4 h-4 shrink-0" /> : <Circle className="w-4 h-4 shrink-0" />}
               {itemLabel} {index + 1}
             </span>
-            <span className="block text-xs mt-1 capitalize">{annotation.review_status} / {annotation.origin === "manual" ? "Manual" : "Gemini"}
+            <span className="block text-xs mt-1 capitalize">{annotation.review_status} / {annotation.origin === "manual" ? "Manual" : "Annotation Model"}
               {annotation.validity === "needs_review" ? " / Needs review" : ""}</span>
             {isPenetration && <span className="block text-xs mt-1 break-words">{annotation.subtype?.replace(/_/g, " ")} / {
               page.annotations.find((parent) => parent.id === annotation.roi_id)?.label ?? "Unassigned"}</span>}

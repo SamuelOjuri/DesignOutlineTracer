@@ -404,7 +404,7 @@ export const NewBuildApp = () => {
               disabled={currentStep === "details" || !canProceed()}
               className="flex-1 min-w-0 whitespace-normal h-auto min-h-10 py-2"
             >
-              {currentStep === "details" ? "Complete" : currentStep === "roi" ? "Define roof manually" : "Next"}
+              {currentStep === "details" ? "Complete" : currentStep === "roi" ? "Set Outlines" : "Next"}
             </Button>
           </div>
         </div>
