@@ -1,14 +1,23 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, useId } from "react";
 import { Point } from "@/types/roof";
 import { floodFill, floodFillPreview, eraseFill, extractMultipleOutlines, extractInteriorHoles, buildEdgeMap, buildRegionMap } from "@/utils/floodFill";
 import { findClosestEdge, findClosestVertex, movePolygonEdge, rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
 import { Button } from "@/components/ui/button";
 import type { Box2D, RoiAnnotation } from "@/types/roi";
 import { buildRoiFillMask } from "@/utils/roiFillMask";
+import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/utils/rectangleCutout";
 import { AnnotationOverlay } from "./AnnotationOverlay";
-import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2 } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal } from "lucide-react";
 
-type PaintTool = "fill" | "cutout" | "adjust";
+type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust";
+
+interface SelectionSnapshot {
+  mask: Uint8Array | null;
+  cutoutMask: Uint8Array | null;
+  rectangles: CutoutRectangle[];
+  outlines: Point[][];
+  holes: Point[][];
+}
 
 interface PaintBucketCanvasProps {
   pdfCanvas: HTMLCanvasElement;
@@ -24,6 +33,7 @@ const FILL_COLOR: [number, number, number, number] = [220, 50, 50, 160];
 const PREVIEW_FILL_COLOR = [50, 130, 220, 100] as const;
 const PREVIEW_REMOVE_COLOR = [220, 50, 50, 80] as const;
 const PREVIEW_CUTOUT_COLOR = [255, 140, 0, 100] as const;
+const DEFAULT_CUTOUT_SENSITIVITY = 40;
 
 export const PaintBucketCanvas = ({
   pdfCanvas,
@@ -41,6 +51,8 @@ export const PaintBucketCanvas = ({
   const [fitScale, setFitScale] = useState(1);
   const [fillCount, setFillCount] = useState(0);
   const [activeTool, setActiveTool] = useState<PaintTool>("fill");
+  const [cutoutSensitivity, setCutoutSensitivity] = useState(DEFAULT_CUTOUT_SENSITIVITY);
+  const cutoutSensitivityId = useId();
   const [isInitializing, setIsInitializing] = useState(true);
   const [selectionMessage, setSelectionMessage] = useState<string | null>(null);
   // The parent recreates annotation arrays on drawing updates; only changed boxes should rebuild the mask.
@@ -49,9 +61,12 @@ export const PaintBucketCanvas = ({
 
   const originalImageDataRef = useRef<ImageData | null>(null);
   const filledMaskRef = useRef<Uint8Array | null>(null);
-  const maskHistoryRef = useRef<Uint8Array[]>([]);
+  const maskHistoryRef = useRef<SelectionSnapshot[]>([]);
   const cachedEdgeMapRef = useRef<Uint8Array | null>(null);
   const cutoutMaskRef = useRef<Uint8Array | null>(null);
+  const rectangleCutsRef = useRef<CutoutRectangle[]>([]);
+  const rectangleDragRef = useRef<{ start: Point; end: Point; pointerId: number; mask: Uint8Array } | null>(null);
+  const rectangleFrameRef = useRef<number | null>(null);
   const regionLabelsRef = useRef<Int32Array | null>(null);
   const regionSeedsRef = useRef<Map<number, { x: number; y: number }> | null>(null);
 
@@ -91,14 +106,25 @@ export const PaintBucketCanvas = ({
     sourceGeometry.current = { roofOutlines, interiorHoles };
   }, [roofOutlines, interiorHoles]);
 
+  const saveHistory = useCallback((mask = filledMaskRef.current) => {
+    maskHistoryRef.current.push({
+      mask: mask?.length ? new Uint8Array(mask) : null,
+      cutoutMask: cutoutMaskRef.current ? new Uint8Array(cutoutMaskRef.current) : null,
+      rectangles: [...rectangleCutsRef.current],
+      outlines: sourceGeometry.current.roofOutlines.map(outline => outline.map(point => ({ ...point }))),
+      holes: interiorHolesRef.current.map(hole => hole.map(point => ({ ...point }))),
+    });
+  }, []);
+
   const emitOutlinesAndHoles = useCallback((mask: Uint8Array, w: number, h: number) => {
     const outlines = extractMultipleOutlines(mask, w, h, allowedMaskRef.current);
-    onOutlinesExtracted(outlines);
-    if (onHolesExtracted) {
-      const holes = extractInteriorHoles(mask, w, h, 200, allowedMaskRef.current);
-      interiorHolesRef.current = holes;
-      onHolesExtracted(holes);
-    }
+    const holes = onHolesExtracted || rectangleCutsRef.current.length
+      ? extractInteriorHoles(mask, w, h, 200, allowedMaskRef.current) : [];
+    // Outline cleanup expands pixel masks. Reapply explicit rectangles to keep those cuts exact.
+    const result = subtractRectangles(outlines, holes, rectangleCutsRef.current);
+    onOutlinesExtracted(result.outlines);
+    interiorHolesRef.current = result.holes;
+    onHolesExtracted?.(result.holes);
   }, [onOutlinesExtracted, onHolesExtracted]);
 
   const ZOOM_STEP = 0.15;
@@ -148,6 +174,8 @@ export const PaintBucketCanvas = ({
       ? rasterizeOutlinesWithHoles(manual.interiorHoles, [], canvas.width, canvas.height) : null;
     interiorHolesRef.current = manual.interiorHoles.map((hole) => hole.map((point) => ({ ...point })));
     maskHistoryRef.current = [];
+    rectangleCutsRef.current = [];
+    rectangleDragRef.current = null;
     setFillCount(manual.roofOutlines.length ? 1 : 0);
 
     // Defer heavy edge/region computation to next frame
@@ -173,6 +201,7 @@ export const PaintBucketCanvas = ({
       if (regionFrame !== undefined) cancelAnimationFrame(regionFrame);
       if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
       if (hoverTimerRef.current !== null) clearTimeout(hoverTimerRef.current);
+      if (rectangleFrameRef.current !== null) cancelAnimationFrame(rectangleFrameRef.current);
       hoverTimerRef.current = null;
       isComputingRef.current = false;
     };
@@ -319,7 +348,7 @@ export const PaintBucketCanvas = ({
           clearPreview(); isComputingRef.current = false; return;
         }
         const tempMask = new Uint8Array(currentMask);
-        eraseFill(tempMask, w, h, hx, hy, origData, 40);
+        eraseFill(tempMask, w, h, hx, hy, origData, cutoutSensitivity);
         const previewMask = new Uint8Array(w * h);
         for (let i = 0; i < w * h; i++) {
           if (currentMask[i] && !tempMask[i]) previewMask[i] = 1;
@@ -358,12 +387,12 @@ export const PaintBucketCanvas = ({
 
       const previewMask = new Uint8Array(w * h);
       for (let i = 0; i < w * h; i++) {
-        if (result.filledMask[i] && (!currentMask || !currentMask[i])) previewMask[i] = 1;
+        if (result.filledMask[i] && (!currentMask || !currentMask[i]) && !cutoutMaskRef.current?.[i]) previewMask[i] = 1;
       }
       renderPreviewMask(previewMask, PREVIEW_FILL_COLOR);
       isComputingRef.current = false;
     });
-  }, [activeTool, clearPreview, renderPreviewMask]);
+  }, [activeTool, cutoutSensitivity, clearPreview, renderPreviewMask]);
 
   const getCanvasPos = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -374,6 +403,116 @@ export const PaintBucketCanvas = ({
     if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) return null;
     return { x, y };
   }, [displayScale]);
+
+  const cancelRectangleDrag = useCallback(() => {
+    const drag = rectangleDragRef.current;
+    rectangleDragRef.current = null;
+    if (rectangleFrameRef.current !== null) cancelAnimationFrame(rectangleFrameRef.current);
+    rectangleFrameRef.current = null;
+    const canvas = previewCanvasRef.current;
+    if (drag && canvas?.hasPointerCapture(drag.pointerId)) canvas.releasePointerCapture(drag.pointerId);
+    clearPreview();
+  }, [clearPreview]);
+
+  useEffect(() => {
+    const cancel = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && rectangleDragRef.current) {
+        cancelRectangleDrag();
+        setSelectionMessage("Rectangle cut cancelled.");
+      }
+    };
+    window.addEventListener("keydown", cancel);
+    window.addEventListener("blur", cancelRectangleDrag);
+    return () => {
+      window.removeEventListener("keydown", cancel);
+      window.removeEventListener("blur", cancelRectangleDrag);
+      cancelRectangleDrag();
+    };
+  }, [activeTool, displayScale, cancelRectangleDrag]);
+
+  const rectanglePosition = useCallback((event: React.PointerEvent<HTMLCanvasElement>): Point => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.round((event.clientX - bounds.left) / displayScale),
+      y: Math.round((event.clientY - bounds.top) / displayScale),
+    };
+  }, [displayScale]);
+
+  const previewRectangle = useCallback(() => {
+    rectangleFrameRef.current = null;
+    const drag = rectangleDragRef.current;
+    const canvas = previewCanvasRef.current;
+    if (!drag || !canvas) return;
+    const { left, top, right, bottom } = cutoutRectangle(drag.start, drag.end, canvas.width, canvas.height);
+    clearPreview();
+    if (right <= left || bottom <= top) return;
+    const ctx = canvas.getContext("2d")!;
+    // Only allocate the rectangle's pixels while dragging on large plan images.
+    const image = ctx.createImageData(right - left, bottom - top);
+    for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
+      if (drag.mask[y * canvas.width + x]) {
+        image.data.set(PREVIEW_CUTOUT_COLOR, ((y - top) * image.width + x - left) * 4);
+      }
+    }
+    ctx.putImageData(image, left, top);
+    ctx.strokeStyle = "rgba(230, 110, 0, 0.9)";
+    ctx.lineWidth = 2 / displayScale;
+    ctx.setLineDash([6 / displayScale, 4 / displayScale]);
+    ctx.strokeRect(left, top, right - left, bottom - top);
+    ctx.setLineDash([]);
+  }, [clearPreview, displayScale]);
+
+  const handleRectangleDown = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activeTool !== "rectangle-cutout" || isInitializing || event.button !== 0 || rectangleDragRef.current) return;
+    const canvas = event.currentTarget;
+    event.preventDefault();
+    canvas.setPointerCapture(event.pointerId);
+    const start = rectanglePosition(event);
+    rectangleDragRef.current = {
+      start, end: start, pointerId: event.pointerId,
+      mask: rasterizeOutlinesWithHoles(roofOutlines, interiorHolesRef.current, canvas.width, canvas.height),
+    };
+    setSelectionMessage(null);
+    clearPreview();
+  }, [activeTool, isInitializing, rectanglePosition, roofOutlines, clearPreview]);
+
+  const handleRectangleMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = rectangleDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag.end = rectanglePosition(event);
+    if (rectangleFrameRef.current === null) rectangleFrameRef.current = requestAnimationFrame(previewRectangle);
+  }, [rectanglePosition, previewRectangle]);
+
+  const handleRectangleUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = rectangleDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const canvas = event.currentTarget;
+    const end = rectanglePosition(event);
+    const rect = cutoutRectangle(drag.start, end, canvas.width, canvas.height);
+    cancelRectangleDrag();
+    // A click or accidental movement must not remove a thin strip of roof.
+    if ((rect.right - rect.left) * displayScale < 3 || (rect.bottom - rect.top) * displayScale < 3) return;
+    const result = subtractRectangles(roofOutlines, interiorHolesRef.current, [rect]);
+    if (!result.changed) {
+      setSelectionMessage("No selected area inside that rectangle.");
+      return;
+    }
+    saveHistory();
+    rectangleCutsRef.current.push(rect);
+    const mask = rasterizeOutlinesWithHoles(result.outlines, result.holes, canvas.width, canvas.height);
+    // Remove the rectangle from the source mask and prevent later fills from restoring it.
+    if (!cutoutMaskRef.current) cutoutMaskRef.current = new Uint8Array(mask.length);
+    for (let y = rect.top; y < rect.bottom; y++) {
+      mask.fill(0, y * canvas.width + rect.left, y * canvas.width + rect.right);
+      cutoutMaskRef.current.fill(1, y * canvas.width + rect.left, y * canvas.width + rect.right);
+    }
+    filledMaskRef.current = mask;
+    interiorHolesRef.current = result.holes;
+    onOutlinesExtracted(result.outlines);
+    onHolesExtracted?.(result.holes);
+    setFillCount(count => count + 1);
+    setSelectionMessage("Selected area inside the rectangle removed. Use Undo to restore it.");
+  }, [rectanglePosition, cancelRectangleDrag, displayScale, roofOutlines, saveHistory, onOutlinesExtracted, onHolesExtracted]);
 
   const fillAtPoint = useCallback((x: number, y: number): boolean => {
     const canvas = canvasRef.current;
@@ -486,7 +625,7 @@ export const PaintBucketCanvas = ({
 
   // --- Mouse handlers ---
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0 || isInitializing) return;
+    if (e.button !== 0 || isInitializing || activeTool === "rectangle-cutout") return;
     const pos = getCanvasPos(e);
     if (!pos) return;
 
@@ -507,7 +646,7 @@ export const PaintBucketCanvas = ({
       // Check vertex first (higher priority, smaller target)
       const vertex = findClosestVertex(pos.x, pos.y, roofOutlines, 10);
       if (vertex) {
-        if (currentMask) maskHistoryRef.current.push(new Uint8Array(currentMask));
+        if (currentMask) saveHistory();
         adjustDragRef.current = {
           type: "vertex",
           outlineIndex: vertex.outlineIndex,
@@ -521,7 +660,7 @@ export const PaintBucketCanvas = ({
       }
       const edge = findClosestEdge(pos.x, pos.y, roofOutlines, 15);
       if (edge) {
-        if (currentMask) maskHistoryRef.current.push(new Uint8Array(currentMask));
+        if (currentMask) saveHistory();
         adjustDragRef.current = {
           type: "edge",
           outlineIndex: edge.outlineIndex,
@@ -545,10 +684,10 @@ export const PaintBucketCanvas = ({
       clearPreview();
       return;
     }
-  }, [getCanvasPos, activeTool, clearPreview, isInitializing, roofOutlines]);
+  }, [getCanvasPos, activeTool, clearPreview, isInitializing, roofOutlines, saveHistory]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isInitializing) return;
+    if (isInitializing || activeTool === "rectangle-cutout") return;
     const pos = getCanvasPos(e);
     if (!pos) return;
 
@@ -696,7 +835,7 @@ export const PaintBucketCanvas = ({
 
       if (fillAtPoint(start.x, start.y)) {
         const beforeMask = dragMaskBeforeRef.current;
-        if (beforeMask) maskHistoryRef.current.push(beforeMask);
+        if (beforeMask) saveHistory(beforeMask);
         setFillCount(c => c + 1);
         redrawCanvas();
         emitOutlinesAndHoles(filledMaskRef.current!, w, h);
@@ -725,7 +864,7 @@ export const PaintBucketCanvas = ({
 
     if (filled) {
       const beforeMask = dragMaskBeforeRef.current;
-      if (beforeMask) maskHistoryRef.current.push(beforeMask);
+      if (beforeMask) saveHistory(beforeMask);
       setFillCount(c => c + 1);
       redrawCanvas();
       if (filledMaskRef.current) {
@@ -739,9 +878,10 @@ export const PaintBucketCanvas = ({
     clearPreview();
     redrawCanvas();
     requestAnimationFrame(() => { justDraggedRef.current = false; });
-  }, [onHolesExtracted, emitOutlinesAndHoles, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint]);
+  }, [onHolesExtracted, emitOutlinesAndHoles, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint, saveHistory]);
 
   const handleMouseLeave = useCallback(() => {
+    if (rectangleDragRef.current) return; // Pointer capture keeps the rectangle active until release.
     if (adjustDragRef.current) handleMouseUp();
     if (isDraggingRef.current) handleMouseUp();
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
@@ -764,7 +904,7 @@ export const PaintBucketCanvas = ({
 
     // Save mask for undo
     const currentMask = filledMaskRef.current;
-    if (currentMask) maskHistoryRef.current.push(new Uint8Array(currentMask));
+    if (currentMask) saveHistory();
 
     // Remove the second vertex of the edge; the polygon reconnects automatically
     const vertexToRemove = (edge.edgeIndex + 1) % outline.length;
@@ -786,12 +926,22 @@ export const PaintBucketCanvas = ({
     setHoveredEdge(null);
     setHoveredVertex(null);
     setFillCount(c => c + 1);
-  }, [activeTool, getCanvasPos, roofOutlines, onOutlinesExtracted]);
+  }, [activeTool, getCanvasPos, roofOutlines, onOutlinesExtracted, saveHistory]);
 
-  useEffect(() => { clearPreview(); setHoveredEdge(null); setHoveredVertex(null); }, [activeTool, clearPreview]);
+  useEffect(() => {
+    // Discard work queued with the previous tool or sensitivity before the next hover.
+    if (hoverTimerRef.current !== null) clearTimeout(hoverTimerRef.current);
+    if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
+    hoverTimerRef.current = null;
+    previewRafRef.current = null;
+    isComputingRef.current = false;
+    clearPreview();
+    setHoveredEdge(null);
+    setHoveredVertex(null);
+  }, [activeTool, cutoutSensitivity, clearPreview]);
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (justDraggedRef.current || isInitializing || activeTool === "adjust") return;
+    if (justDraggedRef.current || isInitializing || activeTool === "adjust" || activeTool === "rectangle-cutout") return;
     const pos = getCanvasPos(e);
     if (!pos) return;
     const canvas = canvasRef.current;
@@ -803,9 +953,9 @@ export const PaintBucketCanvas = ({
 
     if (activeTool === "cutout") {
       if (!currentMask || !currentMask[pos.y * w + pos.x]) return;
-      maskHistoryRef.current.push(new Uint8Array(currentMask));
+      saveHistory();
       const beforeMask = new Uint8Array(currentMask);
-      eraseFill(currentMask, w, h, pos.x, pos.y, origData, 40);
+      eraseFill(currentMask, w, h, pos.x, pos.y, origData, cutoutSensitivity);
 
       if (!cutoutMaskRef.current) cutoutMaskRef.current = new Uint8Array(w * h);
       for (let i = 0; i < w * h; i++) {
@@ -820,7 +970,7 @@ export const PaintBucketCanvas = ({
 
     // Fill tool: clicking filled area removes it
     if (currentMask && currentMask[pos.y * w + pos.x]) {
-      maskHistoryRef.current.push(new Uint8Array(currentMask));
+      saveHistory();
       const newMask = new Uint8Array(currentMask);
       const visited = new Uint8Array(w * h);
       const stack: number[] = [pos.x, pos.y];
@@ -840,35 +990,32 @@ export const PaintBucketCanvas = ({
       clearPreview();
       return;
     }
-  }, [getCanvasPos, emitOutlinesAndHoles, activeTool, clearPreview, isInitializing]);
+  }, [getCanvasPos, emitOutlinesAndHoles, activeTool, cutoutSensitivity, clearPreview, isInitializing, saveHistory]);
 
   const handleUndo = useCallback(() => {
     if (maskHistoryRef.current.length === 0) return;
-    const previousMask = maskHistoryRef.current.pop()!;
-    cutoutMaskRef.current = null;
-    if (previousMask.length === 0) {
-      filledMaskRef.current = null;
-      setFillCount(0);
-      onOutlinesExtracted([]);
-      if (onHolesExtracted) onHolesExtracted([]);
-    } else {
-      filledMaskRef.current = previousMask;
-      setFillCount(c => c - 1);
-      const canvas = canvasRef.current;
-      if (canvas) {
-        emitOutlinesAndHoles(previousMask, canvas.width, canvas.height);
-      }
-    }
+    const previous = maskHistoryRef.current.pop()!;
+    filledMaskRef.current = previous.mask;
+    cutoutMaskRef.current = previous.cutoutMask;
+    rectangleCutsRef.current = previous.rectangles;
+    interiorHolesRef.current = previous.holes;
+    setFillCount(c => Math.max(0, c - 1));
+    onOutlinesExtracted(previous.outlines);
+    onHolesExtracted?.(previous.holes);
+    setSelectionMessage(null);
     clearPreview();
-  }, [emitOutlinesAndHoles, onOutlinesExtracted, onHolesExtracted, clearPreview]);
+  }, [onOutlinesExtracted, onHolesExtracted, clearPreview]);
 
   const handleReset = useCallback(() => {
     filledMaskRef.current = null;
     cutoutMaskRef.current = null;
+    rectangleCutsRef.current = [];
+    interiorHolesRef.current = [];
     maskHistoryRef.current = [];
     setFillCount(0);
     onOutlinesExtracted([]);
     if (onHolesExtracted) onHolesExtracted([]);
+    setSelectionMessage(null);
     clearPreview();
   }, [onOutlinesExtracted, onHolesExtracted, clearPreview]);
 
@@ -891,8 +1038,8 @@ export const PaintBucketCanvas = ({
   return (
     <div className="flex flex-col h-full w-full">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 mb-2 px-1">
-        <div className="flex items-center border border-border rounded-md overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 mb-2 px-1">
+        <div className="flex flex-wrap items-center border border-border rounded-md overflow-hidden">
           <Button
             variant={activeTool === "fill" ? "default" : "ghost"}
             size="sm"
@@ -914,6 +1061,18 @@ export const PaintBucketCanvas = ({
           >
             <Scissors className="w-4 h-4 mr-1" />
             Cut Out
+          </Button>
+          <Button
+            variant={activeTool === "rectangle-cutout" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTool("rectangle-cutout")}
+            title="Drag a rectangle to remove selected areas inside it"
+            aria-pressed={activeTool === "rectangle-cutout"}
+            className="rounded-none"
+            disabled={isInitializing || !roofOutlines.length}
+          >
+            <RectangleHorizontal className="w-4 h-4 mr-1" />
+            Cut Out rectangle
           </Button>
           <Button
             variant={activeTool === "adjust" ? "default" : "ghost"}
@@ -970,6 +1129,29 @@ export const PaintBucketCanvas = ({
         )}
       </div>
 
+      {activeTool === "cutout" && <div className="rounded-md border border-border bg-muted/30 px-3 py-2 mb-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <label htmlFor={cutoutSensitivityId} className="text-sm font-medium">Cut Out sensitivity</label>
+          <input id={cutoutSensitivityId} type="range" min={1} max={100} step={1}
+            value={cutoutSensitivity} onChange={(event) => setCutoutSensitivity(Number(event.target.value))}
+            aria-describedby={`${cutoutSensitivityId}-help`} disabled={isInitializing}
+            className="w-48 max-w-full h-6 cursor-pointer accent-primary disabled:cursor-default disabled:opacity-50" />
+          <output htmlFor={cutoutSensitivityId} className="text-sm tabular-nums w-7">{cutoutSensitivity}</output>
+          <Button variant="ghost" size="sm" onClick={() => setCutoutSensitivity(DEFAULT_CUTOUT_SENSITIVITY)}
+            disabled={isInitializing || cutoutSensitivity === DEFAULT_CUTOUT_SENSITIVITY}>
+            Default (40)
+          </Button>
+        </div>
+        <p id={`${cutoutSensitivityId}-help`} className="text-xs text-muted-foreground mt-1">
+          Lower values give a tighter cut; higher values allow more spread. Hover over the area to preview before clicking.
+        </p>
+      </div>}
+
+      {activeTool === "rectangle-cutout" && <p className="rounded-md border border-border bg-muted/30 px-3 py-2 mb-2 text-sm">
+        Drag a rectangle around unwanted fragments, starting in empty space if needed. Orange shows what will be removed.
+        Release to remove everything selected inside the rectangle, including any part of the main roof. Press Esc to cancel or Undo to restore.
+      </p>}
+
       {acceptedRegions.length > 0 && <p className="text-xs text-muted-foreground px-1 mb-2">
         Selection stays inside the green roof regions. Use Cut Out or Adjust to refine the roof boundary.
       </p>}
@@ -992,8 +1174,13 @@ export const PaintBucketCanvas = ({
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseLeave}
             onContextMenu={handleContextMenu}
+            onPointerDown={handleRectangleDown}
+            onPointerMove={handleRectangleMove}
+            onPointerUp={handleRectangleUp}
+            onPointerCancel={cancelRectangleDrag}
+            onLostPointerCapture={cancelRectangleDrag}
             className={`absolute top-2 left-1/2 -translate-x-1/2 ${activeTool === "adjust" ? "cursor-move" : activeTool === "cutout" ? "cursor-pointer" : "cursor-crosshair"}`}
-            style={{ pointerEvents: "auto" }}
+            style={{ pointerEvents: "auto", touchAction: activeTool === "rectangle-cutout" ? "none" : "auto" }}
           />
           {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
@@ -1005,7 +1192,9 @@ export const PaintBucketCanvas = ({
       <div className="flex items-center justify-center gap-2 mt-2 px-4">
         <MousePointer className="w-3.5 h-3.5 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">
-          {activeTool === "adjust"
+          {activeTool === "rectangle-cutout"
+            ? "Drag to preview a rectangular cut; release to apply. Esc cancels. Undo restores the selection."
+            : activeTool === "adjust"
             ? "Drag edges or vertices to adjust — hold Shift to lock to 90° — right-click edge to delete — Ctrl + scroll to zoom"
             : activeTool === "fill"
             ? "Hover to preview — click or hold & drag to multi-select areas — click filled area to remove — Ctrl + scroll to zoom"

@@ -135,11 +135,11 @@ export const NewBuildSidebar = ({
             </p>
             <p className="flex items-start gap-2">
               <span className="text-primary font-bold mt-0.5">4</span>
-              Use <Scissors className="w-3.5 h-3.5 inline mx-0.5" /> <strong>Cut Out</strong> to remove sections within a filled area (e.g. penetrations)
+              <span>Use <Scissors className="w-3.5 h-3.5 inline mx-0.5" /> <strong>Cut Out</strong> for enclosed sections, or <strong>Cut Out rectangle</strong> to drag around unwanted fragments.</span>
             </p>
             <p className="flex items-start gap-2">
               <span className="text-primary font-bold mt-0.5">5</span>
-              Use <Move className="w-3.5 h-3.5 inline mx-0.5" /> <strong>Adjust</strong> to drag boundary edges and fine-tune the outline
+              <span>Use <Move className="w-3.5 h-3.5 inline mx-0.5" /> <strong>Adjust</strong> to drag boundary edges and fine-tune the outline.</span>
             </p>
           </div>
 
