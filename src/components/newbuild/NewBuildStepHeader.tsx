@@ -6,11 +6,11 @@ interface NewBuildStepHeaderProps {
 }
 
 const labels: Record<NewBuildStep, string> = {
-  upload: "Upload Roof Plan", roi: "Review Roof Areas", paint: "Define Roof Area", penetrations: "Review Penetrations", outlets: "Place Outlets", details: "Project Details",
+  upload: "Upload Plan", roi: "Review Roof Areas", paint: "Set Outlines", penetrations: "Review Penetrations", outlets: "Add Outlets", details: "Project Details",
 };
 
 export const NewBuildStepHeader = ({ currentStep, steps: order }: NewBuildStepHeaderProps) => {
-  const steps = order.map((key, index) => ({ key, label: `Step ${index + 1}: ${labels[key]}`, number: index + 1 }));
+  const steps = order.map((key, index) => ({ key, label: labels[key], number: index + 1 }));
   const currentStepNumber = steps.find((step) => step.key === currentStep)?.number ?? 0;
   return (
     <div className="bg-card border-b border-border p-4">
