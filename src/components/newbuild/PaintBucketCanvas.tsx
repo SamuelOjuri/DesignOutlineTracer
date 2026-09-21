@@ -34,6 +34,7 @@ const PREVIEW_FILL_COLOR = [50, 130, 220, 100] as const;
 const PREVIEW_REMOVE_COLOR = [220, 50, 50, 80] as const;
 const PREVIEW_CUTOUT_COLOR = [255, 140, 0, 100] as const;
 const DEFAULT_CUTOUT_SENSITIVITY = 40;
+const DEFAULT_SELECTION_SENSITIVITY = 45;
 
 export const PaintBucketCanvas = ({
   pdfCanvas,
@@ -53,6 +54,8 @@ export const PaintBucketCanvas = ({
   const [activeTool, setActiveTool] = useState<PaintTool>("fill");
   const [cutoutSensitivity, setCutoutSensitivity] = useState(DEFAULT_CUTOUT_SENSITIVITY);
   const cutoutSensitivityId = useId();
+  const [selectionSensitivity, setSelectionSensitivity] = useState(DEFAULT_SELECTION_SENSITIVITY);
+  const selectionSensitivityId = useId();
   const [isInitializing, setIsInitializing] = useState(true);
   const [selectionMessage, setSelectionMessage] = useState<string | null>(null);
   // The parent recreates annotation arrays on drawing updates; only changed boxes should rebuild the mask.
@@ -69,6 +72,7 @@ export const PaintBucketCanvas = ({
   const rectangleFrameRef = useRef<number | null>(null);
   const regionLabelsRef = useRef<Int32Array | null>(null);
   const regionSeedsRef = useRef<Map<number, { x: number; y: number }> | null>(null);
+  const regionSensitivityRef = useRef<number | null>(null);
 
   // Hover preview refs
   const hoverTimerRef = useRef<number | null>(null);
@@ -178,27 +182,18 @@ export const PaintBucketCanvas = ({
     rectangleDragRef.current = null;
     setFillCount(manual.roofOutlines.length ? 1 : 0);
 
-    // Defer heavy edge/region computation to next frame
+    regionLabelsRef.current = null;
+    regionSeedsRef.current = null;
+    regionSensitivityRef.current = null;
     setIsInitializing(true);
-    let regionFrame: number | undefined;
     const edgeFrame = requestAnimationFrame(() => {
       const imgData = originalImageDataRef.current!;
       const edgeMap = buildEdgeMap(imgData.data, canvas.width, canvas.height);
       cachedEdgeMapRef.current = edgeMap;
-
-      // Build region map in a second frame to avoid long blocking
-      regionFrame = requestAnimationFrame(() => {
-        const { regionLabels, regionSeeds } = buildRegionMap(
-          imgData.data, canvas.width, canvas.height, edgeMap, 45, allowedMaskRef.current
-        );
-        regionLabelsRef.current = regionLabels;
-        regionSeedsRef.current = regionSeeds;
-        setIsInitializing(false);
-      });
+      setIsInitializing(false);
     });
     return () => {
       cancelAnimationFrame(edgeFrame);
-      if (regionFrame !== undefined) cancelAnimationFrame(regionFrame);
       if (previewRafRef.current !== null) cancelAnimationFrame(previewRafRef.current);
       if (hoverTimerRef.current !== null) clearTimeout(hoverTimerRef.current);
       if (rectangleFrameRef.current !== null) cancelAnimationFrame(rectangleFrameRef.current);
@@ -382,7 +377,7 @@ export const PaintBucketCanvas = ({
       const edgeMap = cachedEdgeMapRef.current;
       if (!edgeMap) { isComputingRef.current = false; return; }
 
-      const result = floodFillPreview(origData.data, w, h, hx, hy, edgeMap, currentMask || undefined, 45, allowedMaskRef.current);
+      const result = floodFillPreview(origData.data, w, h, hx, hy, edgeMap, currentMask || undefined, selectionSensitivity, allowedMaskRef.current);
       if (result.filledPixelCount < 50) { clearPreview(); isComputingRef.current = false; return; }
 
       const previewMask = new Uint8Array(w * h);
@@ -392,7 +387,7 @@ export const PaintBucketCanvas = ({
       renderPreviewMask(previewMask, PREVIEW_FILL_COLOR);
       isComputingRef.current = false;
     });
-  }, [activeTool, cutoutSensitivity, clearPreview, renderPreviewMask]);
+  }, [activeTool, cutoutSensitivity, selectionSensitivity, clearPreview, renderPreviewMask]);
 
   const getCanvasPos = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -525,7 +520,7 @@ export const PaintBucketCanvas = ({
     if (cutoutMaskRef.current && cutoutMaskRef.current[y * w + x]) return false;
 
     const imageData = new ImageData(new Uint8ClampedArray(origData.data), w, h);
-    const result = floodFill(imageData, x, y, FILL_COLOR, currentMask || undefined, 45, true, allowedMaskRef.current);
+    const result = floodFill(imageData, x, y, FILL_COLOR, currentMask || undefined, selectionSensitivity, true, allowedMaskRef.current);
     if (result.filledPixelCount < 50) {
       setSelectionMessage("No area found at this spot. Click a clear part of the roof away from lines and symbols.");
       return false;
@@ -541,10 +536,21 @@ export const PaintBucketCanvas = ({
     filledMaskRef.current = result.filledMask;
     setSelectionMessage(null);
     return true;
-  }, []);
+  }, [selectionSensitivity]);
 
   // --- Rectangle drag for multi-select ---
   const getRegionsInRect = useCallback((x1: number, y1: number, x2: number, y2: number, w: number): Set<number> => {
+    if (regionSensitivityRef.current !== selectionSensitivity) {
+      const image = originalImageDataRef.current;
+      const edgeMap = cachedEdgeMapRef.current;
+      if (!image || !edgeMap) return new Set();
+      const { regionLabels, regionSeeds } = buildRegionMap(
+        image.data, image.width, image.height, edgeMap, selectionSensitivity, allowedMaskRef.current
+      );
+      regionLabelsRef.current = regionLabels;
+      regionSeedsRef.current = regionSeeds;
+      regionSensitivityRef.current = selectionSensitivity;
+    }
     const labels = regionLabelsRef.current;
     const seeds = regionSeedsRef.current;
     if (!labels || !seeds) return new Set();
@@ -566,7 +572,7 @@ export const PaintBucketCanvas = ({
       }
     }
     return hitRegions;
-  }, []);
+  }, [selectionSensitivity]);
 
   const buildRegionPreviewMask = useCallback((regionIds: Set<number>, w: number, h: number): Uint8Array => {
     const labels = regionLabelsRef.current;
@@ -938,7 +944,7 @@ export const PaintBucketCanvas = ({
     clearPreview();
     setHoveredEdge(null);
     setHoveredVertex(null);
-  }, [activeTool, cutoutSensitivity, clearPreview]);
+  }, [activeTool, cutoutSensitivity, selectionSensitivity, clearPreview]);
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (justDraggedRef.current || isInitializing || activeTool === "adjust" || activeTool === "rectangle-cutout") return;
@@ -1128,6 +1134,21 @@ export const PaintBucketCanvas = ({
           </>
         )}
       </div>
+
+      {activeTool === "fill" && <div className="rounded-md border border-border bg-muted/30 px-3 py-2 mb-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <label htmlFor={selectionSensitivityId} className="text-sm font-medium">Selection sensitivity</label>
+          <input id={selectionSensitivityId} type="range" min={1} max={100} step={1}
+            value={selectionSensitivity} onChange={(event) => setSelectionSensitivity(Number(event.target.value))}
+            disabled={isInitializing}
+            className="w-48 max-w-full h-6 cursor-pointer accent-primary disabled:cursor-default disabled:opacity-50" />
+          <output htmlFor={selectionSensitivityId} className="text-sm tabular-nums w-7">{selectionSensitivity}</output>
+          <Button variant="ghost" size="sm" onClick={() => setSelectionSensitivity(DEFAULT_SELECTION_SENSITIVITY)}
+            disabled={isInitializing || selectionSensitivity === DEFAULT_SELECTION_SENSITIVITY}>
+            Default (45)
+          </Button>
+        </div>
+      </div>}
 
       {activeTool === "cutout" && <div className="rounded-md border border-border bg-muted/30 px-3 py-2 mb-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

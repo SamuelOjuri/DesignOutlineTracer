@@ -366,17 +366,19 @@ export const NewBuildApp = () => {
     );
   };
 
+  const hasResponsiveCanvas = isReviewStep || currentStep === "paint";
+
   return (
     <div className="min-h-screen bg-background">
       <NewBuildStepHeader currentStep={currentStep} steps={stepOrder} />
 
-      <div className={`flex h-[calc(100vh-80px)] ${isReviewStep ? "flex-col md:flex-row" : ""}`}>
+      <div className={`flex h-[calc(100vh-80px)] ${hasResponsiveCanvas ? "flex-col md:flex-row" : ""}`}>
         <div
           className={`${
-            isReviewStep ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
-          } shrink-0 border-r border-border bg-card p-4 ${isReviewStep ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}
+            hasResponsiveCanvas ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
+          } shrink-0 border-r border-border bg-card p-4 ${hasResponsiveCanvas ? `flex flex-col overflow-hidden ${currentStep === "paint" ? "md:block md:overflow-y-auto" : ""}` : "overflow-y-auto"}`}
         >
-          <div className={isReviewStep ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
+          <div className={hasResponsiveCanvas ? `flex-1 min-h-0 overflow-y-auto ${currentStep === "paint" ? "md:flex-none md:overflow-visible" : ""}` : undefined}>{renderSidebar()}</div>
 
           <div className="mt-6 flex gap-2 shrink-0">
             <Button
@@ -397,7 +399,7 @@ export const NewBuildApp = () => {
           </div>
         </div>
 
-        <div className={`flex-1 min-w-0 p-4 flex overflow-hidden ${isReviewStep ? "flex-col min-h-[360px] md:min-h-0" : currentStep === "paint" || currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>
+        <div className={`flex-1 min-w-0 p-4 flex overflow-hidden ${isReviewStep ? "flex-col min-h-[360px] md:min-h-0" : currentStep === "paint" ? "flex-col min-h-[480px] md:min-h-0" : currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>
           {currentStep === "upload" && pdfCanvas && (
             <div className="text-center">
               <p className="text-muted-foreground mb-4">

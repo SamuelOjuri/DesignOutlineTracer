@@ -133,6 +133,66 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and mocked submission
   });
 });
 
+test("New Build: selection sensitivity preserves geometry and fits desktop and mobile", async ({ page }, testInfo) => {
+  await page.goto("/new-build");
+  await page.locator('input[type="file"]').setInputFiles(await createRoofPlanPdf());
+  const next = page.getByRole("button", { name: "Next", exact: true });
+  await expect(next).toBeEnabled({ timeout: 30_000 });
+  await next.click();
+  const slider = page.getByRole("slider", { name: "Selection sensitivity", exact: true });
+  await expect(slider).toBeEnabled();
+  await expect(slider).toHaveValue("45");
+  await expect(slider).toHaveAttribute("min", "1");
+  await expect(slider).toHaveAttribute("max", "100");
+  const paint = page.getByTestId("paint-source-canvas");
+  const interaction = page.getByTestId("paint-interaction-canvas");
+  await clickCanvas(interaction, 0.25, 0.5);
+  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await page.getByTitle("Zoom in", { exact: true }).click();
+  const paintedImage = await paint.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  const zoomWidth = await paint.evaluate(canvas => canvas.getBoundingClientRect().width);
+  await slider.focus();
+  await slider.press("Home");
+  for (let step = 0; step < 9; step++) await slider.press("ArrowRight");
+  await expect(slider).toHaveValue("10");
+  expect(await paint.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).toBe(paintedImage);
+  expect(await paint.evaluate(canvas => canvas.getBoundingClientRect().width)).toBe(zoomWidth);
+  await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Cut Out", exact: true }).click();
+  await expect(slider).not.toBeVisible();
+  await expect(page.getByRole("slider", { name: "Cut Out sensitivity", exact: true })).toHaveValue("40");
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await expect(slider).toHaveValue("10");
+  await page.getByRole("button", { name: "Default (45)", exact: true }).click();
+  await expect(slider).toHaveValue("45");
+  await page.screenshot({ path: testInfo.outputPath("selection-sensitivity-desktop.png"), fullPage: true });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await slider.scrollIntoViewIfNeeded();
+  const row = page.getByText("Selection sensitivity", { exact: true }).locator("..");
+  const controls = await row.locator("label, input, output, button").evaluateAll(elements =>
+    elements.map(element => {
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom };
+    })
+  );
+  for (const [index, control] of controls.entries()) {
+    expect(control.left).toBeGreaterThanOrEqual(0);
+    expect(control.right).toBeLessThanOrEqual(390);
+    for (const other of controls.slice(index + 1)) {
+      expect(control.right <= other.left || other.right <= control.left ||
+        control.bottom <= other.top || other.bottom <= control.top).toBe(true);
+    }
+  }
+  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await page.screenshot({ path: testInfo.outputPath("selection-sensitivity-mobile.png"), fullPage: true });
+  await slider.press("End");
+  await expect(slider).toHaveValue("100");
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect.poll(() => redPixels(paint)).toBe(0);
+  await expect(next).toBeDisabled();
+});
+
 test("Refurbishment: dimensioned outline, outlet and details without services", async ({ page, networkGuard }, testInfo) => {
   await page.goto("/refurbishment");
   await expect(page.getByRole("heading", { name: "Roof Outline Builder" })).toBeVisible();
