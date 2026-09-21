@@ -84,8 +84,13 @@ With the flag disabled, the original manual workflow requires no ROI service.
 Phase 5 extends the enabled sequence to
 `upload -> roi -> paint -> penetrations -> outlets -> details`. Penetration review
 supports parent/subtype corrections, manual additions, scope warnings and explicit
-acceptance. Project Details displays a page/ROI-grouped annotation summary without
-creating holes or changing the external submission payload. See the
+acceptance. In Step 4, select a detection and **Add opening** to cut it out of the
+insulation scope. Drag its box or corner handles to move or resize the opening;
+**Reject**, **Delete** and **Undo** also update the cutout. **Manual penetration**
+supports drawing a new box and then adding it. Openings are clipped to the Step 3
+scope and appear in Steps 3, 5 and 6. Project Details includes their polygons and
+physical dimensions in the existing penetration payload, alongside the review
+summary. Changing the base roof scope requires confirming the openings again. See the
 [Phase 5 record](docs/Phase-5-Penetration-Review.md) for commands, verification and
 the remaining live-evaluation/category-policy gates.
 

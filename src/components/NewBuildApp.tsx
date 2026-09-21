@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { NewBuildStepHeader } from "./newbuild/NewBuildStepHeader";
 import { PdfUpload } from "./newbuild/PdfUpload";
@@ -23,6 +23,7 @@ import { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
 import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
 import { PenetrationSummary } from "./newbuild/PenetrationSummary";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "@/utils/roiDrawing";
+import { penetrationOpenings } from "@/utils/penetrationOpenings";
 import { FileUp } from "lucide-react";
 
 const ignoreRenderedCanvas = () => undefined;
@@ -36,6 +37,13 @@ export const NewBuildApp = () => {
   const [selectedPenetrationId, setSelectedPenetrationId] = useState<string | null>(null);
   const [addingPenetration, setAddingPenetration] = useState(false);
   const penetrationAnnotations = activePage?.annotations.filter((annotation) => annotation.kind === "penetration") ?? [];
+  useEffect(() => {
+    if (currentStep !== "penetrations") return;
+    const annotations = activePage?.annotations.filter(annotation => annotation.kind === "penetration") ?? [];
+    if (!annotations.some(annotation => annotation.id === selectedPenetrationId)) {
+      setSelectedPenetrationId(annotations[0]?.id ?? null);
+    }
+  }, [currentStep, activePage?.annotations, selectedPenetrationId]);
   const isReviewStep = currentStep === "roi" || currentStep === "penetrations";
   const [selectedRoiId, setSelectedRoiId] = useState<string | null>(null);
   const [addingRoi, setAddingRoi] = useState(false);
@@ -49,6 +57,7 @@ export const NewBuildApp = () => {
   const pdfCanvas = activePage ? canvases.current.get(activePage.source.page_id) ?? null : null;
   const roofOutlines = activePage?.drawing.outlines.map((outline) => outline.points) ?? [];
   const interiorHoles = activePage?.drawing.holes.map((hole) => hole.points) ?? [];
+  const openingHoles = activePage ? penetrationOpenings(activePage).map(opening => opening.points) : [];
   const outlets = activePage?.drawing.outlets ?? [];
   const drainageEdges = activePage ? editorDrainage(activePage) : [];
   const drawingScale = activePage?.drawing.drawing_scale ?? uploadScale;
@@ -232,7 +241,7 @@ export const NewBuildApp = () => {
           onEdit={editRoi} onAdd={addRoi} /> : null;
       case "penetrations":
         return pdfCanvas && activePage ? <RoiReviewCanvas key={`${activePage.source.page_id}:penetrations`} kind="penetration"
-          pdfCanvas={pdfCanvas} annotations={penetrationAnnotations} contextAnnotations={acceptedRegions} drawing={activePage.drawing}
+          pdfCanvas={pdfCanvas} annotations={penetrationAnnotations} contextAnnotations={acceptedRegions} drawing={activePage.drawing} page={activePage}
           contextLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
           selectedId={selectedPenetrationId} adding={addingPenetration} onAddingChange={setAddingPenetration}
           onSelect={setSelectedPenetrationId} onEdit={editRoi} onAdd={(box) => {
@@ -254,6 +263,7 @@ export const NewBuildApp = () => {
             onHolesExtracted={handleHolesExtracted}
             roofOutlines={roofOutlines}
             interiorHoles={interiorHoles}
+            penetrationHoles={openingHoles}
             acceptedRegions={roiClient.enabled ? acceptedRegions : undefined}
             regionLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
           />
@@ -286,7 +296,7 @@ export const NewBuildApp = () => {
             key={activePage?.source.page_id}
             pdfCanvas={pdfCanvas}
             roofOutlines={roofOutlines}
-            interiorHoles={interiorHoles}
+            interiorHoles={[...interiorHoles, ...openingHoles]}
             outlets={outlets}
             selectedOutlet={selectedOutlet}
             onAddOutlet={handleAddOutlet}
@@ -327,7 +337,7 @@ export const NewBuildApp = () => {
           onSubmit={() => alert("Project successfully sent to TaperedPlus!")}
           outline={buildOutlines()}
           outlets={combined.outlets}
-          penetrations={[]}
+          penetrations={combined.penetrations}
         />
         </>
       );

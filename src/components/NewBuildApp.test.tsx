@@ -11,6 +11,7 @@ import type { ProjectDetailsForm } from "./ProjectDetailsForm";
 import { NewBuildApp } from "./NewBuildApp";
 import { syntheticAnnotation, syntheticPage, syntheticRun } from "@/test/roi";
 import { roiClient } from "@/integrations/roi/client";
+import { drawingWithPenetrations } from "@/utils/penetrationOpenings";
 
 const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 100, y: 300 }];
 const hole = [{ x: 150, y: 150 }, { x: 180, y: 150 }, { x: 180, y: 180 }];
@@ -35,11 +36,12 @@ vi.mock("./newbuild/PdfUpload", () => ({
 }));
 
 vi.mock("./newbuild/PaintBucketCanvas", () => ({
-  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, acceptedRegions }: ComponentProps<typeof PaintBucketCanvas>) => (
+  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, penetrationHoles, acceptedRegions }: ComponentProps<typeof PaintBucketCanvas>) => (
     <>
       <output data-testid="paint-outlines">{JSON.stringify(roofOutlines)}</output>
       <output data-testid="paint-regions">{JSON.stringify(acceptedRegions)}</output>
       <output data-testid="paint-holes">{JSON.stringify(interiorHoles)}</output>
+      <output data-testid="paint-openings">{JSON.stringify(penetrationHoles)}</output>
       <button onClick={() => onOutlinesExtracted([outline.slice(0, 2)])}>Select invalid outline</button>
       <button onClick={() => onOutlinesExtracted([outline])}>Select roof</button>
       <button onClick={() => onHolesExtracted([hole])}>Add cutout</button>
@@ -48,16 +50,19 @@ vi.mock("./newbuild/PaintBucketCanvas", () => ({
 }));
 
 vi.mock("./newbuild/RoiReviewCanvas", () => ({
-  RoiReviewCanvas: ({ annotations, onAdd }: ComponentProps<typeof RoiReviewCanvas>) => <>
+  RoiReviewCanvas: ({ annotations, page, onAdd, onEdit }: ComponentProps<typeof RoiReviewCanvas>) => <>
     <output data-testid="review-regions">{JSON.stringify(annotations)}</output>
+    <output data-testid="review-drawing">{JSON.stringify(page && drawingWithPenetrations(page))}</output>
     <button onClick={() => onAdd([100.25, 200.5, 400.75, 600.5])}>Add test region</button>
+    <button onClick={() => onEdit(annotations[0].id, [240, 300, 300, 350])}>Move test penetration</button>
   </>,
 }));
 
 vi.mock("./newbuild/NewBuildOutletCanvas", () => ({
-  NewBuildOutletCanvas: ({ outlets, onAddOutlet, onMoveOutlet, onToggleDrainageEdge }: ComponentProps<typeof NewBuildOutletCanvas>) => (
+  NewBuildOutletCanvas: ({ outlets, interiorHoles, onAddOutlet, onMoveOutlet, onToggleDrainageEdge }: ComponentProps<typeof NewBuildOutletCanvas>) => (
     <>
       <output data-testid="editor-outlets">{JSON.stringify(outlets)}</output>
+      <output data-testid="editor-holes">{JSON.stringify(interiorHoles)}</output>
       <button onClick={() => onAddOutlet(200, 200)}>Add test outlet</button>
       <button onClick={() => onMoveOutlet(outlets[0].id, 220, 240)}>Move test outlet</button>
       <button onClick={() => onToggleDrainageEdge(0, 1)}>Toggle drainage</button>
@@ -136,7 +141,7 @@ describe("manual New Build state", () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  it("retains reviewed penetrations in the summary without changing geometry or the legacy payload", async () => {
+  it("carries editable penetration openings through the roof mask, outlet view and project payload", async () => {
     roiClient.enabled = true;
     vi.spyOn(roiClient, "uploadPage").mockResolvedValue({ page: {
       ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
@@ -161,14 +166,30 @@ describe("manual New Build state", () => {
     await next();
     await user.click(screen.getByRole("button", { name: "Detect penetrations" }));
     await user.click(await screen.findByRole("button", { name: /Penetration 1 suggested/ }));
-    await user.click(screen.getByRole("button", { name: "Accept" }));
+    expect(screen.getByRole("button", { name: "Add opening" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add opening" }));
+    expect(screen.getByRole("button", { name: "Opening added" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Move test penetration" }));
+    const opening = [{ x: 240, y: 144 }, { x: 280, y: 144 }, { x: 280, y: 180 }, { x: 240, y: 180 }];
+    expect(JSON.parse(screen.getByTestId("review-drawing").textContent!).holes[1].points).toEqual(opening);
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+    expect(JSON.parse(screen.getByTestId("review-drawing").textContent!).holes).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "Undo review edit" }));
+    expect(JSON.parse(screen.getByTestId("review-drawing").textContent!).holes[1].points).toEqual(opening);
+    await previous();
+    expect(JSON.parse(screen.getByTestId("paint-openings").textContent!)).toEqual([opening]);
+    expect(JSON.parse(screen.getByTestId("paint-holes").textContent!)).toEqual([hole]);
+    await next();
     await next();
     expect(screen.getByTestId("editor-outlets")).toHaveTextContent("[]");
+    expect(JSON.parse(screen.getByTestId("editor-holes").textContent!)).toEqual([hole, opening]);
     await next();
     expect(screen.getByRole("region", { name: "Penetration annotation summary" })).toHaveTextContent("Rooflight A");
     expect(screen.getByRole("region", { name: "Penetration annotation summary" })).toHaveTextContent("accepted / Current");
-    expect(screen.getByTestId("penetrations")).toHaveTextContent("[]");
-    expect(JSON.parse(screen.getByTestId("illustration").textContent!)).toMatchObject({ roofOutlines: [outline], interiorHoles: [hole] });
+    expect(JSON.parse(screen.getByTestId("penetrations").textContent!)).toEqual([
+      expect.objectContaining({ x: 260, y: 162, polygonPoints: opening }),
+    ]);
+    expect(JSON.parse(screen.getByTestId("illustration").textContent!)).toMatchObject({ roofOutlines: [outline], interiorHoles: [hole, opening] });
     await previous();
     await previous();
     expect(JSON.parse(screen.getByTestId("review-regions").textContent!)[0]).toMatchObject({ id: "child", review_status: "accepted", validity: "current" });

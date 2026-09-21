@@ -13,11 +13,15 @@ describe("ROI failure feedback", () => {
       syntheticAnnotation("child", { kind: "penetration", subtype: "rooflight", roi_id: "roi-1", review_status: "suggested" })]) {
       state = roiSessionReducer(state, { type: "add", page_id: source.page_id, annotation });
     }
+    state = roiSessionReducer(state, { type: "drawing", page_id: source.page_id,
+      drawing: { ...state.pages[source.page_id].drawing, outlines: [{ id: "scope", page_id: source.page_id, roi_id: null,
+        points: [{ x: 0, y: 0 }, { x: 800, y: 0 }, { x: 800, y: 600 }, { x: 0, y: 600 }] }] } });
     const dispatch = vi.fn();
     render(<RoiReviewSidebar kind="penetration" page={state.pages[source.page_id]} selectedId="child" adding={false}
       onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={dispatch}
       detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
     const user = userEvent.setup();
+    await user.click(screen.getByText("Edit type, roof area and coordinates"));
     await user.selectOptions(screen.getByRole("combobox", { name: "Parent roof area" }), "second-roof");
     await user.selectOptions(screen.getByRole("combobox", { name: "Subtype" }), "vent");
     await user.clear(screen.getByRole("textbox", { name: "Penetration label" }));
@@ -25,7 +29,7 @@ describe("ROI failure feedback", () => {
     await user.click(screen.getByRole("button", { name: "Apply correction" }));
     expect(dispatch).toHaveBeenLastCalledWith({ type: "review", page_id: source.page_id, id: "child",
       patch: { label: "Reviewed vent", box_2d: [100, 200, 600, 700], subtype: "vent", roi_id: "second-roof" } });
-    await user.click(screen.getByRole("button", { name: "Confirm association" }));
+    await user.click(screen.getByRole("button", { name: "Add opening" }));
     expect(dispatch).toHaveBeenLastCalledWith({ type: "review", page_id: source.page_id, id: "child",
       patch: { review_status: "accepted", validity: "current" } });
   });
@@ -39,7 +43,7 @@ describe("ROI failure feedback", () => {
       onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()}
       detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
     expect(screen.getByRole("button", { name: "Detect penetrations" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Confirm association" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add opening" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Manual penetration" })).toBeEnabled();
   });
 

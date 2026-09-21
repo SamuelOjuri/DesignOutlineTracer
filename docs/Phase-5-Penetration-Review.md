@@ -4,6 +4,9 @@ Implemented on 2026-09-10 as an opt-in, localhost-only assisted-annotation slice
 Verification uses synthetic geometry and mocked model responses, not architectural
 ground truth or a live accuracy claim. The public annotation API remains version 1.
 
+Updated on 2026-09-21: accepted penetrations now create editable insulation
+openings. This replaces the initial annotation-only geometry boundary below.
+
 ## Delivered Workflow
 
 - `VITE_ROI_ENABLED=true` enables
@@ -48,10 +51,16 @@ Missing parents, crossing/outside ROI boxes, overlapping parents, missing roof
 outlines, geometry-check failures, out-of-roof objects and cutout overlap produce
 review warnings. Initial proposals with such warnings are `needs_review`.
 Valid geometry alone never accepts a suggestion or establishes semantic membership.
-An explicit **Confirm association** can resolve geometric uncertainty when a
-current accepted parent exists; missing/rejected parents cannot be overridden.
+An explicit **Add opening** (or **Confirm opening** after a scope change) resolves
+the review decision when a current accepted parent and usable insulation scope
+exist. Missing/rejected parents and boxes wholly outside the insulation or inside
+an existing manual cutout cannot be accepted as openings. Partial boxes are
+clipped to the parent ROI and actual roof scope.
 
-Box, subtype and parent corrections require re-review. Editing, removing or
+Suggested box edits, subtype and parent corrections require review. Moving or
+resizing a current accepted box updates its opening immediately when it overlaps
+usable scope; moving entirely outside marks it for review and removes the active
+cutout. Editing, removing or
 rejecting a parent invalidates dependent children; changing manual roof outlines
 or holes invalidates child associations and pending child requests. Edited and
 accepted children are preserved, including original proposed geometry and edit
@@ -60,18 +69,42 @@ skip existing IDs and flag possible duplicates for reconciliation.
 
 ## Geometry And Handoff Boundaries
 
-Acceptance never fills a polygon, subtracts a hole, creates an editor penetration,
-sets physical width/height or places an outlet. Existing cutout and drainage tools
-remain manual. New Build still passes `penetrations={[]}` to the legacy form.
+The original Phase 5 release saved annotation decisions only. Step 4 now exposes
+**Add opening**, **Reject**, and **Delete** above the list, automatically selects
+the first detection, and keeps numeric/type/parent corrections in expandable
+controls. A new manual box remains a suggestion until added.
+
+`penetrationOpenings` derives source-pixel polygons from accepted/current boxes,
+intersected with their parent ROI and relevant roof outlines, minus manual holes.
+Derived openings do not mutate the base drawing: move/resize, rejection, deletion
+and review Undo cannot leave old cutouts behind or invalidate other openings.
+Base-scope/parent changes still require re-review, and Undo cannot restore stale
+validity. Step 4 previews accepted drags against the filled insulation mask.
+
+Step 3 displays these exclusions separately from its editable manual holes.
+Step 5 subtracts overlapping exclusions as a union. The final illustration and
+project form receive opening polygons; penetration objects include their bounding
+dimensions in metres and `polygonPoints` in combined drawing coordinates. The
+same page scaling and illustration offsets apply to both holes and penetration
+objects. Drainage and outlet placement remain manual.
 
 Project Details includes a read-only penetration summary grouped by source
 document/page and ROI. Accepted/current, suggested, rejected and unresolved work
-remain distinguishable. This is an in-memory review summary, not an accepted-output
-handoff: no annotation fields are added to the email payload, no save/load is
-introduced, and reload or leaving New Build still loses review state. Phase 7
-owns persistence and the receiving contract.
+remain distinguishable. Review metadata stays in memory; no save/load is
+introduced, and reload or leaving New Build still loses review state. Accepted
+opening geometry now enters the existing penetration payload. The remote email
+receiver is not in this repository and was not exercised for this update. Phase 7
+still owns persistence and a versioned annotation handoff.
 
 ## Verification
+
+The 2026-09-21 opening update passed all 148 frontend tests, type checking,
+targeted lint and the production build (with the existing bundle-size warning).
+Coverage includes clipped/overlapping cutouts, move/resize at zoom, cancelled
+gestures, manual addition, rejection/deletion/Undo, stale-scope review, and
+propagation through the drawing and project data. Browser assertions were
+updated, but browser flows and live service/email calls were not run for this
+update because the user's Chrome session was not connected.
 
 Run from the repository root:
 
@@ -85,7 +118,7 @@ npm run lint
 & "./backend/roi_app/.venv/Scripts/python.exe" -m unittest discover -s backend/roi_tests
 ```
 
-Results: 80 frontend tests, 43 isolated offline backend tests, 6 mocked annotation
+Original Phase 5 results: 80 frontend tests, 43 isolated offline backend tests, 6 mocked annotation
 browser flows (3 ROI and 3 penetration), and both feature-disabled manual flows
 pass. Type-check/build pass; lint remains 0 errors / 9 inherited warnings.
 Editor diagnostics and changed Python syntax checks are clear.

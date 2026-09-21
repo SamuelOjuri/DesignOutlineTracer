@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, useRef, useEffect, type FormEvent } from "react";
 import { Check, Circle, Loader2, Plus, RotateCcw, Save, Square, Trash2, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import type { useRoiDetection } from "@/hooks/useRoiDetection";
 import { validateBox } from "@/utils/roiCoordinates";
 import type { RoiSessionAction } from "@/utils/roiSession";
 import { acceptedRoofRegions, penetrationAssociationWarnings } from "@/utils/penetrationAssociation";
+import { penetrationFootprint } from "@/utils/penetrationOpenings";
 
 interface RoiReviewSidebarProps {
   kind?: "roof_roi" | "penetration";
@@ -94,9 +95,12 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
   const parents = acceptedRoofRegions(page);
   const annotations = page.annotations.filter((annotation) => annotation.kind === kind);
   const selected = annotations.find((annotation) => annotation.id === selectedId);
+  const selectedPanel = useRef<HTMLDivElement>(null);
+  useEffect(() => { selectedPanel.current?.scrollIntoView?.({ block: "nearest" }); }, [selectedId]);
+  const footprint = isPenetration && selected ? penetrationFootprint(selected, page) : null;
   const associationWarnings = selected ? penetrationAssociationWarnings(selected, page) : [];
   const canAccept = !isPenetration || Boolean(selected && parents.some((parent) => parent.id === selected.roi_id)
-    && penetrationSubtypes.some((subtype) => subtype === selected.subtype));
+    && penetrationSubtypes.some((subtype) => subtype === selected.subtype) && !footprint?.error);
   const accepted = annotations.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current").length;
   const { feedback, busy } = detection;
   const review = (review_status: RoiAnnotation["review_status"]) => {
@@ -126,7 +130,9 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
       {feedback?.status === "error" && <p role="alert" className="text-sm text-destructive">
         {(errorMessages[feedback.error ?? ""] ?? "Detection failed.").replace("regions", isPenetration ? "penetrations" : "regions")} Existing work is retained. ({feedback.error})
       </p>}
-      {feedback?.warnings?.map((warning, index) => <p key={index} className="text-xs text-muted-foreground">{warning}</p>)}
+      {feedback?.warnings?.map((warning, index) => <p key={index} className="text-xs text-muted-foreground">{
+        warning === "category_policy_pending_domain_review" ? "Check the detected types and sizes before adding openings." : warning
+      }</p>)}
       {feedback?.followUpOf && !busy && <Button variant="outline" className="w-full" onClick={() => void detection.detect(feedback.followUpOf)}>
         <Plus className="w-4 h-4 mr-2" />Request one follow-up</Button>}
     </div>
@@ -138,6 +144,38 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
           disabled={!page.history.length} onClick={() => dispatch({ type: "undo", page_id: page.source.page_id })}>
           <Undo2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Undo review edit</TooltipContent></Tooltip>
       </div>
+      {selected && <div ref={selectedPanel} className="border-t border-border pt-3" aria-label="Selected annotation controls">
+        <h3 className="text-sm font-semibold">Selected {isPenetration ? "Penetration" : "Region"}</h3>
+        <p className="text-sm mt-1 whitespace-pre-wrap">{selected.label}</p>
+        {selected.evidence && <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">{selected.evidence}</p>}
+        {selected.warnings.map((warning, index) => <p key={index} className="text-xs mt-2 font-medium">{warning}</p>)}
+        {associationWarnings.map((warning) => <p key={warning} className="text-xs mt-2 font-medium">{warning}</p>)}
+        {footprint?.error && <p role="status" className="text-sm mt-2">{footprint.error}</p>}
+        {isPenetration && !footprint?.error && <p className="text-xs text-muted-foreground mt-2">
+          The opening is limited to the insulation scope. Accepted boxes can be moved or resized on the plan.
+        </p>}
+        <div className="flex flex-wrap gap-2 mt-3">
+          <Button size="sm" onClick={() => review("accepted")} disabled={!canAccept || (selected.review_status === "accepted" && selected.validity === "current")}>
+            <Check className="w-4 h-4 mr-1" />{isPenetration
+              ? selected.review_status === "accepted" ? selected.validity === "current" ? "Opening added" : "Confirm opening" : "Add opening"
+              : "Accept"}</Button>
+          <Button size="sm" variant="outline" onClick={() => review("rejected")} disabled={selected.review_status === "rejected"}>
+            <X className="w-4 h-4 mr-1" />Reject</Button>
+          <Tooltip><TooltipTrigger asChild><Button size="icon" variant="outline" aria-label={isPenetration ? "Delete penetration" : "Delete region"}
+            onClick={() => dispatch({ type: "remove", page_id: page.source.page_id, id: selected.id })}>
+            <Trash2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Delete {isPenetration ? "penetration" : "region"}</TooltipContent></Tooltip>
+        </div>
+        {isPenetration ? <details key={selected.id} className="mt-3 text-sm">
+          <summary className="cursor-pointer font-medium">Edit type, roof area and coordinates</summary>
+          <BoxForm key={`${selected.id}:${selected.revision}`} annotation={selected} parents={parents}
+            onSave={(patch) => dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch })} />
+        </details> : <BoxForm key={`${selected.id}:${selected.revision}`} annotation={selected} parents={parents}
+          onSave={(patch) => dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch })} />}
+        <details className="mt-3 text-xs text-muted-foreground">
+          <summary className="cursor-pointer">Original {selected.origin === "manual" ? "region" : "proposal"}</summary>
+          <p className="mt-1 break-all">[{selected.proposed_box_2d.join(", ")}]</p>
+        </details>
+      </div>}
       {!annotations.length && <p className="text-sm text-muted-foreground">No {isPenetration ? "penetrations" : "regions"} yet.</p>}
       {annotations.length > 0 && <ul className="divide-y border-y border-border" aria-label={isPenetration ? "Penetrations" : "Regions"}>
         {annotations.map((annotation, index) => <li key={annotation.id}>
@@ -156,28 +194,7 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
           </button>
         </li>)}
       </ul>}
-      {selected && <div className="border-t border-border pt-3">
-        <h3 className="text-sm font-semibold">Selected {isPenetration ? "Penetration" : "Region"}</h3>
-        <p className="text-sm mt-1 whitespace-pre-wrap">{selected.label}</p>
-        {selected.evidence && <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">{selected.evidence}</p>}
-        {selected.warnings.map((warning, index) => <p key={index} className="text-xs mt-2 font-medium">{warning}</p>)}
-        {associationWarnings.map((warning) => <p key={warning} className="text-xs mt-2 font-medium">{warning}</p>)}
-        <div className="flex flex-wrap gap-2 mt-3">
-          <Button size="sm" onClick={() => review("accepted")} disabled={!canAccept || (selected.review_status === "accepted" && selected.validity === "current")}>
-            <Check className="w-4 h-4 mr-1" />{isPenetration && (associationWarnings.length > 0 || selected.validity === "needs_review") ? "Confirm association" : "Accept"}</Button>
-          <Button size="sm" variant="outline" onClick={() => review("rejected")} disabled={selected.review_status === "rejected"}>
-            <X className="w-4 h-4 mr-1" />Reject</Button>
-          <Tooltip><TooltipTrigger asChild><Button size="icon" variant="outline" aria-label={isPenetration ? "Delete penetration" : "Delete region"}
-            onClick={() => dispatch({ type: "remove", page_id: page.source.page_id, id: selected.id })}>
-            <Trash2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Delete {isPenetration ? "penetration" : "region"}</TooltipContent></Tooltip>
-        </div>
-        <BoxForm key={`${selected.id}:${selected.revision}`} annotation={selected} parents={parents}
-          onSave={(patch) => dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch })} />
-        <details className="mt-3 text-xs text-muted-foreground">
-          <summary className="cursor-pointer">Original {selected.origin === "manual" ? "region" : "proposal"}</summary>
-          <p className="mt-1 break-all">[{selected.proposed_box_2d.join(", ")}]</p>
-        </details>
-      </div>}
+
     </TooltipProvider>
   </section>;
 };

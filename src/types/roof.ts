@@ -30,6 +30,8 @@ export interface Point {
     y: number;
     width: number;
     height: number;
+    // New Build opening boundary in the same drawing coordinates as the roof.
+    polygonPoints?: Point[];
   }
   
   export interface ProjectDetails {
@@ -71,4 +73,3 @@ export interface Point {
   }
   
   export type AppMode = 'landing' | 'refurbishment' | 'new-build';
-  

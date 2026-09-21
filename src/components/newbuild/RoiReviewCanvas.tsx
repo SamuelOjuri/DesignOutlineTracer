@@ -1,17 +1,19 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useRef, useState, useId, type PointerEvent } from "react";
 import { Hand, Maximize, MousePointer2, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Box2D, PageDrawing, RoiAnnotation } from "@/types/roi";
+import type { Box2D, PageDrawing, PageSession, RoiAnnotation } from "@/types/roi";
 import type { Point } from "@/types/roof";
 import { drawnRoiBox, editRoiBox, type BoxHandle } from "@/utils/roiBoxEditing";
 import { AnnotationOverlay } from "./AnnotationOverlay";
+import { drawingWithPenetrations } from "@/utils/penetrationOpenings";
 
 interface RoiReviewCanvasProps {
   kind?: "roof_roi" | "penetration";
   contextAnnotations?: RoiAnnotation[];
   contextLabels?: Record<string, string>;
   drawing?: PageDrawing;
+  page?: PageSession;
   pdfCanvas: HTMLCanvasElement;
   annotations: RoiAnnotation[];
   selectedId: string | null;
@@ -31,7 +33,7 @@ interface Gesture {
   scroll: Point;
 }
 
-export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], contextLabels, drawing,
+export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], contextLabels, drawing, page,
   pdfCanvas, annotations, selectedId, adding, onAddingChange, onSelect, onEdit, onAdd }: RoiReviewCanvasProps) => {
   const viewport = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
@@ -42,6 +44,10 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
   const [panning, setPanning] = useState(false);
   const [draft, setDraft] = useState<{ id: string; box: Box2D } | null>(null);
   const scale = fit * zoom;
+  const maskId = useId();
+  const previewPage = page && draft ? { ...page, annotations: page.annotations.map(annotation => annotation.id === draft.id
+    ? { ...annotation, box_2d: draft.box } : annotation) } : page;
+  const displayedDrawing = previewPage ? drawingWithPenetrations(previewPage) : drawing;
 
   useEffect(() => {
     canvas.current?.getContext("2d")?.drawImage(pdfCanvas, 0, 0);
@@ -73,7 +79,7 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
     if (annotation && !adding && !pan) {
       onSelect(annotation.id);
       target?.focus();
-    }
+    } else event.currentTarget.focus();
     gesture.current = { id: adding ? "new" : pan ? "pan" : annotation!.id, start,
       original: annotation?.box_2d ?? [start.y, start.x, start.y, start.x], handle: (target?.dataset.handle as BoxHandle) ?? "move",
       client: { x: event.clientX, y: event.clientY }, scroll: { x: viewport.current!.scrollLeft, y: viewport.current!.scrollTop } };
@@ -135,6 +141,10 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
           <output className="text-sm tabular-nums w-14">{Math.round(scale * 100)}%</output>
         </div>
       </TooltipProvider>
+      {kind === "penetration" && <p className="text-sm text-muted-foreground">
+        {adding ? "Drag a box around the penetration, then select Add opening."
+          : "Select a penetration and Add opening to cut it out. Drag accepted boxes or their corner handles to move or resize openings."}
+      </p>}
       <div ref={viewport} className="flex-1 min-h-0 overflow-auto bg-muted border border-border rounded" data-testid="roi-viewport">
         <div ref={frame} tabIndex={-1} className="relative mx-auto my-4 shrink-0 touch-none bg-white"
           style={{ width: pdfCanvas.width * scale, height: pdfCanvas.height * scale, cursor: adding ? "crosshair" : panning ? "grab" : undefined }}
@@ -143,11 +153,19 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
           onKeyDown={(event) => { if (event.key === "Escape") { clearGesture(); onAddingChange(false); } }}>
           <canvas ref={canvas} width={pdfCanvas.width} height={pdfCanvas.height} className="block w-full h-full"
             aria-label="Unannotated roof plan" data-testid="roi-source-canvas" />
-          {drawing && <svg viewBox={`0 0 ${pdfCanvas.width} ${pdfCanvas.height}`} preserveAspectRatio="none"
+          {displayedDrawing && <svg viewBox={`0 0 ${pdfCanvas.width} ${pdfCanvas.height}`} preserveAspectRatio="none"
             aria-label="Manual roof geometry" className="absolute inset-0 w-full h-full pointer-events-none">
-            {drawing.outlines.map((outline) => <polygon key={outline.id} points={outline.points.map((point) => `${point.x},${point.y}`).join(" ")}
+            <defs><mask id={maskId} maskUnits="userSpaceOnUse" x={0} y={0} width={pdfCanvas.width} height={pdfCanvas.height}>
+              <rect width={pdfCanvas.width} height={pdfCanvas.height} fill="black" />
+              {displayedDrawing.outlines.map(outline => <polygon key={outline.id}
+                points={outline.points.map(point => `${point.x},${point.y}`).join(" ")} fill="white" />)}
+              {displayedDrawing.holes.map(hole => <polygon key={hole.id} data-testid={`opening-mask-${hole.id}`}
+                points={hole.points.map(point => `${point.x},${point.y}`).join(" ")} fill="black" />)}
+            </mask></defs>
+            <rect width={pdfCanvas.width} height={pdfCanvas.height} fill="#dc3232" fillOpacity={0.25} mask={`url(#${maskId})`} />
+            {displayedDrawing.outlines.map((outline) => <polygon key={outline.id} points={outline.points.map((point) => `${point.x},${point.y}`).join(" ")}
               fill="none" stroke="#047857" strokeWidth={2} vectorEffect="non-scaling-stroke" />)}
-            {drawing.holes.map((hole) => <polygon key={hole.id} points={hole.points.map((point) => `${point.x},${point.y}`).join(" ")}
+            {displayedDrawing.holes.map((hole) => <polygon key={hole.id} points={hole.points.map((point) => `${point.x},${point.y}`).join(" ")}
               fill="none" stroke="#b91c1c" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />)}
           </svg>}
           {contextAnnotations.length > 0 && <AnnotationOverlay annotations={contextAnnotations} labels={contextLabels} labelsAbove />}

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback, useId } from "react";
+import { useRef, useEffect, useState, useCallback, useId, useMemo } from "react";
 import { Point } from "@/types/roof";
 import { floodFill, floodFillPreview, eraseFill, extractMultipleOutlines, extractInteriorHoles, buildEdgeMap, buildRegionMap } from "@/utils/floodFill";
 import { findClosestEdge, findClosestVertex, findVertexMergeTarget, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, rasterizeOutlinesWithHoles, straightenPolygonSide, type OutlineEditResult } from "@/utils/polygonAdjust";
@@ -25,6 +25,7 @@ interface PaintBucketCanvasProps {
   onHolesExtracted?: (holes: Point[][]) => void;
   roofOutlines: Point[][];
   interiorHoles?: Point[][];
+  penetrationHoles?: Point[][];
   acceptedRegions?: RoiAnnotation[];
   regionLabels?: Record<string, string>;
 }
@@ -42,9 +43,14 @@ export const PaintBucketCanvas = ({
   onHolesExtracted,
   roofOutlines,
   interiorHoles = [],
+  penetrationHoles = [],
   acceptedRegions = [],
   regionLabels,
 }: PaintBucketCanvasProps) => {
+  // Step 4 owns these openings. Display them without folding them into Step 3's
+  // editable base geometry, which would leave stale cutouts after a later move.
+  const openingMask = useMemo(() => penetrationHoles.length
+    ? rasterizeOutlinesWithHoles(penetrationHoles, [], pdfCanvas.width, pdfCanvas.height) : null, [penetrationHoles, pdfCanvas]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -251,7 +257,7 @@ export const PaintBucketCanvas = ({
       const mask = previewMask;
       const od = overlayData.data;
       for (let i = 0; i < width * height; i++) {
-        if (mask[i]) {
+        if (mask[i] && !openingMask?.[i]) {
           const idx = i * 4;
           od[idx] = FILL_COLOR[0];
           od[idx + 1] = FILL_COLOR[1];
@@ -309,7 +315,7 @@ export const PaintBucketCanvas = ({
       ctx.arc(mergeTarget.x, mergeTarget.y, 11 / displayScale, 0, Math.PI * 2);
       ctx.stroke();
     }
-  }, [roofOutlines, activeTool, hoveredEdge, hoveredVertex, displayScale]);
+  }, [roofOutlines, activeTool, hoveredEdge, hoveredVertex, displayScale, openingMask]);
 
   useEffect(() => { redrawCanvas(); }, [roofOutlines, fillCount, redrawCanvas, hoveredEdge, adjustmentVersion]);
 
@@ -331,14 +337,14 @@ export const PaintBucketCanvas = ({
     const imgData = ctx.createImageData(width, height);
     const d = imgData.data;
     for (let i = 0; i < width * height; i++) {
-      if (mask[i]) {
+      if (mask[i] && !openingMask?.[i]) {
         const idx = i * 4;
         d[idx] = color[0]; d[idx + 1] = color[1]; d[idx + 2] = color[2]; d[idx + 3] = color[3];
       }
     }
     ctx.putImageData(imgData, 0, 0);
     previewMaskRef.current = mask;
-  }, []);
+  }, [openingMask]);
 
   const computePreview = useCallback((hx: number, hy: number) => {
     const canvas = canvasRef.current;

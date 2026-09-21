@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { Point, Outlet, DrainageEdge } from "@/types/roof";
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
+import { insulationPolygons } from "@/utils/penetrationOpenings";
 
 interface NewBuildOutletCanvasProps {
   pdfCanvas: HTMLCanvasElement;
@@ -93,17 +94,14 @@ export const NewBuildOutletCanvas = ({
       const outline = roofOutlines[oi];
       if (outline.length < 3) continue;
 
-      // Fill roof area, cutting out interior holes using evenodd
+      // Subtract the union of openings before drawing, so overlaps stay empty.
       ctx.beginPath();
-      ctx.moveTo(outline[0].x, outline[0].y);
-      for (let i = 1; i < outline.length; i++) ctx.lineTo(outline[i].x, outline[i].y);
-      ctx.closePath();
-      // Add hole sub-paths (wound in same direction — evenodd will cut them out)
-      for (const hole of interiorHoles) {
-        if (hole.length < 3) continue;
-        ctx.moveTo(hole[0].x, hole[0].y);
-        for (let i = 1; i < hole.length; i++) ctx.lineTo(hole[i].x, hole[i].y);
-        ctx.closePath();
+      for (const polygon of insulationPolygons([outline], interiorHoles)) {
+        for (const ring of polygon) {
+          ctx.moveTo(ring[0][0], ring[0][1]);
+          for (const [x, y] of ring.slice(1)) ctx.lineTo(x, y);
+          ctx.closePath();
+        }
       }
       ctx.fillStyle = "hsla(0, 85%, 50%, 0.08)";
       ctx.fill("evenodd");
@@ -138,9 +136,10 @@ export const NewBuildOutletCanvas = ({
         if (isDrainage) {
           drawDrainageArrows(ctx, p1, p2);
         }
+      }
     }
 
-    // Draw interior holes (penetrations)
+    // Draw interior holes once, regardless of how many roof outlines exist.
     for (const hole of interiorHoles) {
       if (hole.length < 3) continue;
       ctx.fillStyle = "hsla(0, 0%, 50%, 0.15)";
@@ -154,7 +153,6 @@ export const NewBuildOutletCanvas = ({
       ctx.fill();
       ctx.stroke();
       ctx.setLineDash([]);
-    }
     }
 
     // Draw outlets

@@ -40,7 +40,7 @@ describe("penetration association evidence", () => {
     expect(penetrationAssociationWarnings(child([200, 200, 250, 250]), page)).toContain("Overlaps another accepted roof area; verify the parent association.");
   });
 
-  it("requires explicit re-review after corrections and preserves annotations without creating holes", () => {
+  it("keeps valid accepted box corrections current but requires re-review for parent reassignment", () => {
     let state = fixture();
     const drawing = state.pages["page-1"].drawing;
     state = roiSessionReducer(state, { type: "add", page_id: "page-1", annotation: child([500, 500, 600, 600]) });
@@ -48,7 +48,7 @@ describe("penetration association evidence", () => {
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { review_status: "accepted", validity: "current" } });
     expect(state.pages["page-1"].annotations.at(-1)?.validity).toBe("current");
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { box_2d: [350, 50, 400, 100] } });
-    expect(state.pages["page-1"].annotations.at(-1)).toMatchObject({ validity: "needs_review", review_status: "accepted", proposed_box_2d: [500, 500, 600, 600] });
+    expect(state.pages["page-1"].annotations.at(-1)).toMatchObject({ validity: "current", review_status: "accepted", proposed_box_2d: [500, 500, 600, 600] });
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { roi_id: "missing", validity: "current" } });
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { validity: "current" } });
     expect(state.pages["page-1"].annotations.at(-1)?.validity).toBe("needs_review");

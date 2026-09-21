@@ -1,5 +1,6 @@
-import type { DrainageEdge, Outlet, Point } from "@/types/roof";
+import type { DrainageEdge, Outlet, Penetration, Point } from "@/types/roof";
 import type { PagePolygon, PageSession } from "@/types/roi";
+import { penetrationOpenings } from "./penetrationOpenings";
 
 export function reconcilePolygons(previous: PagePolygon[], points: Point[][], pageId: string, editedIndex?: number): PagePolygon[] {
   const used = new Set<string>();
@@ -31,6 +32,7 @@ export interface CombinedDrawing {
   roofOutlines: Point[][];
   interiorHoles: Point[][];
   outlets: Outlet[];
+  penetrations: Penetration[];
   drainageEdges: DrainageEdge[];
   outlineRefs: DrawingObjectRef[];
   holeRefs: DrawingObjectRef[];
@@ -38,7 +40,7 @@ export interface CombinedDrawing {
 }
 
 export function combinePageDrawings(pages: PageSession[], offsets: Record<string, Point> = {}): CombinedDrawing {
-  const result: CombinedDrawing = { roofOutlines: [], interiorHoles: [], outlets: [], drainageEdges: [],
+  const result: CombinedDrawing = { roofOutlines: [], interiorHoles: [], outlets: [], penetrations: [], drainageEdges: [],
     outlineRefs: [], holeRefs: [], outletRefs: [] };
   const populated = pages.filter((page) => page.drawing.outlines.some((outline) => outline.points.length > 0));
   const base = populated[0];
@@ -60,6 +62,16 @@ export function combinePageDrawings(pages: PageSession[], offsets: Record<string
     for (const hole of page.drawing.holes) {
       result.interiorHoles.push(hole.points.map((point) => transform(point, hole.id)));
       result.holeRefs.push({ id: hole.id, page_id: hole.page_id, roi_id: hole.roi_id });
+    }
+    for (const opening of penetrationOpenings(page)) {
+      const points = opening.points.map(point => transform(point, opening.id));
+      result.interiorHoles.push(points);
+      result.holeRefs.push({ id: opening.id, page_id: opening.page_id, roi_id: opening.roi_id });
+      const left = Math.min(...points.map(point => point.x)), right = Math.max(...points.map(point => point.x));
+      const top = Math.min(...points.map(point => point.y)), bottom = Math.max(...points.map(point => point.y));
+      result.penetrations.push({ id: opening.id, x: (left + right) / 2, y: (top + bottom) / 2,
+        width: (right - left) * mmPerPixel(base) / 1000, height: (bottom - top) * mmPerPixel(base) / 1000,
+        polygonPoints: points });
     }
     for (const outlet of page.drawing.outlets) {
       result.outlets.push({ id: outlet.id, diameter: outlet.diameter, ...transform(outlet, outlet.id) });

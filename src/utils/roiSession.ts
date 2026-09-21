@@ -2,6 +2,7 @@ import type { DrawingScale } from "@/types/roof";
 import type { AnnotationKind, Box2D, DetectionRequest, DetectionRun, PageDrawing, PageSession, RenderedPdfPage, RoiAnnotation, RoiSessionState } from "@/types/roi";
 import { validateBox } from "./roiCoordinates";
 import { penetrationAssociationWarnings } from "./penetrationAssociation";
+import { penetrationFootprint } from "./penetrationOpenings";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
@@ -170,7 +171,7 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
       const staleChild = entry.before.kind !== "roof_roi"
         && (entry.roi_revision !== page.roi_revision || entry.geometry_revision !== page.geometry_revision);
       const restored = checkAssociation({ ...cloneAnnotation(entry.before), revision,
-        validity: staleChild || current?.validity === "needs_review" ? "needs_review" : entry.before.validity,
+        validity: staleChild ? "needs_review" : entry.before.validity,
         edits: [...(current?.edits ?? entry.before.edits), { revision, action: "undo" }] }, annotations);
       annotations.splice(Math.min(entry.index, annotations.length), 0, restored);
     }
@@ -193,6 +194,12 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
       const updated = checkAssociation(cloneAnnotation({ ...current, ...action.patch, revision,
         validity: associationEdited ? "needs_review" : action.patch.validity ?? current.validity,
         edits: [...current.edits, { revision, action: action.patch.box_2d ? "edit" : "review" }] }), annotations);
+      // A deliberate move/resize of an active opening updates it immediately.
+      // Parent/type changes and boxes with no usable scope still require review.
+      if (action.patch.box_2d && current.kind === "penetration" && current.review_status === "accepted"
+        && current.validity === "current" && updated.review_status === "accepted"
+        && updated.roi_id === current.roi_id && updated.subtype === current.subtype
+        && !penetrationFootprint(updated, page).error) updated.validity = "current";
       annotations = annotations.map((annotation) => annotation.id === current.id ? updated : annotation);
     }
   }
