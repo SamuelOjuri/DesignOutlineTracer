@@ -26,6 +26,37 @@ locally from the installed dependency rather than a CDN.
   cutouts and outline adjustment, outlet/drainage editing, and project details.
 - `/refurbishment`: the original dimension-based roof drawing interface.
 
+### Roof Boundary Editing
+
+In Define Roof Area, **Adjust** moves edges or individual red vertices. Drop a
+vertex onto an adjacent vertex on the same roof to merge them. A green ring marks
+a valid merge target within 8 screen pixels; release removes the dragged vertex.
+Hold Shift during a vertex drag to align a valid horizontal/vertical corner.
+Shift alignment does not merge vertices or collapse intermediate points.
+
+**Straighten** is separate: click or tap a near-horizontal or near-vertical side
+to align it, including its intermediate vertices. The side is placed halfway
+between its endpoints on the aligned axis. It keeps the vertices and does not
+convert arbitrary roofs into rectangles. Clearly diagonal sides are rejected.
+
+Dragging an edge inward trims the area swept by that edge and its adjoining
+edges, then rebuilds the boundary. It can pass narrow returns and meet existing
+edges exactly without adding insulation area. Any separated fragments remain
+selected and editable; trim a fragment away completely to remove it. At least
+one roof area must remain. Vertex drags and outward edge drags still reject new
+crossings, touching roofs and collapsed boundaries.
+
+All remaining outlines must be valid, with at least three distinct vertices.
+Shrinking the insulation scope removes fully excluded cutouts;
+partially excluded cutouts become boundary notches (or separate roof areas when
+necessary). Cutouts still inside the scope and other roofs remain unchanged.
+An existing retraced/self-touching boundary is repaired when an edit leaves its
+defects unchanged or reduces them; new or worsened defects are blocked with a
+specific reason. Each completed edit, including cutout reconciliation, is one
+**Undo** action restoring the original outlines, cutouts and selection masks.
+Escape, pointer cancellation, changing tools or changing zoom cancels a drag.
+Mouse, pen and touch use the same adjustment behavior.
+
 New Build offers roof ROI and conditioned penetration recommendations when
 explicitly enabled. Outlet suggestions are not wired. The cutout tool remains manual.
 
@@ -119,6 +150,10 @@ The normal `npm run build` command instead regenerates `dist/`.
 - `npm run test:e2e:roi`: opt-in ROI review browser suite with mocked API
   responses, source-pixel checks and desktop/mobile review screenshots.
 - `npm run typecheck`: checks application code, tests, and test configuration.
+- `node tests/check-polygon-adjust.mjs`: focused desktop/mobile canvas
+  checks with synthetic geometry, real mouse/touch input, pixel assertions and
+  screenshots under `.vite/`. Start Vite on port 4183 first, set `FRONTEND_URL`, or
+  pass your running server URL: `node tests/check-polygon-adjust.mjs http://127.0.0.1:8084`.
 - `npm run lint:tests`: focused lint gate for the new harness. Full application
   lint remains a separate, unsuppressed inherited-debt report.
 

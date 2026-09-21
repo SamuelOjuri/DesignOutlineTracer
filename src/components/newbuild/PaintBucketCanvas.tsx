@@ -1,15 +1,15 @@
 import { useRef, useEffect, useState, useCallback, useId } from "react";
 import { Point } from "@/types/roof";
 import { floodFill, floodFillPreview, eraseFill, extractMultipleOutlines, extractInteriorHoles, buildEdgeMap, buildRegionMap } from "@/utils/floodFill";
-import { findClosestEdge, findClosestVertex, movePolygonEdge, rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
+import { findClosestEdge, findClosestVertex, findVertexMergeTarget, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, rasterizeOutlinesWithHoles, straightenPolygonSide, type OutlineEditResult } from "@/utils/polygonAdjust";
 import { Button } from "@/components/ui/button";
 import type { Box2D, RoiAnnotation } from "@/types/roi";
 import { buildRoiFillMask } from "@/utils/roiFillMask";
 import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/utils/rectangleCutout";
 import { AnnotationOverlay } from "./AnnotationOverlay";
-import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler } from "lucide-react";
 
-type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust";
+type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust" | "straighten";
 
 interface SelectionSnapshot {
   mask: Uint8Array | null;
@@ -93,6 +93,7 @@ export const PaintBucketCanvas = ({
   // Adjust tool state
   const [hoveredEdge, setHoveredEdge] = useState<{ outlineIndex: number; edgeIndex: number } | null>(null);
   const [hoveredVertex, setHoveredVertex] = useState<{ outlineIndex: number; vertexIndex: number } | null>(null);
+  const [adjustmentVersion, setAdjustmentVersion] = useState(0);
   const adjustDragRef = useRef<{
     type: "edge" | "vertex";
     outlineIndex: number;
@@ -102,6 +103,10 @@ export const PaintBucketCanvas = ({
     startY: number;
     originalOutlines: Point[][];
     originalHoles: Point[][];
+    pointerId: number;
+    previewEdit: OutlineEditResult | null;
+    previewMask: Uint8Array | null;
+    mergeTarget: Point | null;
   } | null>(null);
   const interiorHolesRef = useRef<Point[][]>([]);
   const sourceGeometry = useRef({ roofOutlines, interiorHoles });
@@ -234,7 +239,8 @@ export const PaintBucketCanvas = ({
 
     ctx.putImageData(originalImageDataRef.current, 0, 0);
 
-    if (filledMaskRef.current) {
+    const previewMask = adjustDragRef.current?.previewMask ?? filledMaskRef.current;
+    if (previewMask) {
       if (!overlayCanvasRef.current || overlayCanvasRef.current.width !== width || overlayCanvasRef.current.height !== height) {
         overlayCanvasRef.current = document.createElement("canvas");
         overlayCanvasRef.current.width = width;
@@ -242,7 +248,7 @@ export const PaintBucketCanvas = ({
       }
       const offCtx = overlayCanvasRef.current.getContext("2d")!;
       const overlayData = offCtx.createImageData(width, height);
-      const mask = filledMaskRef.current;
+      const mask = previewMask;
       const od = overlayData.data;
       for (let i = 0; i < width * height; i++) {
         if (mask[i]) {
@@ -260,20 +266,22 @@ export const PaintBucketCanvas = ({
     }
 
     // Draw outlines with edge highlighting for adjust tool
-    for (let oi = 0; oi < roofOutlines.length; oi++) {
-      const outline = roofOutlines[oi];
+    const displayedOutlines = adjustDragRef.current?.previewEdit?.outlines ?? roofOutlines;
+    for (let oi = 0; oi < displayedOutlines.length; oi++) {
+      const outline = displayedOutlines[oi];
       if (outline.length <= 2) continue;
 
       // Draw each edge individually to support highlighting
       for (let ei = 0; ei < outline.length; ei++) {
         const p1 = outline[ei];
         const p2 = outline[(ei + 1) % outline.length];
-        const isHovered = activeTool === "adjust" &&
+        const isHovered = (activeTool === "adjust" || activeTool === "straighten") &&
           hoveredEdge?.outlineIndex === oi &&
           hoveredEdge?.edgeIndex === ei;
 
         ctx.strokeStyle = isHovered ? "hsl(210, 85%, 55%)" : "hsl(0, 85%, 50%)";
-        ctx.lineWidth = isHovered ? 5 : 3;
+        const edgeScale = activeTool === "adjust" || activeTool === "straighten" ? displayScale : 1;
+        ctx.lineWidth = (isHovered ? 5 : 3) / edgeScale;
         ctx.setLineDash([]);
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
@@ -288,13 +296,22 @@ export const PaintBucketCanvas = ({
           hoveredVertex?.vertexIndex === vi;
         ctx.fillStyle = isVertexHovered ? "hsl(210, 85%, 55%)" : "hsl(0, 85%, 50%)";
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, isVertexHovered ? 7 : 4, 0, Math.PI * 2);
+        const handleScale = activeTool === "adjust" || activeTool === "straighten" ? displayScale : 1;
+        ctx.arc(pt.x, pt.y, (isVertexHovered ? 7 : 4) / handleScale, 0, Math.PI * 2);
         ctx.fill();
       }
     }
-  }, [roofOutlines, activeTool, hoveredEdge, hoveredVertex]);
+    const mergeTarget = adjustDragRef.current?.mergeTarget;
+    if (mergeTarget) {
+      ctx.strokeStyle = "#00875a";
+      ctx.lineWidth = 2 / displayScale;
+      ctx.beginPath();
+      ctx.arc(mergeTarget.x, mergeTarget.y, 11 / displayScale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }, [roofOutlines, activeTool, hoveredEdge, hoveredVertex, displayScale]);
 
-  useEffect(() => { redrawCanvas(); }, [roofOutlines, fillCount, redrawCanvas, hoveredEdge]);
+  useEffect(() => { redrawCanvas(); }, [roofOutlines, fillCount, redrawCanvas, hoveredEdge, adjustmentVersion]);
 
   // --- Preview logic ---
   const clearPreview = useCallback(() => {
@@ -629,9 +646,173 @@ export const PaintBucketCanvas = ({
     ctx.setLineDash([]);
   }, [getRegionsInRect, buildRegionPreviewMask]);
 
+  const commitAdjustment = useCallback((edit: OutlineEditResult, mask?: Uint8Array | null) => {
+    const canvas = canvasRef.current;
+    if (!canvas || edit.error) { setSelectionMessage(edit.error); return; }
+    const previous = sourceGeometry.current;
+    const holesChanged = JSON.stringify(edit.holes) !== JSON.stringify(interiorHolesRef.current);
+    if (!holesChanged && JSON.stringify(edit.outlines) === JSON.stringify(previous.roofOutlines)) return;
+    saveHistory();
+    filledMaskRef.current = mask ?? rasterizeOutlinesWithHoles(edit.outlines, edit.holes, canvas.width, canvas.height);
+    if (holesChanged) {
+      const previousHoleMask = rasterizeOutlinesWithHoles(interiorHolesRef.current, [], canvas.width, canvas.height);
+      const nextHoleMask = rasterizeOutlinesWithHoles(edit.holes, [], canvas.width, canvas.height);
+      const exclusions = new Uint8Array(cutoutMaskRef.current ?? previousHoleMask);
+      for (let index = 0; index < exclusions.length; index++) {
+        if (previousHoleMask[index]) exclusions[index] = 0;
+        if (nextHoleMask[index]) exclusions[index] = 1;
+      }
+      for (const rectangle of rectangleCutsRef.current) {
+        for (let row = rectangle.top; row < rectangle.bottom; row++) {
+          exclusions.fill(1, row * canvas.width + rectangle.left, row * canvas.width + rectangle.right);
+        }
+      }
+      cutoutMaskRef.current = exclusions;
+      interiorHolesRef.current = edit.holes;
+    }
+    onOutlinesExtracted(edit.outlines, edit.editedOutlineIndex);
+    if (holesChanged) onHolesExtracted?.(edit.holes);
+    setFillCount(count => count + 1);
+    setSelectionMessage(edit.repaired ? "Existing boundary defects repaired." : null);
+  }, [saveHistory, onOutlinesExtracted, onHolesExtracted]);
+
+  const cancelAdjustment = useCallback(() => {
+    const drag = adjustDragRef.current;
+    if (!drag) return;
+    adjustDragRef.current = null;
+    const canvas = previewCanvasRef.current;
+    if (canvas?.hasPointerCapture(drag.pointerId)) canvas.releasePointerCapture(drag.pointerId);
+    setAdjustmentVersion(version => version + 1);
+    setSelectionMessage(null);
+  }, []);
+
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") cancelAdjustment(); };
+    window.addEventListener("keydown", escape);
+    window.addEventListener("blur", cancelAdjustment);
+    return () => {
+      window.removeEventListener("keydown", escape);
+      window.removeEventListener("blur", cancelAdjustment);
+      cancelAdjustment();
+    };
+  }, [activeTool, displayScale, pdfCanvas, cancelAdjustment]);
+
+  const handleAdjustmentDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0 || isInitializing || adjustDragRef.current || (activeTool !== "adjust" && activeTool !== "straighten")) return;
+    const position = getCanvasPos(event);
+    if (!position) return;
+    setSelectionMessage(null);
+    const vertex = activeTool === "adjust" ? findClosestVertex(position.x, position.y, roofOutlines, 10 / displayScale) : null;
+    const edge = vertex ? null : findClosestEdge(position.x, position.y, roofOutlines, 12 / displayScale);
+    const outlineIndex = vertex?.outlineIndex ?? edge?.outlineIndex;
+    if (outlineIndex === undefined) return;
+    adjustDragRef.current = {
+      type: vertex ? "vertex" : "edge", outlineIndex,
+      vertexIndex: vertex?.vertexIndex, edgeIndex: edge?.edgeIndex,
+      startX: position.x, startY: position.y, pointerId: event.pointerId,
+      originalOutlines: roofOutlines.map(outline => outline.map(point => ({ ...point }))),
+      originalHoles: interiorHolesRef.current.map(hole => hole.map(point => ({ ...point }))),
+      previewEdit: null, previewMask: null, mergeTarget: null,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+
+  const previewAdjustment = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = adjustDragRef.current;
+    const position = getCanvasPos(event);
+    const canvas = canvasRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !position || !canvas) return;
+    const original = drag.originalOutlines[drag.outlineIndex];
+    const prepare = (candidate: Point[], edgeMove = false): OutlineEditResult => {
+      if (candidate.some(point => point.x < 0 || point.y < 0 || point.x > canvas.width || point.y > canvas.height)) {
+        return { outlines: drag.originalOutlines, holes: drag.originalHoles, repaired: false,
+          error: "Edit blocked: the boundary would extend outside the drawing page." };
+      }
+      return edgeMove
+        ? prepareEdgeEdit(drag.originalOutlines, drag.outlineIndex, drag.edgeIndex!,
+          position.x - drag.startX, position.y - drag.startY, drag.originalHoles)
+        : prepareOutlineEdit(drag.originalOutlines, drag.outlineIndex, candidate, drag.originalHoles);
+    };
+    let candidate: Point[] | null;
+    drag.mergeTarget = null;
+    if (activeTool === "straighten") {
+      candidate = straightenPolygonSide(original, drag.edgeIndex!);
+    } else if (drag.type === "vertex") {
+      const vertexIndex = drag.vertexIndex!;
+      let destination = {
+        x: Math.round(original[vertexIndex].x + position.x - drag.startX),
+        y: Math.round(original[vertexIndex].y + position.y - drag.startY),
+      };
+      const target = event.shiftKey ? null : findVertexMergeTarget(original, vertexIndex, destination, 8 / displayScale);
+      if (target !== null) {
+        candidate = mergePolygonVertex(original, vertexIndex, target);
+        if (candidate) drag.mergeTarget = original[target];
+      } else {
+        const moved = (point: Point) => original.map((existing, index) => index === vertexIndex ? point : existing);
+        if (event.shiftKey) {
+          const previous = original[(vertexIndex + original.length - 1) % original.length];
+          const next = original[(vertexIndex + 1) % original.length];
+          const options = [{ x: previous.x, y: next.y }, { x: next.x, y: previous.y }]
+            .sort((first, second) => Math.hypot(first.x - destination.x, first.y - destination.y) - Math.hypot(second.x - destination.x, second.y - destination.y));
+          const snapped = options.find(option => !prepare(moved(option)).error);
+          if (snapped) destination = snapped;
+          else {
+            drag.previewEdit = null;
+            drag.previewMask = null;
+            setSelectionMessage(prepare(moved(options[0])).error);
+            setAdjustmentVersion(version => version + 1);
+            return;
+          }
+        }
+        candidate = moved(destination);
+      }
+    } else {
+      candidate = movePolygonEdge(original, drag.edgeIndex!, position.x - drag.startX, position.y - drag.startY);
+    }
+    const edit = candidate ? prepare(candidate, activeTool === "adjust" && drag.type === "edge") : null;
+    if (!edit || edit.error) {
+      drag.previewEdit = null;
+      drag.previewMask = null;
+      drag.mergeTarget = null;
+      setSelectionMessage(edit?.error ?? "This side is not close enough to horizontal or vertical.");
+    } else {
+      drag.previewEdit = edit;
+      drag.previewMask = rasterizeOutlinesWithHoles(edit.outlines, edit.holes, canvas.width, canvas.height);
+      setSelectionMessage(drag.mergeTarget ? "Merge vertex" : edit.repaired ? "Existing boundary defects will be repaired." : null);
+    }
+    setAdjustmentVersion(version => version + 1);
+  };
+
+  const handleAdjustmentMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (isInitializing || (activeTool !== "adjust" && activeTool !== "straighten")) return;
+    if (adjustDragRef.current) { previewAdjustment(event); return; }
+    const position = getCanvasPos(event);
+    if (!position) return;
+    const vertex = activeTool === "adjust" ? findClosestVertex(position.x, position.y, roofOutlines, 10 / displayScale) : null;
+    setHoveredVertex(vertex);
+    setHoveredEdge(vertex ? null : findClosestEdge(position.x, position.y, roofOutlines, 12 / displayScale));
+  };
+
+  const handleAdjustmentUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const drag = adjustDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const position = getCanvasPos(event);
+    if (!position) { cancelAdjustment(); return; }
+    const moved = position && Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale >= 2;
+    if (moved || activeTool === "straighten") previewAdjustment(event);
+    else { cancelAdjustment(); return; }
+    adjustDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.previewEdit) commitAdjustment(drag.previewEdit, drag.previewMask);
+    setHoveredVertex(null);
+    setHoveredEdge(null);
+    setAdjustmentVersion(version => version + 1);
+  };
+
   // --- Mouse handlers ---
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0 || isInitializing || activeTool === "rectangle-cutout") return;
+    if (e.button !== 0 || isInitializing || activeTool === "rectangle-cutout" || activeTool === "adjust" || activeTool === "straighten") return;
     const pos = getCanvasPos(e);
     if (!pos) return;
 
@@ -647,39 +828,6 @@ export const PaintBucketCanvas = ({
     }
     setSelectionMessage(null);
 
-    // Adjust tool: start dragging an edge
-    if (activeTool === "adjust") {
-      // Check vertex first (higher priority, smaller target)
-      const vertex = findClosestVertex(pos.x, pos.y, roofOutlines, 10);
-      if (vertex) {
-        if (currentMask) saveHistory();
-        adjustDragRef.current = {
-          type: "vertex",
-          outlineIndex: vertex.outlineIndex,
-          vertexIndex: vertex.vertexIndex,
-          startX: pos.x,
-          startY: pos.y,
-          originalOutlines: roofOutlines.map(o => o.map(p => ({ ...p }))),
-          originalHoles: interiorHolesRef.current.map(h => h.map(p => ({ ...p }))),
-        };
-        return;
-      }
-      const edge = findClosestEdge(pos.x, pos.y, roofOutlines, 15);
-      if (edge) {
-        if (currentMask) saveHistory();
-        adjustDragRef.current = {
-          type: "edge",
-          outlineIndex: edge.outlineIndex,
-          edgeIndex: edge.edgeIndex,
-          startX: pos.x,
-          startY: pos.y,
-          originalOutlines: roofOutlines.map(o => o.map(p => ({ ...p }))),
-          originalHoles: interiorHolesRef.current.map(h => h.map(p => ({ ...p }))),
-        };
-      }
-      return;
-    }
-
     if (activeTool === "fill" && (!currentMask || !currentMask[pos.y * w + pos.x])) {
       dragStartRef.current = pos;
       dragCurrentRef.current = pos;
@@ -690,91 +838,12 @@ export const PaintBucketCanvas = ({
       clearPreview();
       return;
     }
-  }, [getCanvasPos, activeTool, clearPreview, isInitializing, roofOutlines, saveHistory]);
+  }, [getCanvasPos, activeTool, clearPreview, isInitializing]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (isInitializing || activeTool === "rectangle-cutout") return;
+    if (isInitializing || activeTool === "rectangle-cutout" || activeTool === "adjust" || activeTool === "straighten") return;
     const pos = getCanvasPos(e);
     if (!pos) return;
-
-    // Adjust tool: drag edge or highlight edge on hover
-    if (activeTool === "adjust") {
-      const drag = adjustDragRef.current;
-      if (drag) {
-        const dx = pos.x - drag.startX;
-        const dy = pos.y - drag.startY;
-
-        if (drag.type === "vertex") {
-          let newX = drag.originalOutlines[drag.outlineIndex][drag.vertexIndex!].x + dx;
-          let newY = drag.originalOutlines[drag.outlineIndex][drag.vertexIndex!].y + dy;
-
-          // Shift key snaps vertex so both edges are axis-aligned (horizontal/vertical)
-          if (e.shiftKey) {
-            const outline = drag.originalOutlines[drag.outlineIndex];
-            const n = outline.length;
-            const vi = drag.vertexIndex!;
-            const prev = outline[(vi - 1 + n) % n];
-            const next = outline[(vi + 1) % n];
-            // Snap to the intersection of axis-aligned lines from prev and next
-            // Pick the combo (prev.x/next.y or next.x/prev.y) closest to mouse
-            const opt1 = { x: prev.x, y: next.y }; // horizontal from next, vertical from prev
-            const opt2 = { x: next.x, y: prev.y }; // horizontal from prev, vertical from next
-            const d1 = Math.hypot(newX - opt1.x, newY - opt1.y);
-            const d2 = Math.hypot(newX - opt2.x, newY - opt2.y);
-            if (d1 < d2) {
-              newX = opt1.x;
-              newY = opt1.y;
-            } else {
-              newX = opt2.x;
-              newY = opt2.y;
-            }
-          }
-          const newOutlines = drag.originalOutlines.map((outline, oi) => {
-            if (oi === drag.outlineIndex) {
-              return outline.map((p, vi) => {
-                if (vi === drag.vertexIndex) {
-                  return { x: Math.round(newX), y: Math.round(newY) };
-                }
-                return { ...p };
-              });
-            }
-            return outline;
-          });
-          const canvas = canvasRef.current!;
-          const w = canvas.width, h = canvas.height;
-          const newMask = rasterizeOutlinesWithHoles(newOutlines, drag.originalHoles, w, h);
-          filledMaskRef.current = newMask;
-          onOutlinesExtracted(newOutlines, drag.outlineIndex);
-          redrawCanvas();
-        } else {
-          // Edge drag (existing behavior)
-          const newOutlines = drag.originalOutlines.map((outline, oi) => {
-            if (oi === drag.outlineIndex) {
-              return movePolygonEdge(outline, drag.edgeIndex!, dx, dy);
-            }
-            return outline;
-          });
-          const canvas = canvasRef.current!;
-          const w = canvas.width, h = canvas.height;
-          const newMask = rasterizeOutlinesWithHoles(newOutlines, drag.originalHoles, w, h);
-          filledMaskRef.current = newMask;
-          onOutlinesExtracted(newOutlines, drag.outlineIndex);
-          redrawCanvas();
-        }
-      } else {
-        // Hover highlight — check vertex first, then edge
-        const vertex = findClosestVertex(pos.x, pos.y, roofOutlines, 10);
-        if (vertex) {
-          setHoveredVertex({ outlineIndex: vertex.outlineIndex, vertexIndex: vertex.vertexIndex });
-          setHoveredEdge(null);
-        } else {
-          setHoveredVertex(null);
-          const edge = findClosestEdge(pos.x, pos.y, roofOutlines, 15);
-          setHoveredEdge(edge ? { outlineIndex: edge.outlineIndex, edgeIndex: edge.edgeIndex } : null);
-        }
-      }
-      return;
-    }
 
     if (isDraggingRef.current && activeTool === "fill") {
       dragCurrentRef.current = pos;
@@ -792,26 +861,9 @@ export const PaintBucketCanvas = ({
       const p = lastPreviewPosRef.current;
       if (p) computePreview(p.x, p.y);
     }, HOVER_THROTTLE);
-  }, [getCanvasPos, computePreview, activeTool, renderRectPreview, isInitializing, roofOutlines, redrawCanvas, onOutlinesExtracted]);
+  }, [getCanvasPos, computePreview, activeTool, renderRectPreview, isInitializing]);
 
   const handleMouseUp = useCallback(() => {
-    // Adjust tool: finalize edge drag
-    if (adjustDragRef.current) {
-      adjustDragRef.current = null;
-      const canvas = canvasRef.current;
-      if (canvas && filledMaskRef.current) {
-        setFillCount(c => c + 1);
-        // Don't re-extract outlines from mask — the current roofOutlines are already
-        // the clean adjusted polygons. Only re-extract holes.
-        if (onHolesExtracted) {
-          const holes = extractInteriorHoles(filledMaskRef.current, canvas.width, canvas.height);
-          interiorHolesRef.current = holes;
-          onHolesExtracted(holes);
-        }
-      }
-      return;
-    }
-
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
 
@@ -884,11 +936,11 @@ export const PaintBucketCanvas = ({
     clearPreview();
     redrawCanvas();
     requestAnimationFrame(() => { justDraggedRef.current = false; });
-  }, [onHolesExtracted, emitOutlinesAndHoles, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint, saveHistory]);
+  }, [emitOutlinesAndHoles, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint, saveHistory]);
 
   const handleMouseLeave = useCallback(() => {
     if (rectangleDragRef.current) return; // Pointer capture keeps the rectangle active until release.
-    if (adjustDragRef.current) handleMouseUp();
+    if (adjustDragRef.current) return;
     if (isDraggingRef.current) handleMouseUp();
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
     setHoveredEdge(null);
@@ -908,31 +960,14 @@ export const PaintBucketCanvas = ({
     const outline = roofOutlines[edge.outlineIndex];
     if (outline.length <= 3) return; // Can't delete from a triangle
 
-    // Save mask for undo
-    const currentMask = filledMaskRef.current;
-    if (currentMask) saveHistory();
-
     // Remove the second vertex of the edge; the polygon reconnects automatically
     const vertexToRemove = (edge.edgeIndex + 1) % outline.length;
     const newOutline = outline.filter((_, i) => i !== vertexToRemove);
 
-    const newOutlines = roofOutlines.map((o, oi) =>
-      oi === edge.outlineIndex ? newOutline : o
-    );
-
-    // Rasterize new mask
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const w = canvas.width, h = canvas.height;
-      const newMask = rasterizeOutlinesWithHoles(newOutlines, interiorHolesRef.current, w, h);
-      filledMaskRef.current = newMask;
-    }
-
-    onOutlinesExtracted(newOutlines, edge.outlineIndex);
+    commitAdjustment(prepareOutlineEdit(roofOutlines, edge.outlineIndex, newOutline, interiorHolesRef.current));
     setHoveredEdge(null);
     setHoveredVertex(null);
-    setFillCount(c => c + 1);
-  }, [activeTool, getCanvasPos, roofOutlines, onOutlinesExtracted, saveHistory]);
+  }, [activeTool, getCanvasPos, roofOutlines, commitAdjustment]);
 
   useEffect(() => {
     // Discard work queued with the previous tool or sensitivity before the next hover.
@@ -947,7 +982,7 @@ export const PaintBucketCanvas = ({
   }, [activeTool, cutoutSensitivity, selectionSensitivity, clearPreview]);
 
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (justDraggedRef.current || isInitializing || activeTool === "adjust" || activeTool === "rectangle-cutout") return;
+    if (justDraggedRef.current || isInitializing || activeTool === "adjust" || activeTool === "straighten" || activeTool === "rectangle-cutout") return;
     const pos = getCanvasPos(e);
     if (!pos) return;
     const canvas = canvasRef.current;
@@ -1084,12 +1119,25 @@ export const PaintBucketCanvas = ({
             variant={activeTool === "adjust" ? "default" : "ghost"}
             size="sm"
             onClick={() => setActiveTool("adjust")}
-            title="Adjust boundary edges"
+            title="Drag edges or vertices; drop onto a neighbouring vertex to merge. Shift aligns a corner."
+            aria-pressed={activeTool === "adjust"}
             className="rounded-none"
             disabled={isInitializing || !hasAnyFill}
           >
             <Move className="w-4 h-4 mr-1" />
             Adjust
+          </Button>
+          <Button
+            variant={activeTool === "straighten" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTool("straighten")}
+            title="Click a side to align it horizontally or vertically, including intermediate points"
+            aria-pressed={activeTool === "straighten"}
+            className="rounded-none"
+            disabled={isInitializing || !roofOutlines.length}
+          >
+            <Ruler className="w-4 h-4 mr-1" />
+            Straighten
           </Button>
         </div>
 
@@ -1176,7 +1224,9 @@ export const PaintBucketCanvas = ({
       {acceptedRegions.length > 0 && <p className="text-xs text-muted-foreground px-1 mb-2">
         Selection stays inside the green roof regions. Use Cut Out or Adjust to refine the roof boundary.
       </p>}
-      {selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
+      {(activeTool === "adjust" || activeTool === "straighten")
+        ? <div role="status" className="h-12 shrink-0 overflow-y-auto text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</div>
+        : selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
 
       {/* Canvas area */}
       <div
@@ -1195,13 +1245,13 @@ export const PaintBucketCanvas = ({
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseLeave}
             onContextMenu={handleContextMenu}
-            onPointerDown={handleRectangleDown}
-            onPointerMove={handleRectangleMove}
-            onPointerUp={handleRectangleUp}
-            onPointerCancel={cancelRectangleDrag}
-            onLostPointerCapture={cancelRectangleDrag}
-            className={`absolute top-2 left-1/2 -translate-x-1/2 ${activeTool === "adjust" ? "cursor-move" : activeTool === "cutout" ? "cursor-pointer" : "cursor-crosshair"}`}
-            style={{ pointerEvents: "auto", touchAction: activeTool === "rectangle-cutout" ? "none" : "auto" }}
+            onPointerDown={event => { handleRectangleDown(event); handleAdjustmentDown(event); }}
+            onPointerMove={event => { handleRectangleMove(event); handleAdjustmentMove(event); }}
+            onPointerUp={event => { handleRectangleUp(event); handleAdjustmentUp(event); }}
+            onPointerCancel={() => { cancelRectangleDrag(); cancelAdjustment(); }}
+            onLostPointerCapture={() => { cancelRectangleDrag(); cancelAdjustment(); }}
+            className={`absolute top-2 left-1/2 -translate-x-1/2 ${activeTool === "adjust" ? "cursor-move" : activeTool === "cutout" || activeTool === "straighten" ? "cursor-pointer" : "cursor-crosshair"}`}
+            style={{ pointerEvents: "auto", touchAction: activeTool === "rectangle-cutout" || activeTool === "adjust" || activeTool === "straighten" ? "none" : "auto" }}
           />
           {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
@@ -1210,7 +1260,7 @@ export const PaintBucketCanvas = ({
         </div>
       </div>
 
-      <div className="flex items-center justify-center gap-2 mt-2 px-4">
+      {activeTool !== "straighten" && <div className="flex items-center justify-center gap-2 mt-2 px-4">
         <MousePointer className="w-3.5 h-3.5 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">
           {activeTool === "rectangle-cutout"
@@ -1221,7 +1271,7 @@ export const PaintBucketCanvas = ({
             ? "Hover to preview — click or hold & drag to multi-select areas — click filled area to remove — Ctrl + scroll to zoom"
             : "Hover to preview — click inside a filled area to cut out a section — Ctrl + scroll to zoom"}
         </p>
-      </div>
+      </div>}
     </div>
   );
 };
