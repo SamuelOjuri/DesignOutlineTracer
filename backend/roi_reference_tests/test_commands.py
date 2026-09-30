@@ -65,7 +65,7 @@ class CommandTests(unittest.TestCase):
                                   "source_sha256": digest, "status": "complete" if targets else "no_detections",
                                   "annotations": targets}
                         request = {"request_id": directory.name, "case_id": case_id, "task": task,
-                                   "image": {"source_sha256": digest}, "model": "gemini-3.6-flash",
+                                   "image": {"source_sha256": digest}, "model": "gemini-3.7-flash",
                                    "config_sha256": "test-config", "profile": "json", "provider": "developer",
                                    "generation_config": {"max_output_tokens": 4096},
                                    "accepted_rois": {"rois": [{"id": "roof", "box_2d": roof["box_2d"]}]}}

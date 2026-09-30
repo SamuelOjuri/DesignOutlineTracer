@@ -157,7 +157,7 @@ Other request differences remain deliberately visible:
 | --- | --- | --- |
 | Source image | Local JPEG, observed 2482x1755 | Pristine PDF.js page raster uploaded as PNG |
 | Preparation | Aspect-preserving LANCZOS thumbnail; observed 1024x724 | Aspect-preserving LANCZOS thumbnail, maximum side 1024, white RGB PNG |
-| Model / temperature | `gemini-3.6-flash` / 0.5 in the supplied ROI cell | Same configured model / 0.5 |
+| Model / temperature | `gemini-3.7-flash` / 0.5 in the supplied ROI cell | Same configured model / 0.5 |
 | Instructions / output | Notebook system text and explicit safety setting; no output-token cap in the shown call | App system safeguards, strict schema validation, configured output-token cap, optional structured output, streamed response |
 
 The notebook's JPEG is now available locally, but the two requests' exact input

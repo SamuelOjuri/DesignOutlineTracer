@@ -84,8 +84,6 @@ For more information about all Gemini models, check the [documentation](https://
 
 MODEL_ID = "gemini-3.5-flash" # @param ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-preview", "gemini-3.1-flash-lite", "gemini-3.1-pro-preview"] {"allow-input":true, isTemplate: true}
 
-MODEL_ID_36 = "gemini-3.6-flash"
-
 MODEL_ID_37 = "gemini-3.7-flash"
 
 """### System instructions
@@ -259,7 +257,7 @@ im.thumbnail([1024,1024], Image.Resampling.LANCZOS)
 
 # Run model to find bounding boxes
 response = client.models.generate_content(
-    model=MODEL_ID_36,
+    model=MODEL_ID_37,
     contents=[prompt, im],
     config = types.GenerateContentConfig(
         system_instruction=bounding_box_system_instructions,
@@ -291,7 +289,7 @@ im.thumbnail([1024,1024], Image.Resampling.LANCZOS)
 
 # Run model to find bounding boxes
 response = client.models.generate_content(
-    model=MODEL_ID_36,
+    model=MODEL_ID_37,
     contents=[prompt, im],
     config = types.GenerateContentConfig(
         system_instruction=bounding_box_system_instructions,
@@ -329,7 +327,7 @@ im.thumbnail([1024,1024], Image.Resampling.LANCZOS)
 
 # Run model to find bounding boxes
 response = client.models.generate_content(
-    model=MODEL_ID_36,
+    model=MODEL_ID_37,
     contents=[prompt, im],
     config = types.GenerateContentConfig(
         system_instruction=bounding_box_system_instructions,

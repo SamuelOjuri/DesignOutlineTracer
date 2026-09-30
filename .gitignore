@@ -44,8 +44,7 @@ backend/storage/
 /backend/roi_reference/private/
 /docs/roi-evaluation/private/
 
-# Legacy backend only; allow the planned backend/roi_app package
-/backend/app/
+# Retired extraction-backend tests; the active backend/app package is tracked
 /backend/tests/
 
 # Superseded planning and experimental results

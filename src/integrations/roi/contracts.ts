@@ -42,7 +42,7 @@ const annotationSchema = z.object({
 }).strict();
 
 const runSchema = requestSchema.extend({
-  model: z.literal("gemini-3.6-flash"), prompt_version: z.string().min(1).max(100), schema_version: z.literal("1"),
+  model: z.literal("gemini-3.7-flash"), prompt_version: z.string().min(1).max(100), schema_version: z.literal("1"),
   settings: z.record(z.unknown()), started_at: z.string().datetime({ offset: true }),
   duration_ms: z.number().finite().nonnegative(), status, warnings,
   cached: z.boolean(), provider_attempts: z.number().int().min(0).max(2),
@@ -50,10 +50,10 @@ const runSchema = requestSchema.extend({
 
 export const detectionSchema = z.object({
   schema_version: z.literal("1"), page_id: identifier, request_id: identifier, task, status,
-  roi_revision: z.number().int().nonnegative().nullable(), model: z.literal("gemini-3.6-flash"),
+  roi_revision: z.number().int().nonnegative().nullable(), model: z.literal("gemini-3.7-flash"),
   prompt_version: z.string().min(1).max(100), annotations: z.array(annotationSchema).max(25), warnings, run: runSchema,
 }).strict();
 
 export const healthSchema = z.object({
-  status: z.enum(["ready", "not_configured"]), model: z.literal("gemini-3.6-flash"), mode: z.literal("localhost_only"),
+  status: z.enum(["ready", "not_configured"]), model: z.literal("gemini-3.7-flash"), mode: z.literal("localhost_only"),
 }).strict();

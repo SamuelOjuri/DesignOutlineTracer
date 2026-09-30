@@ -13,7 +13,7 @@ const proposal = (id: string, box: Box2D): RoiAnnotation => ({
 });
 const run: DetectionRun = {
   page_id: source.page_id, request_id: "rerun", task: "roof_roi", source_image_hash: source.source_image_hash,
-  roi_revision: null, geometry_revision: 0, model: "gemini-3.6-flash", prompt_version: "roof-roi-v1",
+  roi_revision: null, geometry_revision: 0, model: "gemini-3.7-flash", prompt_version: "roof-roi-v1",
   schema_version: "1", settings: {}, started_at: "2026-09-09T12:00:00Z", duration_ms: 10, status: "complete", warnings: [],
 };
 

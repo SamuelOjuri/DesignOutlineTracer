@@ -5,10 +5,10 @@ import httpx
 from google import genai
 from google.genai import types
 
-from backend.roi_app.config import Settings
-from backend.roi_app.errors import OutputDiagnostic, RoiError
-from backend.roi_app.gemini import GeminiProvider, PROMPT_VERSIONS, make_prompt, response_schema
-from backend.roi_app.models import AcceptedRoi
+from backend.app.config import Settings
+from backend.app.errors import OutputDiagnostic, RoiError
+from backend.app.gemini import GeminiProvider, PROMPT_VERSIONS, make_prompt, response_schema
+from backend.app.models import AcceptedRoi
 
 
 class GeminiTests(unittest.IsolatedAsyncioTestCase):
@@ -71,7 +71,7 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
             result, captured = await self.make_call(payload, structured=structured)
             self.assertEqual(result.text, "[]")
             self.assertEqual(len(captured), 1)
-            self.assertIn("gemini-3.6-flash", str(captured[0].url))
+            self.assertIn("gemini-3.7-flash", str(captured[0].url))
             config = json.loads(captured[0].content)["generationConfig"]
             self.assertEqual(config["temperature"], 0.5)
             self.assertNotIn("thinkingConfig", config)

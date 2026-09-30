@@ -32,10 +32,10 @@ class ProviderTests(unittest.TestCase):
 
     def test_sdk_success_on_both_provider_paths_and_usage_provenance(self):
         def handle(request):
-            self.assertIn("gemini-3.6-flash:generateContent", request.url.path)
+            self.assertIn("gemini-3.7-flash:generateContent", request.url.path)
             return httpx.Response(200, json={
                 "candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "[]"}]}}],
-                "modelVersion": "gemini-3.6-flash", "responseId": "synthetic-response",
+                "modelVersion": "gemini-3.7-flash", "responseId": "synthetic-response",
                 "usageMetadata": {"totalTokenCount": 20},
             })
 
@@ -64,7 +64,7 @@ class ProviderTests(unittest.TestCase):
                 with self.assertRaisesRegex(ReferenceError, "^provider_timeout$"):
                     generate(client, request_for_test(), b"image")
 
-    def test_reference_code_has_no_legacy_or_colab_imports(self):
+    def test_reference_code_has_no_app_or_colab_imports(self):
         for path in ROOT.glob("*.py"):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 modules = []

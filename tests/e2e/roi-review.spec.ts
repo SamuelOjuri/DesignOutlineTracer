@@ -50,8 +50,8 @@ async function mockRoi(page: Page) {
     }));
     const warnings = status === "partial" ? ["Synthetic output limit reached"] : [];
     await route.fulfill({ headers, json: { schema_version: "1", page_id: payload.page_id, request_id: payload.request_id,
-      task: payload.task, status, roi_revision: payload.roi_revision, model: "gemini-3.6-flash", prompt_version: promptVersion, annotations, warnings,
-      run: { ...identity, model: "gemini-3.6-flash", prompt_version: promptVersion, schema_version: "1", settings: { temperature: 0.5 },
+      task: payload.task, status, roi_revision: payload.roi_revision, model: "gemini-3.7-flash", prompt_version: promptVersion, annotations, warnings,
+      run: { ...identity, model: "gemini-3.7-flash", prompt_version: promptVersion, schema_version: "1", settings: { temperature: 0.5 },
         started_at: "2026-09-09T12:00:00Z", duration_ms: 10, status, warnings, cached: false, provider_attempts: 1 },
     } }).catch((error: Error) => { if (currentMode !== "delayed") throw error; });
   });

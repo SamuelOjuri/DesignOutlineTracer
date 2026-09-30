@@ -12,7 +12,7 @@ function setup(enabled = true, task: AnnotationKind = "roof_roi") {
     page: { ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 800, 600] }, upload_id: "upload", expires_in_seconds: 900,
   });
   const detect = vi.spyOn(client, "detect").mockImplementation(async (request) => ({
-    schema_version: "1", ...request, status: "partial", model: "gemini-3.6-flash", prompt_version: "roof-roi-v1",
+    schema_version: "1", ...request, status: "partial", model: "gemini-3.7-flash", prompt_version: "roof-roi-v1",
     annotations: [syntheticAnnotation("proposal", { review_status: "suggested" })], warnings: ["Possible truncation"],
     run: { ...syntheticRun(request), status: "partial", cached: false, provider_attempts: 1 },
   }));
@@ -52,7 +52,7 @@ describe("explicit ROI detection", () => {
       patch: { box_2d: [100, 100, 700, 700] } }));
     expect(detect.mock.calls[0][1].signal!.aborted).toBe(true);
     await act(async () => {
-      resolve({ schema_version: "1", ...request, status: "complete", model: "gemini-3.6-flash", prompt_version: "penetration-v1",
+      resolve({ schema_version: "1", ...request, status: "complete", model: "gemini-3.7-flash", prompt_version: "penetration-v1",
         warnings: [], annotations: [syntheticAnnotation("child", { kind: "penetration", subtype: "rooflight", roi_id: "parent" })],
         run: { ...syntheticRun(request), cached: false, provider_attempts: 1 } });
       await pending;
@@ -113,7 +113,7 @@ describe("explicit ROI detection", () => {
     });
     expect(signal.aborted).toBe(true);
     await act(async () => {
-      resolve({ schema_version: "1", ...request, status: "complete", model: "gemini-3.6-flash", prompt_version: "roof-roi-v1",
+      resolve({ schema_version: "1", ...request, status: "complete", model: "gemini-3.7-flash", prompt_version: "roof-roi-v1",
         warnings: [], annotations: [syntheticAnnotation()], run: { ...syntheticRun(request), cached: false, provider_attempts: 1 } });
       await pending;
     });

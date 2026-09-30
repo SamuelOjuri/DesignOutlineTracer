@@ -15,7 +15,7 @@ openings. This replaces the initial annotation-only geometry boundary below.
 - Penetration detection is explicit. It uploads the immutable unannotated full
   page and supplies only accepted/current ROI IDs, boxes and revisions. It uses
   the existing aspect-preserving maximum-1024-pixel preparation, exact
-  `gemini-3.6-flash` model, temperature 0.5 and bounded request service.
+  `gemini-3.7-flash` model, temperature 0.5 and bounded request service.
 - The new application prompt is `penetration-v1`; the draft and reference
   materials remain unchanged. It requests actual object/symbol extents and
   excludes text-only references, arbitrary equipment, outlets and out-of-scope
@@ -115,7 +115,7 @@ npm run test:e2e -- --output .vite/phase-5-manual-e2e
 npm run typecheck
 npm run build -- --outDir .vite/phase-5-check
 npm run lint
-& "./backend/roi_app/.venv/Scripts/python.exe" -m unittest discover -s backend/roi_tests
+& "./backend/app/.venv/Scripts/python.exe" -m unittest discover -s backend/roi_tests
 ```
 
 Original Phase 5 results: 80 frontend tests, 43 isolated offline backend tests, 6 mocked annotation

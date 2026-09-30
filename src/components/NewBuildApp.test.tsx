@@ -147,7 +147,7 @@ describe("manual New Build state", () => {
       ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
     }, upload_id: "upload", expires_in_seconds: 900 });
     vi.spyOn(roiClient, "detect").mockImplementation(async (request, options) => ({
-      schema_version: "1", ...request, status: "complete", model: "gemini-3.6-flash", prompt_version: "penetration-v1",
+      schema_version: "1", ...request, status: "complete", model: "gemini-3.7-flash", prompt_version: "penetration-v1",
       annotations: [syntheticAnnotation("child", { label: "Rooflight A", kind: "penetration", subtype: "rooflight",
         roi_id: options!.acceptedRois![0].id, review_status: "suggested", box_2d: [220, 250, 250, 280],
         proposed_box_2d: [220, 250, 250, 280] })], warnings: [],

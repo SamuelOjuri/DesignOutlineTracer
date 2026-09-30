@@ -46,7 +46,7 @@ prototype. The manifest's tags are **collection targets**, not verified evidence
 
 [Configuration](../../backend/roi_reference/config.json) and
 [the initial ROI prompt](../../backend/roi_reference/prompts/roof-roi-v1.txt)
-are versioned. All profiles use exactly `gemini-3.6-flash`, temperature `0.5`,
+are versioned. All profiles use exactly `gemini-3.7-flash`, temperature `0.5`,
 aspect-preserving LANCZOS thumbnailing to at most 1024 pixels per side, and no
 upscaling. The runner stores and sends the same RGB PNG bytes. Transparency is
 composited on white, EXIF rotation other than identity is rejected, and no

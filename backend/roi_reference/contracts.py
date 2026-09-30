@@ -3,7 +3,7 @@ import math
 from typing import Any
 
 
-MODEL = "gemini-3.6-flash"
+MODEL = "gemini-3.7-flash"
 TASKS = ("roof_roi", "penetration", "rainwater_outlet")
 SUBTYPES = {
     "roof_roi": (),

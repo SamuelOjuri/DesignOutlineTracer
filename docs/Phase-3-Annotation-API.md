@@ -7,9 +7,10 @@ New Build/Refurbishment editors and the email payload are unchanged.
 
 ## Boundaries And Pending Gates
 
-- The service is under `backend/roi_app`; it imports neither `backend/app` nor
-  `backend/roi_reference`. Its dependency lock and environment are independent.
-- The only provider model is `gemini-3.6-flash`, at temperature `0.5`, with the
+- The active ROI service is under `backend/app`. It has no dependency on the
+  retired extraction implementation or `backend/roi_reference`. Its dependency
+  lock and environment are independent.
+- The only provider model is `gemini-3.7-flash`, at temperature `0.5`, with the
   aspect-preserving 1024-pixel maximum image side. No model substitution occurs.
 - Live access requires `ROI_ALLOW_LIVE=true` and a server-side `GOOGLE_API_KEY`.
   Neither implementation nor ordinary tests invoke Gemini. Health does not
@@ -34,12 +35,12 @@ Run from the repository root with Python 3.13. The API does not need the old
 backend running. The lock contains pinned transitive dependencies and hashes.
 
 ```powershell
-py -3.13 -m venv backend/roi_app/.venv
-& ./backend/roi_app/.venv/Scripts/python.exe -m pip install --require-hashes -r backend/roi_app/requirements.lock
-& ./backend/roi_app/.venv/Scripts/python.exe -m pip check
+py -3.13 -m venv backend/app/.venv
+& ./backend/app/.venv/Scripts/python.exe -m pip install --require-hashes -r backend/app/requirements.lock
+& ./backend/app/.venv/Scripts/python.exe -m pip check
 $env:ROI_ALLOW_LIVE = "false"
 $env:ROI_ALLOWED_ORIGINS = "http://127.0.0.1:8081,http://127.0.0.1:8082"
-& ./backend/roi_app/.venv/Scripts/python.exe -m uvicorn backend.roi_app.main:app --host 127.0.0.1 --port 8091 --workers 1 --no-proxy-headers --no-access-log
+& ./backend/app/.venv/Scripts/python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8091 --workers 1 --no-proxy-headers --no-access-log
 ```
 
 Use another unused port if 8091 is occupied. Health is at
@@ -56,8 +57,8 @@ until the deployment account and a deliberate call budget are approved.
 To regenerate the lock in an isolated tooling environment:
 
 ```powershell
-& ./backend/roi_app/.venv/Scripts/python.exe -m pip install pip==25.2 pip-tools==7.5.2
-& ./backend/roi_app/.venv/Scripts/python.exe -m piptools compile --generate-hashes --strip-extras --no-emit-index-url --no-emit-trusted-host --output-file backend/roi_app/requirements.lock backend/roi_app/requirements.in
+& ./backend/app/.venv/Scripts/python.exe -m pip install pip==25.2 pip-tools==7.5.2
+& ./backend/app/.venv/Scripts/python.exe -m piptools compile --generate-hashes --strip-extras --no-emit-index-url --no-emit-trusted-host --output-file backend/app/requirements.lock backend/app/requirements.in
 ```
 
 The tooling pins avoid a tested pip-tools incompatibility with newer pip internals.
@@ -193,7 +194,7 @@ stores no drawings/tokens in local storage, and does not retry automatically.
 ## Verification
 
 ```powershell
-& ./backend/roi_app/.venv/Scripts/python.exe -m unittest discover -s backend/roi_tests -v
+& ./backend/app/.venv/Scripts/python.exe -m unittest discover -s backend/roi_tests -v
 npm test
 npm run typecheck
 npm run build -- --outDir .vite/roi-phase3-check

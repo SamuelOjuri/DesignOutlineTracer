@@ -5,7 +5,7 @@
 - Branch: `region-of-interest`.
 - Plan date: 2026-09-09.
 - Status: Phases 0-3 provide the frontend baseline, offline reference tooling, page/session contracts, and isolated annotation API/client. Phases 4-5 add opt-in ROI and conditioned penetration review, verified with offline fixtures and browser flows. Live evaluation and domain-reviewed dataset/category gates remain pending; outlet recommendation wiring and persistence are not enabled.
-- Model: Gemini 3.6 Flash, using the configured identifier `gemini-3.6-flash` demonstrated in the supplied prototype.
+- Model: Gemini 3.7 Flash, using the configured identifier `gemini-3.7-flash` demonstrated in the supplied prototype.
 - Scope: enhance the existing New Build workflow with reviewable region-of-interest (ROI), roof-penetration, and rainwater-outlet recommendations.
 
 This plan supersedes the previous backend implementation plan for this branch. It does not adopt extraction logic, architecture, or results from the experimental branches. Existing backend artifacts must not become dependencies merely because they remain on disk.
@@ -57,14 +57,14 @@ Reference material:
 - [Captured notebook results](docs/roi-logic/New%20Roof%20Plan%20Spatial_understanding_logic.pdf).
 - [Example roof plan](docs/TP17202_25.01_input.pdf).
 
-The supplied code loads a JPEG, resizes it to fit within 1024 by 1024 pixels while preserving aspect ratio, and calls Gemini 3.6 Flash at temperature `0.5`. It requests labelled bounding boxes and interprets them as `[ymin, xmin, ymax, xmax]`, normalized to 0-1000.
+The supplied code loads a JPEG, resizes it to fit within 1024 by 1024 pixels while preserving aspect ratio, and calls Gemini 3.7 Flash at temperature `0.5`. It requests labelled bounding boxes and interprets them as `[ymin, xmin, ymax, xmax]`, normalized to 0-1000.
 
 The captured example contains two roof-region recommendations and two outlet recommendations. It demonstrates the intended interaction, not general detection accuracy. The source drawing already includes red scope callouts; evaluation must also include drawings without those cues.
 
 Implementation decisions:
 
 - Use the first, simpler ROI prompt as the initial reference. Treat the third notebook call as an alternative ROI prompt to evaluate, not a required second processing stage.
-- Keep `gemini-3.6-flash` as the selected model. Verify access using the actual deployment project before integration; report an unavailable model rather than silently substituting another model.
+- Keep `gemini-3.7-flash` as the selected model. Verify access using the actual deployment project before integration; report an unavailable model rather than silently substituting another model.
 - Preserve the original prompts, responses, and source documents as reference material. Write application code separately; do not turn the Colab export into the service entry point.
 - Replace Colab secret access and package-install commands with server environment configuration and a reproducible dependency installation.
 - Explicitly specify coordinate order and normalization in the application schema and prompts; the plotting helper currently assumes them.
@@ -109,7 +109,7 @@ For the first implementation, keep PDF.js as the source renderer and upload its 
 
 The original PDF stays in the browser for this version. The selected-page image is transmitted to the application service and Gemini only when the user initiates detection. Deployment must disclose that processing and enforce the appropriate access and retention controls.
 
-Use a small Python/FastAPI service in a new, isolated `backend/roi_app/` package. Do not import the remaining `backend/app/` modules. Proposed dependencies are FastAPI, Uvicorn, Pydantic, Pillow, and `google-genai`, pinned through a reproducible dependency specification after verifying SDK/model compatibility. No legacy geometry engine is required.
+Use a small Python/FastAPI service in the active `backend/app/` package, which now contains the ROI implementation. Do not restore dependencies on the retired extraction implementation. Proposed dependencies are FastAPI, Uvicorn, Pydantic, Pillow, and `google-genai`, pinned through a reproducible dependency specification after verifying SDK/model compatibility. No legacy geometry engine is required.
 
 ### Ownership Boundaries
 
@@ -163,7 +163,7 @@ An example response envelope, illustrating shape rather than verified detections
   "task": "roof_roi",
   "status": "complete",
   "roi_revision": null,
-  "model": "gemini-3.6-flash",
+  "model": "gemini-3.7-flash",
   "prompt_version": "roof-roi-v1",
   "annotations": [
     {
@@ -252,7 +252,7 @@ are open exit criteria, not completed accuracy evidence. See the
 **Implementation**
 
 1. Create a server-side, explicitly invoked reference runner outside the Colab notebook. Keep reference material unchanged.
-2. Use `gemini-3.6-flash`, the demonstrated temperature, original simple ROI prompt, and aspect-preserving 1024-pixel maximum image side as the initial reference configuration.
+2. Use `gemini-3.7-flash`, the demonstrated temperature, original simple ROI prompt, and aspect-preserving 1024-pixel maximum image side as the initial reference configuration.
 3. Verify actual model access and supported JSON/thinking settings with the deployment credentials. Do not put API keys in browser code, logs, fixtures, or Git.
 4. Preserve the exact inference image, its hash and dimensions, request settings, raw response, and parsed result for authorized development runs.
 5. The original JPEG referenced by the notebook must be obtained or explicitly marked unavailable. A PDF.js-rendered derivative is a separate input variant, not an exact reproduction of that JPEG.
@@ -296,7 +296,7 @@ editor boundaries and deferred work.
 
 **Depends on:** Phases 1 and 2.
 
-**Delivery update (2026-09-09):** `backend/roi_app/` now implements bounded
+**Delivery update (2026-09-09):** `backend/app/` now implements bounded
 upload/detection/deletion and nonbillable health, strict Pydantic/image validation,
 the exact-model provider adapter, session ownership, expiry, proposal caching,
 request deduplication, bounded transient retries and a single explicit partial
@@ -310,7 +310,7 @@ is deliberately localhost-only, with live calls disabled by default. See the
 
 **Implementation**
 
-1. Create `backend/roi_app/` with a small application entry point, configuration, request/response models, image preparation, provider adapter, and task-specific prompt files. Keep its dependency/test setup isolated from leftover backend modules.
+1. Create `backend/app/` with a small application entry point, configuration, request/response models, image preparation, provider adapter, and task-specific prompt files. Keep its dependency/test setup isolated from leftover backend modules.
 2. Implement the page upload and detection API described above. Validate file content with Pillow, enforce decoded-size limits, and store images under generated identifiers, not user-controlled paths.
 3. Resize the unannotated page to the Phase 1 reference dimensions while preserving aspect ratio. Keep the original render for later high-resolution crops.
 4. Validate model responses using Pydantic: expected fields, finite numbers, coordinate ordering, allowed bounds, known kinds, nonzero boxes, and accepted parent IDs. Reject malformed geometry rather than silently converting it into a plausible detection.
@@ -320,7 +320,7 @@ is deliberately localhost-only, with live calls disabled by default. See the
 8. Add frontend API calls behind a proposed `VITE_ROI_ENABLED` flag and `VITE_ROI_API_BASE_URL`. Store `GOOGLE_API_KEY` only on the service; require the exact selected model in configuration.
 9. Bound image/cache lifetime, add cleanup and ownership checks, restrict CORS, and keep raw drawing data out of normal logs. Treat text embedded in a drawing as task data, not instructions to the service.
 
-**Proposed files:** `backend/roi_app/main.py`, `config.py`, `models.py`, `images.py`, `gemini.py`, `prompts/`, `backend/roi_tests/`, and `src/integrations/roi/client.ts`.
+**Proposed files:** `backend/app/main.py`, `config.py`, `models.py`, `images.py`, `gemini.py`, `prompts/`, `backend/roi_tests/`, and `src/integrations/roi/client.ts`.
 
 **Exit criteria:** contract tests pass for valid boxes, empty results, refusals, malformed/truncated output, authentication/model failures, timeout, bad images, and cache invalidation. Health checks make no billable call. Tests use fake provider responses unless explicitly running authorized live evaluation. The legacy backend is not imported.
 

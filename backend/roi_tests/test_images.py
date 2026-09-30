@@ -4,9 +4,9 @@ import unittest
 
 from PIL import Image
 
-from backend.roi_app.config import Settings
-from backend.roi_app.errors import RoiError
-from backend.roi_app.images import prepare_image
+from backend.app.config import Settings
+from backend.app.errors import RoiError
+from backend.app.images import prepare_image
 
 
 def image_bytes(size=(1600, 800), image_format="PNG", **kwargs):

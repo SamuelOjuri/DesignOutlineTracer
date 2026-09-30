@@ -1,16 +1,46 @@
-# TaperedPlus Frontend Baseline
+# TaperedPlus XPress
 
-The `region-of-interest` branch restores the original React 18, TypeScript,
-Vite 5, Tailwind, and shadcn/ui frontend. Opt-in ROI/penetration review and detection
-orchestration are implemented; live model and domain-quality gates remain open.
+TaperedPlus XPress provides roof-plan editing and reviewable roof-region and
+penetration recommendations. The frontend uses React 18, TypeScript, Vite 5,
+Tailwind, and shadcn/ui.
+
+**The active backend is [`backend/app`](backend/app).** It is a FastAPI
+annotation service using `gemini-3.7-flash`, with its own dependency lock and
+tests. All new application-backend work belongs in this package. It contains
+the ROI implementation; the former extraction backend has been retired and is
+not imported or called by the ROI workflow.
+
+The ROI service currently supports localhost use with one worker. Live model
+access and domain-quality evaluation remain separate from offline verification.
+Promoting this code to `main` does not enable a publicly hosted API.
+
+## Repository Layout
+
+| Path | Purpose |
+| --- | --- |
+| [`src/`](src) | Frontend screens, drawing tools, page sessions, and review workflows. |
+| [`src/integrations/roi/`](src/integrations/roi) | ROI HTTP client and response validation. |
+| [`backend/app/`](backend/app) | Active annotation API, provider integration, prompts, and configuration. |
+| [`backend/roi_tests/`](backend/roi_tests) | Offline tests for the active API and provider contract. |
+| [`backend/roi_reference/`](backend/roi_reference) | Separate reference runner and evaluation tooling; not required to start the API. |
+| [`backend/roi_reference_tests/`](backend/roi_reference_tests) | Offline tests for the reference runner. |
+| [`tests/e2e/`](tests/e2e) | Browser regression tests with mocked external services. |
+
+Legacy extraction tests under `backend/tests` may remain in an existing local
+checkout, but they are ignored by Git and are not part of the tracked
+application. The active backend's tests are under `backend/roi_tests`.
 
 ## Run Locally
 
 Run these commands from the repository root. Recovery was verified with
-Node.js 24.20.0 and the restored npm lockfile.
+Node.js 24.20.0 and the restored npm lockfile. The optional ROI backend uses
+Python 3.13 and a separate virtual environment.
+
+### Frontend With Manual Editing
 
 ```powershell
 npm ci
+$env:VITE_ROI_ENABLED = "false"
 npm run dev -- --host 127.0.0.1 --port 8081 --strictPort
 ```
 
@@ -18,6 +48,91 @@ Open <http://127.0.0.1:8081/> or <http://127.0.0.1:8081/new-build>.
 Choose another port if 8081 is occupied. No Python service or Gemini API key
 is needed for the manual editing workflow. The PDF.js worker is served
 locally from the installed dependency rather than a CDN.
+
+### Active Backend Setup
+
+Create the ROI environment once, then install its locked dependencies from the
+repository root:
+
+```powershell
+py -3.13 -m venv backend/app/.venv
+& ./backend/app/.venv/Scripts/python.exe -m pip install --require-hashes -r backend/app/requirements.lock
+& ./backend/app/.venv/Scripts/python.exe -m pip check
+```
+
+In a backend terminal, start the service with live model calls disabled:
+
+```powershell
+$env:ROI_MODEL = "gemini-3.7-flash"
+$env:ROI_ALLOW_LIVE = "false"
+$env:ROI_ALLOWED_ORIGINS = "http://127.0.0.1:8081"
+& ./backend/app/.venv/Scripts/python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8080 --workers 1 --no-proxy-headers --no-access-log
+```
+
+The application entry point is `backend.app.main:app`, and all annotation
+endpoints are under `/api/roi/v1`. In another terminal, check the service:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/api/roi/v1/health
+```
+
+With live calls disabled, health returns HTTP 200 with `status: not_configured`,
+`model: gemini-3.7-flash`, and `mode: localhost_only`. Detection requests return
+`provider_not_configured`; the offline service does not fabricate detections.
+Health never calls Gemini, and `status: ready` only indicates local provider
+configuration, not verified model access.
+
+### Frontend With ROI Review
+
+After installing the frontend dependencies, start or restart Vite in a separate
+terminal with the ROI client enabled:
+
+```powershell
+$env:VITE_ROI_ENABLED = "true"
+$env:VITE_ROI_API_BASE_URL = "http://127.0.0.1:8080"
+npm run dev -- --host 127.0.0.1 --port 8081 --strictPort
+```
+
+Open <http://127.0.0.1:8081/new-build>. The API base URL points to the Python
+service on port 8080; the allowed origin points to the frontend on port 8081.
+If either port changes, update the corresponding setting. `localhost` and
+`127.0.0.1` are different origins, so use the exact frontend URL in
+`ROI_ALLOWED_ORIGINS`. Stop an existing frontend on port 8081 before restarting.
+
+### Configuration And Live Detection
+
+| Setting | Where it is read | Purpose |
+| --- | --- | --- |
+| `VITE_ROI_ENABLED` | Frontend | Set to `true` to show ROI/penetration review and enable ROI requests. |
+| `VITE_ROI_API_BASE_URL` | Frontend | Loopback API origin, such as `http://127.0.0.1:8080`, without the `/api/roi/v1` suffix. |
+| `ROI_MODEL` | Backend | Selected provider model: `gemini-3.7-flash`. |
+| `ROI_ALLOW_LIVE` | Backend | Set to `true` to permit model requests; defaults to `false` in code. |
+| `GOOGLE_API_KEY` | Backend | Server-side credential required for live detection. |
+| `ROI_ALLOWED_ORIGINS` | Backend | Comma-separated frontend origins allowed to call the API. |
+
+Vite reads frontend environment settings at startup/build time; restart the
+development server or rebuild after changing them. The Python application reads
+the launching process's environment and does not automatically load either the
+root `.env` or `backend/app/.env`. If using a backend environment file, load
+it explicitly with Uvicorn's `--env-file backend/app/.env` option.
+See [`backend/app/.env.example`](backend/app/.env.example) for additional
+limits and settings. That example sets `ROI_ALLOW_LIVE=true`; the startup command
+above explicitly disables live calls for initial setup.
+
+For live detection, supply `GOOGLE_API_KEY` through the backend environment or
+an untracked backend environment file, set `ROI_ALLOW_LIVE=true`, and restart
+the API. Keep the key out of `VITE_*` variables and tracked files. An explicit
+detection action sends the selected page image to the API and Gemini; it can
+incur provider charges. Confirm model access and review limits before live use.
+
+The API checks loopback client addresses, hosts, and frontend origins, and the
+frontend accepts only loopback API URLs. Keep one API worker: sessions, images,
+and caches are stored in process memory and are lost on restart. Its session
+token represents ownership of uploaded pages, not authenticated user identity.
+Public deployment needs application changes for remote access, authentication,
+and shared state; changing the branch or bind address alone is insufficient.
+See the [annotation API runbook](docs/Phase-3-Annotation-API.md) for endpoint
+contracts, request limits, and lifecycle details.
 
 ## Available Workflow
 
@@ -115,14 +230,28 @@ Small changes made during recovery:
 - Ignore local environment files, dependency/build caches, virtual
   environments, and generated backend storage artifacts.
 
-No experimental Python backend or Supabase function source was recovered.
-Existing backend files, local environment files, ROI references, sample PDFs,
-and previous `dist/` output were preserved, not deleted. The frontend does not
-import or invoke the old extraction backend. Existing backend files are not
-part of the restored baseline; review paths before staging, rather than adding
-the whole workspace indiscriminately.
+The initial frontend recovery did not restore the legacy Python extraction
+backend or Supabase function source. Local legacy backend files, environment
+files, ROI references, sample PDFs, and previous `dist/` output were preserved.
+The ROI service and its tests were added in later phases. The service now
+occupies the tracked `backend/app` package, replacing the former extraction
+implementation. Legacy `backend/tests` remains excluded by `.gitignore`;
+review paths before staging local files.
 
 ## Verification
+
+Run the active backend's offline suite using its own environment:
+
+```powershell
+& ./backend/app/.venv/Scripts/python.exe -m unittest discover -s backend/roi_tests -v
+```
+
+These tests use synthetic inputs and mocked providers, requiring no live API
+key or running service. For reference-runner changes, also run
+`backend/roi_reference_tests` using the separate environment described in the
+[reference evaluation runbook](docs/roi-evaluation/README.md).
+
+Frontend checks:
 
 ```powershell
 npm ci
@@ -248,7 +377,7 @@ phase is outlet recommendations with an explicit editor adapter. Phase 1
 model-access, full-page recall and domain-review gates remain open; ordinary CI
 never calls the live model.
 
-Use the references in `docs/roi-logic/` for the new Gemini 3.6 Flash annotation
+Use the references in `docs/roi-logic/` for the new Gemini 3.7 Flash annotation
 workflow. Introduce reviewable ROI recommendations first, followed by
 ROI-associated penetration and outlet suggestions. Do not interpret a suggested
 bounding box as an exact roof perimeter or inherit the old backend's geometry

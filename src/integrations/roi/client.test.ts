@@ -8,7 +8,7 @@ const request: DetectionRequest = { page_id: page.page_id, request_id: "request"
   source_image_hash: page.source_image_hash, roi_revision: null, geometry_revision: 0 };
 
 function responseEnvelope(identity = request) {
-  const run = { ...syntheticRun(identity), model: "gemini-3.6-flash", prompt_version: "roof-roi-v1", cached: false, provider_attempts: 1 };
+  const run = { ...syntheticRun(identity), model: "gemini-3.7-flash", prompt_version: "roof-roi-v1", cached: false, provider_attempts: 1 };
   return { schema_version: "1", page_id: identity.page_id, request_id: identity.request_id, task: identity.task,
     roi_revision: identity.roi_revision, model: run.model, prompt_version: run.prompt_version, status: run.status,
     annotations: [syntheticAnnotation("annotation", { origin: "gemini", review_status: "suggested" })], warnings: [], run };

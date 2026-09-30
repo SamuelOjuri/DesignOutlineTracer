@@ -1,6 +1,6 @@
 {
   "version": "reference-v1",
-  "model": "gemini-3.6-flash",
+  "model": "gemini-3.7-flash",
   "temperature": 0.5,
   "max_image_side": 1024,
   "max_input_bytes": 20971520,

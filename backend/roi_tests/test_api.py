@@ -1,16 +1,17 @@
 import asyncio
 from hashlib import sha256
 import json
+from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
 
 import httpx
 
-from backend.roi_app.config import Settings
-from backend.roi_app.errors import OutputDiagnostic, RoiError
-from backend.roi_app.gemini import ProviderResult
-from backend.roi_app.main import PREFIX, create_app
+from backend.app.config import Settings
+from backend.app.errors import OutputDiagnostic, RoiError
+from backend.app.gemini import ProviderResult
+from backend.app.main import PREFIX, create_app
 from test_images import image_bytes
 
 
@@ -77,11 +78,13 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def detect(self, **changes):
         return await self.client.post(PREFIX + "/pages/page/detections", json=self.request(**changes))
 
-    async def test_health_no_provider_call_and_no_legacy_imports(self):
+    async def test_health_uses_active_api_without_provider_call(self):
         response = await self.client.get(PREFIX + "/health")
         self.assertEqual(response.json()["status"], "ready")
+        self.assertEqual(response.json()["model"], self.settings.model)
         self.assertEqual(self.provider.calls, [])
-        self.assertFalse(any(name == "backend.app" or name.startswith("backend.app.") for name in sys.modules))
+        self.assertEqual(Path(sys.modules[create_app.__module__].__file__).resolve(),
+                         Path(__file__).resolve().parents[1] / "app" / "main.py")
         self.assertNotIn("GOOGLE_API_KEY", response.text)
 
     async def test_upload_immutable_identity_ownership_and_delete(self):
@@ -409,7 +412,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             await release.wait()
             return function(*args)
 
-        with patch("backend.roi_app.main.asyncio.to_thread", delayed):
+        with patch("backend.app.main.asyncio.to_thread", delayed):
             first = asyncio.create_task(self.upload())
             await started.wait()
             second = await self.upload(context={**self.context, "page_id": "second"})

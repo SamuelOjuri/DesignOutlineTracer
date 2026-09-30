@@ -3,10 +3,10 @@ import unittest
 
 from pydantic import ValidationError
 
-from backend.roi_app.config import Settings
-from backend.roi_app.errors import OutputDiagnostic, RoiError
-from backend.roi_app.models import DetectionInput, Geometry
-from backend.roi_app.parsing import parse_proposals
+from backend.app.config import Settings
+from backend.app.errors import OutputDiagnostic, RoiError
+from backend.app.models import DetectionInput, Geometry
+from backend.app.parsing import parse_proposals
 
 
 class ContractTests(unittest.TestCase):
