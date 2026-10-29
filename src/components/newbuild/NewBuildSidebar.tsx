@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { NewBuildStep, Outlet, Point, DrainageEdge } from "@/types/roof";
 import { PaintBucket, MousePointerClick, Trash2, Droplets, Scissors, Move, Layers } from "lucide-react";
+import { drawOutletMarker, outletMarkerGeometry } from "@/utils/outletMarker";
 
 interface NewBuildSidebarProps {
   currentStep: NewBuildStep;
@@ -11,13 +12,17 @@ interface NewBuildSidebarProps {
   selectedOutlet: Outlet | null;
   onDeleteOutlet: (id: string) => void;
   drainageEdges: DrainageEdge[];
-  outletMode: 'add-outlets' | 'drainage-edge';
-  onOutletModeChange: (mode: 'add-outlets' | 'drainage-edge') => void;
+  outletMode: 'select' | 'add-outlets' | 'drainage-edge';
+  onOutletModeChange: (mode: 'select' | 'add-outlets' | 'drainage-edge') => void;
   savedOutlines?: Point[][];
   savedOutlets?: Outlet[];
+  savedInteriorHoles?: Point[][];
+  savedOutlineIds?: string[];
 }
 
-const SavedAreasPreview = ({ outlines, outlets }: { outlines: Point[][]; outlets: Outlet[] }) => {
+const SavedAreasPreview = ({ outlines, outlets, holes, outlineIds }: {
+  outlines: Point[][]; outlets: Outlet[]; holes: Point[][]; outlineIds: string[];
+}) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -33,7 +38,7 @@ const SavedAreasPreview = ({ outlines, outlets }: { outlines: Point[][]; outlets
         maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
       }
     }
-    const pad = 10;
+    const pad = 16;
     const w = maxX - minX || 1;
     const h = maxY - minY || 1;
     const scale = Math.min((canvas.width - pad * 2) / w, (canvas.height - pad * 2) / h);
@@ -57,13 +62,14 @@ const SavedAreasPreview = ({ outlines, outlets }: { outlines: Point[][]; outlets
       ctx.stroke();
     }
 
-    for (const o of outlets) {
-      ctx.beginPath();
-      ctx.arc(o.x * scale + offX, o.y * scale + offY, 4, 0, Math.PI * 2);
-      ctx.fillStyle = "hsl(0, 70%, 50%)";
-      ctx.fill();
-    }
-  }, [outlines, outlets]);
+    ctx.save();
+    ctx.translate(offX, offY);
+    ctx.scale(scale, scale);
+    const cssScale = (canvas.getBoundingClientRect().width || canvas.width) / canvas.width;
+    for (const outlet of outlets) drawOutletMarker(ctx, outlet,
+      outletMarkerGeometry(outlet, outlines, holes, scale * cssScale, outlineIds, 2 / scale));
+    ctx.restore();
+  }, [outlines, outlets, holes, outlineIds]);
 
   return (
     <Card className="p-3 bg-muted/50 border-dashed">
@@ -95,6 +101,8 @@ export const NewBuildSidebar = ({
   onOutletModeChange,
   savedOutlines = [],
   savedOutlets = [],
+  savedInteriorHoles = [],
+  savedOutlineIds = [],
 }: NewBuildSidebarProps) => {
   if (currentStep === "upload") {
     return null;
@@ -107,7 +115,7 @@ export const NewBuildSidebar = ({
         <h3 className="text-lg font-semibold mb-4">Define Roof Area</h3>
         <div className="space-y-4">
           {savedOutlines.length > 0 && (
-            <SavedAreasPreview outlines={savedOutlines} outlets={savedOutlets} />
+            <SavedAreasPreview outlines={savedOutlines} outlets={savedOutlets} holes={savedInteriorHoles} outlineIds={savedOutlineIds} />
           )}
           <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg">
             <div className="flex items-center gap-2 mb-2">
@@ -174,9 +182,11 @@ export const NewBuildSidebar = ({
         <h3 className="text-lg font-semibold mb-4">Outlets & Drainage</h3>
         <div className="space-y-4">
           {savedOutlines.length > 0 && (
-            <SavedAreasPreview outlines={savedOutlines} outlets={savedOutlets} />
+            <SavedAreasPreview outlines={savedOutlines} outlets={savedOutlets} holes={savedInteriorHoles} outlineIds={savedOutlineIds} />
           )}
           {/* Mode toggle */}
+          <Button variant={outletMode === 'select' ? "default" : "outline"} className="w-full"
+            onClick={() => onOutletModeChange('select')}>Select outlets</Button>
           <div className="grid grid-cols-2 gap-2">
             <Button
               onClick={() => onOutletModeChange('add-outlets')}
@@ -239,6 +249,7 @@ export const NewBuildSidebar = ({
               <p className="text-xs text-muted-foreground">
                 Position: ({Math.round(selectedOutlet.x)}, {Math.round(selectedOutlet.y)})
               </p>
+              <p className="text-xs text-muted-foreground">150 mm application default; size has not been measured from the drawing.</p>
               <Button
                 variant="destructive"
                 size="sm"

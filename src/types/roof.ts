@@ -22,6 +22,16 @@ export interface Point {
     x: number;
     y: number;
     diameter: number;
+    /** Drawing ownership and review provenance; marker size is independent of diameter. */
+    outline_id?: string;
+    annotation_id?: string;
+    page_id?: string;
+    roi_id?: string | null;
+    subtype?: "internal_outlet" | "parapet_outlet" | "scupper";
+    review_status?: "suggested" | "accepted" | "rejected";
+    validity?: "current" | "needs_review";
+    diameter_confirmed?: boolean;
+    evidence?: string;
   }
   
   export interface Penetration {

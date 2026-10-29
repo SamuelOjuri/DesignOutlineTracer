@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { DetectionRequest, DetectionRun, RenderedPdfPage, RoiAnnotation } from "@/types/roi";
 import type { OutlineRequest, OutlineResponse } from "@/types/outline";
 import { outlineRequestSchema, outlineResponseSchema } from "./outlineContracts";
+import type { OutletRequest, OutletResponse } from "@/types/outlet";
+import { outletRequestSchema, validateOutletResponse } from "./outlets";
 import {
   detectionSchema, healthSchema, identifier, pageContextSchema, parentSchema, receiptSchema, requestSchema, subtypes,
 } from "./contracts";
@@ -205,6 +207,12 @@ export function createRoiClient(options: ClientOptions = {}) {
           settings: result.run.settings, started_at: result.run.started_at, duration_ms: result.run.duration_ms,
           status: result.run.status, warnings: result.run.warnings, cached: result.run.cached, provider_attempts: result.run.provider_attempts },
       };
+    },
+    async generateOutlets(request: OutletRequest, signal?: AbortSignal): Promise<OutletResponse> {
+      ensureEnabled();
+      const input = validate(outletRequestSchema, request);
+      return validateOutletResponse(request, await send(`/pages/${input.page_id}/outlets`, "POST", JSON.stringify(input),
+        signal, detectionTimeoutMs()));
     },
     async generateOutline(request: OutlineRequest, signal?: AbortSignal): Promise<OutlineResponse> {
       ensureEnabled();

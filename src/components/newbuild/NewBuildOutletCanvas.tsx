@@ -3,10 +3,12 @@ import { Point, Outlet, DrainageEdge } from "@/types/roof";
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
 import { insulationPolygons } from "@/utils/penetrationOpenings";
+import { drawOutletMarker, outletMarkerGeometry, OUTLET_HIT_RADIUS } from "@/utils/outletMarker";
 
 interface NewBuildOutletCanvasProps {
   pdfCanvas: HTMLCanvasElement;
   roofOutlines: Point[][];
+  outlineIds?: string[];
   interiorHoles?: Point[][];
   outlets: Outlet[];
   selectedOutlet: Outlet | null;
@@ -15,12 +17,13 @@ interface NewBuildOutletCanvasProps {
   onMoveOutlet: (id: string, x: number, y: number) => void;
   drainageEdges: DrainageEdge[];
   onToggleDrainageEdge: (outlineIndex: number, edgeIndex: number) => void;
-  outletMode: 'add-outlets' | 'drainage-edge';
+  outletMode: 'select' | 'add-outlets' | 'drainage-edge';
 }
 
 export const NewBuildOutletCanvas = ({
   pdfCanvas,
   roofOutlines,
+  outlineIds = [],
   interiorHoles = [],
   outlets,
   selectedOutlet,
@@ -37,18 +40,45 @@ export const NewBuildOutletCanvas = ({
   const [fitScale, setFitScale] = useState(1);
   const [isDragging, setIsDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [dragPreview, setDragPreview] = useState<(Point & { id: string }) | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<{ outlineIndex: number; edgeIndex: number } | null>(null);
+  const dragOutlet = useRef<Outlet | null>(null);
+  const dragPosition = useRef<Point | null>(null);
+  const zoomTarget = useRef<Point | null>(null);
 
   const ZOOM_STEP = 0.15;
   const MIN_ZOOM = 0.2;
   const MAX_ZOOM = 3;
   const EDGE_HIT_DISTANCE = 12; // pixels tolerance for clicking an edge
 
+  const cancelDrag = useCallback(() => {
+    dragOutlet.current = null;
+    dragPosition.current = null;
+    setDragPreview(null);
+    setIsDragging(false);
+  }, []);
+
+  useEffect(() => { cancelDrag(); }, [pdfCanvas, outletMode, cancelDrag]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && dragOutlet.current) {
+        event.preventDefault();
+        cancelDrag();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("blur", cancelDrag);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("blur", cancelDrag);
+    };
+  }, [cancelDrag]);
+
   const calculateFitScale = useCallback(() => {
     if (!containerRef.current || !pdfCanvas) return 1;
     const containerWidth = containerRef.current.clientWidth - 16;
     const containerHeight = containerRef.current.clientHeight - 16;
-    return Math.min(containerWidth / pdfCanvas.width, containerHeight / pdfCanvas.height);
+    return Math.max(0.01, Math.min(containerWidth / pdfCanvas.width, containerHeight / pdfCanvas.height));
   }, [pdfCanvas]);
 
   useEffect(() => {
@@ -68,6 +98,14 @@ export const NewBuildOutletCanvas = ({
     if (!canvas || !pdfCanvas) return;
     canvas.style.width = `${pdfCanvas.width * displayScale}px`;
     canvas.style.height = `${pdfCanvas.height * displayScale}px`;
+    if (zoomTarget.current && containerRef.current) {
+      const container = containerRef.current;
+      const target = zoomTarget.current;
+      // offsetLeft includes the centred canvas margin when the page is narrower than its viewport.
+      container.scrollLeft = Math.max(0, canvas.offsetLeft + target.x * displayScale - container.clientWidth / 2);
+      container.scrollTop = Math.max(0, canvas.offsetTop + target.y * displayScale - container.clientHeight / 2);
+      zoomTarget.current = null;
+    }
   }, [displayScale, pdfCanvas]);
 
   useEffect(() => {
@@ -157,27 +195,11 @@ export const NewBuildOutletCanvas = ({
 
     // Draw outlets
     outlets.forEach((outlet) => {
-      const isSelected = selectedOutlet?.id === outlet.id;
-      const radius = Math.max(8, (outlet.diameter / 2) * 100);
-
-      ctx.beginPath();
-      ctx.arc(outlet.x, outlet.y, radius, 0, 2 * Math.PI);
-      ctx.fillStyle = isSelected ? "hsla(0, 85%, 50%, 0.6)" : "hsla(0, 85%, 50%, 0.4)";
-      ctx.fill();
-      ctx.strokeStyle = isSelected ? "hsl(0, 85%, 40%)" : "hsl(0, 85%, 50%)";
-      ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.stroke();
-
-      ctx.strokeStyle = "white";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(outlet.x - 5, outlet.y);
-      ctx.lineTo(outlet.x + 5, outlet.y);
-      ctx.moveTo(outlet.x, outlet.y - 5);
-      ctx.lineTo(outlet.x, outlet.y + 5);
-      ctx.stroke();
+      const preview = dragPreview?.id === outlet.id ? { ...outlet, ...dragPreview } : outlet;
+      drawOutletMarker(ctx, preview, outletMarkerGeometry(preview, roofOutlines, interiorHoles,
+        displayScale, outlineIds, 5), selectedOutlet?.id === outlet.id);
     });
-  }, [pdfCanvas, roofOutlines, interiorHoles, outlets, selectedOutlet, drainageEdges, hoveredEdge, outletMode]);
+  }, [pdfCanvas, roofOutlines, outlineIds, interiorHoles, outlets, selectedOutlet, drainageEdges, hoveredEdge, outletMode, displayScale, dragPreview]);
 
   const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point) => {
     const dx = p2.x - p1.x;
@@ -226,8 +248,8 @@ export const NewBuildOutletCanvas = ({
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
     return {
-      x: Math.round((e.clientX - rect.left) / displayScale),
-      y: Math.round((e.clientY - rect.top) / displayScale),
+      x: (e.clientX - rect.left) / displayScale,
+      y: (e.clientY - rect.top) / displayScale,
     };
   };
 
@@ -239,7 +261,7 @@ export const NewBuildOutletCanvas = ({
         const p1 = outline[ei];
         const p2 = outline[(ei + 1) % outline.length];
         const dist = pointToSegmentDistance(x, y, p1.x, p1.y, p2.x, p2.y);
-        if (dist < EDGE_HIT_DISTANCE) return { outlineIndex: oi, edgeIndex: ei };
+        if (dist < EDGE_HIT_DISTANCE / displayScale) return { outlineIndex: oi, edgeIndex: ei };
       }
     }
     return null;
@@ -258,14 +280,17 @@ export const NewBuildOutletCanvas = ({
   };
 
   const findOutletAt = (x: number, y: number): Outlet | null => {
+    let closest: Outlet | null = null;
+    let nearestDistance = OUTLET_HIT_RADIUS / displayScale;
     for (const outlet of outlets) {
       const dist = Math.sqrt((outlet.x - x) ** 2 + (outlet.y - y) ** 2);
-      if (dist < 15) return outlet;
+      if (dist < nearestDistance) { closest = outlet; nearestDistance = dist; }
     }
-    return null;
+    return closest;
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
     const { x, y } = getCanvasCoords(e);
 
     if (outletMode === "drainage-edge") {
@@ -280,11 +305,13 @@ export const NewBuildOutletCanvas = ({
     const clicked = findOutletAt(x, y);
     if (clicked) {
       onSelectOutlet(clicked);
+      dragOutlet.current = clicked;
+      dragPosition.current = { x: clicked.x, y: clicked.y };
       setIsDragging(true);
       setDragOffset({ x: x - clicked.x, y: y - clicked.y });
     } else {
       onSelectOutlet(null);
-      onAddOutlet(x, y);
+      if (outletMode === "add-outlets") onAddOutlet(x, y);
     }
   };
 
@@ -297,15 +324,41 @@ export const NewBuildOutletCanvas = ({
       return;
     }
 
-    if (!isDragging || !selectedOutlet) return;
-    onMoveOutlet(selectedOutlet.id, x - dragOffset.x, y - dragOffset.y);
+    if (!isDragging || !dragOutlet.current) return;
+    const position = { x: x - dragOffset.x, y: y - dragOffset.y };
+    dragPosition.current = position;
+    setDragPreview({ id: dragOutlet.current.id, ...position });
   };
 
-  const handleMouseUp = () => setIsDragging(false);
+  const handleMouseUp = () => {
+    const original = dragOutlet.current;
+    const position = dragPosition.current;
+    cancelDrag();
+    // One gesture creates one review/history update; previews never mutate source coordinates.
+    if (original && position && outlets.some(outlet => outlet.id === original.id)
+      && (position.x !== original.x || position.y !== original.y)) {
+      onMoveOutlet(original.id, position.x, position.y);
+    }
+  };
 
   const handleZoomIn = () => setDisplayScale((s) => Math.min(s + ZOOM_STEP, MAX_ZOOM));
   const handleZoomOut = () => setDisplayScale((s) => Math.max(s - ZOOM_STEP, MIN_ZOOM));
   const handleFitToScreen = () => setDisplayScale(fitScale);
+  const handleZoomToOutlet = () => {
+    if (!selectedOutlet) return;
+    const geometry = outletMarkerGeometry(selectedOutlet, roofOutlines, interiorHoles, displayScale, outlineIds, 5);
+    const available = geometry.clearance - 2.5;
+    const targetScale = geometry.status === "interior" && available > 0 ? 13 / available : 1;
+    zoomTarget.current = selectedOutlet;
+    const nextScale = Math.min(MAX_ZOOM, Math.max(displayScale, 1, targetScale));
+    // Recenter even when the selected outlet is already at the desired zoom.
+    if (nextScale === displayScale && containerRef.current && canvasRef.current) {
+      const canvas = canvasRef.current, container = containerRef.current;
+      container.scrollLeft = Math.max(0, canvas.offsetLeft + selectedOutlet.x * displayScale - container.clientWidth / 2);
+      container.scrollTop = Math.max(0, canvas.offsetTop + selectedOutlet.y * displayScale - container.clientHeight / 2);
+      zoomTarget.current = null;
+    } else setDisplayScale(nextScale);
+  };
   const zoomPercent = Math.round((displayScale / fitScale) * 100);
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
@@ -318,19 +371,20 @@ export const NewBuildOutletCanvas = ({
 
   return (
     <div className="flex flex-col h-full w-full">
-      <div className="flex items-center gap-2 mb-2 px-1">
-        <Button variant="outline" size="sm" onClick={handleZoomOut} title="Zoom out">
+      <div className="flex flex-wrap items-center gap-2 mb-2 px-1">
+        <Button variant="outline" size="sm" onClick={handleZoomOut} title="Zoom out" aria-label="Zoom out">
           <ZoomOut className="w-4 h-4" />
         </Button>
         <span className="text-xs font-medium text-muted-foreground min-w-[48px] text-center">
           {zoomPercent}%
         </span>
-        <Button variant="outline" size="sm" onClick={handleZoomIn} title="Zoom in">
+        <Button variant="outline" size="sm" onClick={handleZoomIn} title="Zoom in" aria-label="Zoom in">
           <ZoomIn className="w-4 h-4" />
         </Button>
-        <Button variant="outline" size="sm" onClick={handleFitToScreen} title="Fit to screen">
+        <Button variant="outline" size="sm" onClick={handleFitToScreen} title="Fit to screen" aria-label="Fit to screen">
           <Maximize className="w-4 h-4" />
         </Button>
+        {selectedOutlet && <Button variant="outline" size="sm" onClick={handleZoomToOutlet}>Zoom to outlet</Button>}
       </div>
 
       <div
@@ -341,6 +395,7 @@ export const NewBuildOutletCanvas = ({
         <div className="min-w-fit min-h-fit p-2">
           <canvas
             ref={canvasRef}
+            aria-label="Roof outlet placement"
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -348,7 +403,7 @@ export const NewBuildOutletCanvas = ({
               handleMouseUp();
               setHoveredEdge(null);
             }}
-            className={`block mx-auto ${outletMode === "drainage-edge" ? "cursor-pointer" : "cursor-crosshair"}`}
+            className={`block mx-auto ${outletMode === "drainage-edge" ? "cursor-pointer" : outletMode === "select" ? "cursor-default" : "cursor-crosshair"}`}
           />
         </div>
       </div>
@@ -356,6 +411,7 @@ export const NewBuildOutletCanvas = ({
       <p className="text-xs text-muted-foreground mt-1 text-center">
         {outletMode === "drainage-edge"
           ? "Click roof edges to mark/unmark as drainage edges"
+          : outletMode === "select" ? "Select an outlet to review or drag it to correct its position. Ctrl + scroll to zoom."
           : "Click to place outlets • Drag to reposition • Ctrl + scroll to zoom"}
       </p>
     </div>

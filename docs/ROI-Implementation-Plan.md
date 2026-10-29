@@ -4,7 +4,7 @@
 
 - Branch: `region-of-interest`.
 - Plan date: 2026-09-09.
-- Status: Phases 0-3 provide the frontend baseline, offline reference tooling, page/session contracts, and isolated annotation API/client. Phases 4-5 add opt-in ROI and conditioned penetration review, verified with offline fixtures and browser flows. Live evaluation and domain-reviewed dataset/category gates remain pending; outlet recommendation wiring and persistence are not enabled.
+- Status: Phases 0-3 provide the frontend baseline, offline reference tooling, page/session contracts, and isolated annotation API/client. Phases 4-5 add opt-in ROI and conditioned penetration review. Phase 6 outlet recommendations are now wired into Step 5, with detailed scope crops, reviewed inlet anchors and boundary-aware markers; see [Automatic rainwater outlets](Automatic-Rainwater-Outlets.md). Offline tests and mocked browser flows verify the implementation. Live evaluation and domain-reviewed dataset/category gates remain pending; durable persistence is not enabled.
 - Model: Gemini 3.7 Flash, using the configured identifier `gemini-3.7-flash` demonstrated in the supplied prototype.
 - Scope: enhance the existing New Build workflow with reviewable region-of-interest (ROI), roof-penetration, and rainwater-outlet recommendations.
 

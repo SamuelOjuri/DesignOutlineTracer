@@ -1,15 +1,23 @@
-import type { DrawingScale } from "@/types/roof";
+import type { DrawingScale, Point } from "@/types/roof";
 import type { AnnotationKind, Box2D, DetectionRequest, DetectionRun, PageDrawing, PageSession, RenderedPdfPage, RoiAnnotation, RoiSessionState } from "@/types/roi";
 import { validateBox } from "./roiCoordinates";
 import { penetrationAssociationWarnings } from "./penetrationAssociation";
 import { penetrationFootprint } from "./penetrationOpenings";
 import type { OutlineResponse } from "@/types/outline";
 import { cloneOutlineDrawing, prepareOutlineApplication } from "./outlineSession";
+import { outletAssociation, outletScopeSignature, sameOutletSymbol } from "./outletScope";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
 type ReviewPatch = Partial<Pick<RoiAnnotation, "box_2d" | "label" | "subtype" | "roi_id" | "review_status" | "validity">>;
+export type OutletReviewPatch = Partial<Pick<RoiAnnotation, "label" | "subtype" | "roi_id" | "outline_id" | "review_status"
+  | "anchor" | "diameter" | "diameter_confirmed">>;
 export type RoiSessionAction =
+  | { type: "outlet-result"; page_id: string; request_id: string; scope_signature: string; annotations: RoiAnnotation[] }
+  | { type: "outlet-review"; page_id: string; id: string; patch: OutletReviewPatch }
+  | { type: "outlet-move"; page_id: string; id: string; anchor: Point }
+  | { type: "outlet-delete"; page_id: string; id: string }
+  | { type: "outlet-undo"; page_id: string }
   | { type: "activate"; source: RenderedPdfPage; scale: DrawingScale }
   | { type: "select"; page_id: string | null }
   | { type: "drawing"; page_id: string; drawing: PageDrawing }
@@ -31,6 +39,8 @@ function cloneAnnotation(annotation: RoiAnnotation): RoiAnnotation {
   validateBox(annotation.box_2d);
   validateBox(annotation.proposed_box_2d);
   return { ...annotation, box_2d: [...annotation.box_2d], proposed_box_2d: [...annotation.proposed_box_2d],
+    ...(annotation.anchor ? { anchor: { ...annotation.anchor } } : {}),
+    ...(annotation.proposed_anchor ? { proposed_anchor: { ...annotation.proposed_anchor } } : {}),
     edits: annotation.edits.map((edit) => ({ ...edit })), warnings: [...annotation.warnings] };
 }
 
@@ -72,6 +82,16 @@ function invalidateChildren(page: PageSession, parents?: Set<string>): PageSessi
 }
 
 function storePage(state: RoiSessionState, page: PageSession): RoiSessionState {
+  const previous = state.pages[page.source.page_id];
+  if (previous && outletScopeSignature(previous) !== outletScopeSignature(page)) {
+    const pending = { ...page.pending };
+    delete pending.rainwater_outlet;
+    page = { ...page, pending, outlet_scope_revision: (previous.outlet_scope_revision ?? 0) + 1,
+      annotations: page.annotations.map(annotation => annotation.kind === "rainwater_outlet" && annotation.anchor
+        && !annotation.deleted && annotation.review_status !== "rejected"
+        ? { ...annotation, validity: "needs_review", revision: page.revision,
+          edits: [...annotation.edits, { revision: page.revision, action: "invalidate" }] } : annotation) };
+  }
   return { ...state, pages: { ...state.pages, [page.source.page_id]: page } };
 }
 
@@ -83,6 +103,7 @@ function selectPage(state: RoiSessionState, pageId: string | null): RoiSessionSt
 
 function matchesRequest(page: PageSession, request: DetectionRequest): boolean {
   return request.source_image_hash === page.source.source_image_hash
+    && (!request.scope_signature || request.scope_signature === outletScopeSignature(page))
     && (request.task === "roof_roi" ? request.roi_revision === null
       : request.roi_revision === page.roi_revision && request.geometry_revision === page.geometry_revision);
 }
@@ -112,6 +133,84 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
   const pageId = action.type === "start" ? action.request.page_id : action.type === "result" ? action.run.page_id : action.page_id;
   const page = state.pages[pageId];
   if (!page) return state;
+
+  if (action.type === "outlet-result") {
+    const pendingRequest = page.pending.rainwater_outlet;
+    if (pageId !== state.active_page_id || !pendingRequest || pendingRequest.request_id !== action.request_id
+      || action.scope_signature !== outletScopeSignature(page) || pendingRequest.scope_signature !== action.scope_signature
+      || action.annotations.some(annotation => annotation.page_id !== pageId || annotation.kind !== "rainwater_outlet")) return state;
+    const annotations = [...page.annotations];
+    for (const candidate of action.annotations) {
+      if (!candidate.anchor || !Number.isFinite(candidate.anchor.x) || !Number.isFinite(candidate.anchor.y)
+        || annotations.some(annotation => annotation.id === candidate.id || (annotation.kind === "rainwater_outlet"
+          && sameOutletSymbol(page, annotation, candidate)))) continue;
+      // Existing manually placed points also take precedence over a new machine suggestion.
+      if (page.drawing.outlets.some(outlet => Math.hypot(outlet.x - candidate.anchor!.x, outlet.y - candidate.anchor!.y) <= 2
+        && (!outlet.outline_id || outlet.outline_id === candidate.outline_id))) continue;
+      const proposal: RoiAnnotation = { ...cloneAnnotation(candidate), review_status: "suggested", origin: "gemini",
+        editor_object_id: `outlet:${candidate.id}`, scope_signature: action.scope_signature,
+        diameter: 0.15, diameter_confirmed: false, revision: page.revision + 1, edits: [], deleted: false,
+        proposed_anchor: { ...candidate.anchor } };
+      const association = outletAssociation(page, proposal);
+      if (association.error || association.warnings.length) proposal.validity = "needs_review";
+      proposal.warnings = [...new Set([...proposal.warnings, ...association.warnings])];
+      annotations.push(proposal);
+    }
+    const pending = { ...page.pending };
+    delete pending.rainwater_outlet;
+    return storePage(state, { ...page, pending, annotations, revision: page.revision + 1 });
+  }
+
+  if (action.type === "outlet-review" || action.type === "outlet-move" || action.type === "outlet-delete" || action.type === "outlet-undo") {
+    if (pageId !== state.active_page_id) return state;
+    const history = [...(page.outlet_history ?? [])];
+    if (action.type === "outlet-undo") {
+      const snapshot = history.pop();
+      if (!snapshot) return state;
+      const stale = snapshot.scope_signature !== outletScopeSignature(page);
+      // Preserve suggestions received after this user edit; restore only the reviewed state.
+      const restoredIds = new Set(snapshot.annotations.map(annotation => annotation.id));
+      const restored = snapshot.annotations.map(annotation => ({ ...cloneAnnotation(annotation), revision: page.revision + 1,
+        validity: stale ? "needs_review" as const : annotation.validity }));
+      return storePage(state, { ...page, revision: page.revision + 1, outlet_history: history,
+        annotations: [...page.annotations.filter(annotation => annotation.kind !== "rainwater_outlet" || !restoredIds.has(annotation.id)), ...restored] });
+    }
+    const current = page.annotations.find(annotation => annotation.kind === "rainwater_outlet"
+      && (annotation.id === action.id || annotation.editor_object_id === action.id || `outlet:${annotation.id}` === action.id));
+    if (!current || current.deleted) return state;
+    const patch = action.type === "outlet-review" ? action.patch : action.type === "outlet-move" ? { anchor: action.anchor } : {};
+    if (patch.anchor && (!Number.isFinite(patch.anchor.x) || !Number.isFinite(patch.anchor.y)
+      || patch.anchor.x < 0 || patch.anchor.y < 0 || patch.anchor.x > page.source.source_width || patch.anchor.y > page.source.source_height)) return state;
+    if (patch.diameter !== undefined && (!Number.isFinite(patch.diameter) || patch.diameter < 0.01 || patch.diameter > 2)) return state;
+    const revision = page.revision + 1;
+    const updated: RoiAnnotation = { ...cloneAnnotation(current), ...patch, revision,
+      edits: [...current.edits, { revision, action: patch.anchor ? "edit" : "review" }] };
+    if (action.type === "outlet-delete") {
+      updated.deleted = true;
+      updated.review_status = "rejected";
+    } else {
+      const association = outletAssociation(page, updated);
+      if (patch.anchor || patch.roi_id !== undefined || patch.outline_id !== undefined || patch.review_status === "accepted") {
+        const geometricWarnings = new Set(["outlet_outside_scope", "outlet_in_opening", "candidate_outside_scope"]);
+        updated.warnings = updated.warnings.filter(warning => !geometricWarnings.has(warning)
+          && !warning.startsWith("The inlet is") && !warning.startsWith("Choose an insulation outline")
+          && !warning.startsWith("An accepted or manual outlet already occupies")
+          && !warning.startsWith("Choose an accepted current roof area") && !warning.startsWith("This position overlaps"));
+        updated.warnings = [...new Set([...updated.warnings, ...association.warnings])];
+      }
+      const accepting = patch.review_status === "accepted";
+      if (accepting && association.error) return state;
+      const associationEdited = patch.roi_id !== undefined || patch.outline_id !== undefined || patch.subtype !== undefined;
+      if (accepting || (patch.anchor && current.review_status === "accepted" && current.validity === "current" && !associationEdited)) {
+        updated.validity = association.error ? "needs_review" : "current";
+        if (!association.error) updated.scope_signature = outletScopeSignature(page);
+      } else if (associationEdited || association.error) updated.validity = "needs_review";
+    }
+    history.push({ annotations: page.annotations.filter(annotation => annotation.kind === "rainwater_outlet").map(cloneAnnotation),
+      outlets: page.drawing.outlets.map(outlet => ({ ...outlet })), scope_signature: outletScopeSignature(page) });
+    return storePage(state, { ...page, revision, outlet_history: history.slice(-100),
+      annotations: page.annotations.map(annotation => annotation.id === current.id ? updated : annotation) });
+  }
 
   if (action.type === "apply_outline") {
     if (pageId !== state.active_page_id) return state;

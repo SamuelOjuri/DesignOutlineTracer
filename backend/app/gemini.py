@@ -18,6 +18,7 @@ PROMPT_VERSIONS = {"roof_roi": "roof-roi-v2", "penetration": "penetration-v1",
 PROMPTS = Path(__file__).parent / "prompts"
 SYSTEM_PROMPT = (PROMPTS / "system-v1.txt").read_text(encoding="utf-8")
 OUTLINE_SYSTEM_PROMPT = (PROMPTS / "outline-system-v1.txt").read_text(encoding="utf-8")
+OUTLET_SYSTEM_PROMPT = (PROMPTS / "outlet-system-v1.txt").read_text(encoding="utf-8")
 TASK_PROMPTS = {task: (PROMPTS / f"{version}.txt").read_text(encoding="utf-8")
                 for task, version in PROMPT_VERSIONS.items()}
 
@@ -90,6 +91,10 @@ class GeminiProvider:
                                     context_image: bytes) -> ProviderResult:
         """The first image is the coordinate frame; the second is context only."""
         return await self._generate(image, prompt, schema, context_image, system_prompt=OUTLINE_SYSTEM_PROMPT)
+
+    async def generate_outlets_with_context(self, image: bytes, prompt: str, schema: dict,
+                                            context_image: bytes) -> ProviderResult:
+        return await self._generate(image, prompt, schema, context_image, system_prompt=OUTLET_SYSTEM_PROMPT)
 
     async def _generate(self, image: bytes, prompt: str, schema: dict,
                         context_image: bytes | None = None, *, system_prompt: str = SYSTEM_PROMPT) -> ProviderResult:

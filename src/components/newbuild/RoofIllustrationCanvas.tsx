@@ -1,10 +1,12 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { Point, Outlet, DrainageEdge } from "@/types/roof";
 import { Button } from "@/components/ui/button";
-import { ZoomIn, ZoomOut, Maximize, Move, MousePointer } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
+import { drawOutletMarker, outletMarkerGeometry, OUTLET_COLOUR } from "@/utils/outletMarker";
 
 interface RoofIllustrationCanvasProps {
   roofOutlines: Point[][];
+  outlineIds?: string[];
   interiorHoles?: Point[][];
   outlets: Outlet[];
   drainageEdges: DrainageEdge[];
@@ -15,6 +17,7 @@ interface RoofIllustrationCanvasProps {
 
 export const RoofIllustrationCanvas = ({
   roofOutlines,
+  outlineIds = [],
   interiorHoles = [],
   outlets,
   drainageEdges,
@@ -118,7 +121,7 @@ export const RoofIllustrationCanvas = ({
 
     const containerW = container.clientWidth - 16;
     const containerH = container.clientHeight - 16;
-    const fit = Math.min(containerW / canvasW, containerH / canvasH, 1.5);
+    const fit = Math.max(0.01, Math.min(containerW / canvasW, containerH / canvasH, 1.5));
     setFitScale(fit);
     setDisplayScale(fit);
 
@@ -240,37 +243,14 @@ export const RoofIllustrationCanvas = ({
     }
 
     // Draw outlets
-    outlets.forEach((outlet, idx) => {
-      const ox = outlet.x + offset.x;
-      const oy = outlet.y + offset.y;
-      const radius = Math.max(10, (outlet.diameter / 2) * 100);
-
-      ctx.beginPath();
-      ctx.arc(ox, oy, radius, 0, 2 * Math.PI);
-      ctx.fillStyle = "hsla(0, 75%, 55%, 0.25)";
-      ctx.fill();
-      ctx.strokeStyle = "hsl(0, 75%, 45%)";
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
-      ctx.strokeStyle = "hsl(0, 75%, 45%)";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(ox - 6, oy);
-      ctx.lineTo(ox + 6, oy);
-      ctx.moveTo(ox, oy - 6);
-      ctx.lineTo(ox, oy + 6);
-      ctx.stroke();
-
-      ctx.fillStyle = "hsl(0, 75%, 40%)";
-      ctx.font = "bold 11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(`O${idx + 1}`, ox, oy - radius - 6);
+    outlets.forEach(outlet => {
+      drawOutletMarker(ctx, outlet, outletMarkerGeometry(outlet, roofOutlines, interiorHoles,
+        displayScale, outlineIds, 4), false, offset);
     });
 
     // Legend
     drawLegend(ctx, canvas.width, drainageEdges.length > 0, outlets.length > 0);
-  }, [roofOutlines, outlets, drainageEdges, getOffset, hoveredOutline, interiorHoles, displayScale]);
+  }, [roofOutlines, outlineIds, outlets, drainageEdges, getOffset, hoveredOutline, interiorHoles, displayScale]);
 
   const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point) => {
     const dx = p2.x - p1.x;
@@ -322,7 +302,7 @@ export const RoofIllustrationCanvas = ({
       items.push({ color: "hsl(210, 85%, 50%)", label: "Drainage Edge" });
     }
     if (hasOutlets) {
-      items.push({ color: "hsl(0, 75%, 45%)", label: "Outlet" });
+      items.push({ color: OUTLET_COLOUR, label: "Outlet" });
     }
 
     const x = canvasWidth - 14;
@@ -347,9 +327,10 @@ export const RoofIllustrationCanvas = ({
     if (oi === null) return;
 
     const outline = roofOutlines[oi];
-    // Find outlets inside this outline
-    const associatedOutletIds = outlets.filter(o =>
-      isPointInPolygon(o.x, o.y, outline, 0, 0)
+    // Explicit ownership also moves perimeter outlets whose centres are not strictly interior.
+    const associatedOutletIds = outlets.filter(o => o.outline_id
+      ? o.outline_id === outlineIds[oi]
+      : outletMarkerGeometry(o, [outline], [], 1).status !== "outside"
     ).map(o => o.id);
     // Find holes inside this outline
     const associatedHoleIndices = interiorHoles.map((hole, idx) => {
@@ -369,7 +350,7 @@ export const RoofIllustrationCanvas = ({
       originalOutlets: outlets.filter(o => associatedOutletIds.includes(o.id)).map(o => ({ ...o })),
       originalHoles: associatedHoleIndices.map(i => interiorHoles[i].map(p => ({ ...p }))),
     });
-  }, [getCanvasPos, findOutlineAtPos, roofOutlines, onOutlinesChange, outlets, interiorHoles]);
+  }, [getCanvasPos, findOutlineAtPos, roofOutlines, outlineIds, onOutlinesChange, outlets, interiorHoles]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const pos = getCanvasPos(e);
@@ -381,8 +362,8 @@ export const RoofIllustrationCanvas = ({
       const newOutlines = roofOutlines.map((o, i) => {
         if (i === dragging.outlineIndex) {
           return dragging.originalOutline.map(p => ({
-            x: Math.round(p.x + dx),
-            y: Math.round(p.y + dy),
+            x: p.x + dx,
+            y: p.y + dy,
           }));
         }
         return o;
@@ -395,7 +376,7 @@ export const RoofIllustrationCanvas = ({
           const origIdx = dragging.originalOutlets.findIndex(oo => oo.id === o.id);
           if (origIdx >= 0) {
             const orig = dragging.originalOutlets[origIdx];
-            return { ...o, x: Math.round(orig.x + dx), y: Math.round(orig.y + dy) };
+            return { ...o, x: orig.x + dx, y: orig.y + dy };
           }
           return o;
         });
@@ -408,8 +389,8 @@ export const RoofIllustrationCanvas = ({
           const dragIdx = dragging.associatedHoleIndices.indexOf(idx);
           if (dragIdx >= 0) {
             return dragging.originalHoles[dragIdx].map(p => ({
-              x: Math.round(p.x + dx),
-              y: Math.round(p.y + dy),
+              x: p.x + dx,
+              y: p.y + dy,
             }));
           }
           return h;
@@ -451,16 +432,16 @@ export const RoofIllustrationCanvas = ({
   return (
     <div className="flex flex-col h-full w-full">
       <div className="flex items-center gap-2 mb-2 px-1">
-        <Button variant="outline" size="sm" onClick={handleZoomOut} title="Zoom out">
+        <Button variant="outline" size="sm" onClick={handleZoomOut} title="Zoom out" aria-label="Zoom out">
           <ZoomOut className="w-4 h-4" />
         </Button>
         <span className="text-xs font-medium text-muted-foreground min-w-[48px] text-center">
           {zoomPercent}%
         </span>
-        <Button variant="outline" size="sm" onClick={handleZoomIn} title="Zoom in">
+        <Button variant="outline" size="sm" onClick={handleZoomIn} title="Zoom in" aria-label="Zoom in">
           <ZoomIn className="w-4 h-4" />
         </Button>
-        <Button variant="outline" size="sm" onClick={handleFitToScreen} title="Fit to screen">
+        <Button variant="outline" size="sm" onClick={handleFitToScreen} title="Fit to screen" aria-label="Fit to screen">
           <Maximize className="w-4 h-4" />
         </Button>
       </div>

@@ -48,6 +48,14 @@ export interface RoiAnnotation {
   evidence?: string;
   warnings: string[];
   editor_object_id?: string;
+  /** Outlet anchors are immutable-page source pixels, not screen or physical units. */
+  anchor?: Point;
+  proposed_anchor?: Point;
+  outline_id?: string;
+  scope_signature?: string;
+  diameter?: number;
+  diameter_confirmed?: boolean;
+  deleted?: boolean;
 }
 
 export interface DetectionRequest {
@@ -57,6 +65,7 @@ export interface DetectionRequest {
   source_image_hash: string;
   roi_revision: number | null;
   geometry_revision: number;
+  scope_signature?: string;
 }
 
 export interface DetectionRun extends DetectionRequest {
@@ -102,6 +111,8 @@ export interface PageSession {
   history: { id: string; index: number; before: RoiAnnotation | null; roi_revision: number; geometry_revision: number }[];
   drawing: PageDrawing;
   outline_undo?: OutlineUndo;
+  outlet_history?: { annotations: RoiAnnotation[]; outlets: PageOutlet[]; scope_signature: string }[];
+  outlet_scope_revision?: number;
 }
 
 export interface RoiSessionState {

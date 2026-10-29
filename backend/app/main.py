@@ -21,6 +21,8 @@ from .images import prepare_image
 from .models import DetectionInput, PageContext
 from .outline_models import OutlineInput
 from .outline_service import OutlineService
+from .outlet_models import OutletInput
+from .outlet_service import OutletService
 from .parsing import reject_constant, unique_object
 from .service import RoiService
 
@@ -66,7 +68,7 @@ class BoundedRequests:
             bounded_receive = receive
             if scope["method"] == "POST":
                 maximum = (self.settings.max_upload_bytes + 16384 if scope["path"] == PREFIX + "/pages"
-                           else 512 * 1024 if re.fullmatch(PREFIX + r"/pages/[a-zA-Z0-9_-]+/outlines", scope["path"])
+                           else 512 * 1024 if re.fullmatch(PREFIX + r"/pages/[a-zA-Z0-9_-]+/(outlines|outlets)", scope["path"])
                            else 65536)
                 try:
                     if int(headers.get("content-length", "0")) > maximum:
@@ -114,6 +116,7 @@ def create_app(settings: Settings | None = None, provider: Provider | None = Non
     settings = settings or Settings.from_env()
     service = RoiService(settings, provider or GeminiProvider(settings), clock)
     outlines = OutlineService(service)
+    outlets = OutletService(service)
     image_slots = asyncio.Semaphore(settings.max_image_preparations)
 
     @asynccontextmanager
@@ -203,6 +206,19 @@ def create_app(settings: Settings | None = None, provider: Provider | None = Non
         if page_id != outline.page_id:
             raise RoiError("page_identity_conflict", 409)
         response = await outlines.generate(owner, outline)
+        return JSONResponse(response.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+
+    @application.post(PREFIX + "/pages/{page_id}/outlets")
+    async def generate_outlets(page_id: str, request: Request):
+        owner = owner_from_headers(request.headers)
+        try:
+            body = (await request.body()).decode("utf-8")
+        except UnicodeDecodeError:
+            raise RoiError("invalid_request") from None
+        outlet = OutletInput.model_validate(decode_json(body))
+        if page_id != outlet.page_id:
+            raise RoiError("page_identity_conflict", 409)
+        response = await outlets.generate(owner, outlet)
         return JSONResponse(response.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
     @application.delete(PREFIX + "/pages/{page_id}", status_code=204)

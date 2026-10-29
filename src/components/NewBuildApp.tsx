@@ -27,6 +27,9 @@ import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
 import { PenetrationSummary } from "./newbuild/PenetrationSummary";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "@/utils/roiDrawing";
 import { penetrationOpenings } from "@/utils/penetrationOpenings";
+import { outletFromAnnotation, pointInOutletRing, reviewPageOutlets } from "@/utils/outletScope";
+import { useOutletDetection } from "@/hooks/useOutletDetection";
+import { OutletDetectionPanel, OutletSummary } from "./newbuild/OutletDetectionPanel";
 import { FileUp } from "lucide-react";
 
 const ignoreRenderedCanvas = () => undefined;
@@ -37,6 +40,8 @@ export const NewBuildApp = () => {
   const { state, dispatch, activePage, getActivePage } = session;
   const detection = useRoiDetection(session);
   const penetrationDetection = useRoiDetection(session, roiClient, "penetration");
+  const outletDetection = useOutletDetection(session, { enabled: roiClient.enabled && currentStep === "outlets" });
+  const [selectedOutletAnnotationId, setSelectedOutletAnnotationId] = useState<string | null>(null);
   const [selectedPenetrationId, setSelectedPenetrationId] = useState<string | null>(null);
   const [addingPenetration, setAddingPenetration] = useState(false);
   const penetrationAnnotations = activePage?.annotations.filter((annotation) => annotation.kind === "penetration") ?? [];
@@ -69,13 +74,24 @@ export const NewBuildApp = () => {
   const roofOutlines = activePage?.drawing.outlines.map((outline) => outline.points) ?? [];
   const interiorHoles = activePage?.drawing.holes.map((hole) => hole.points) ?? [];
   const openingHoles = activePage ? penetrationOpenings(activePage).map(opening => opening.points) : [];
-  const outlets = activePage?.drawing.outlets ?? [];
+  const outlets = activePage ? reviewPageOutlets(activePage) : [];
   const drainageEdges = activePage ? editorDrainage(activePage) : [];
   const drawingScale = activePage?.drawing.drawing_scale ?? uploadScale;
   const combined = combinePageDrawings(Object.values(state.pages), illustrationOffsets);
   const saved = combinePageDrawings(Object.values(state.pages).filter((page) => page.source.page_id !== state.active_page_id));
-  const [selectedOutlet, setSelectedOutlet] = useState<Outlet | null>(null);
-  const [outletMode, setOutletMode] = useState<'add-outlets' | 'drainage-edge'>('add-outlets');
+  const [selectedOutletRecord, setSelectedOutlet] = useState<Outlet | null>(null);
+  const selectedOutlet = outlets.find(outlet => outlet.id === selectedOutletRecord?.id) ?? null;
+  const [outletMode, setOutletMode] = useState<'select' | 'add-outlets' | 'drainage-edge'>('add-outlets');
+  useEffect(() => {
+    if (currentStep !== "outlets" || outletMode !== "select" || !activePage) return;
+    const suggestions = activePage.annotations.filter(annotation => annotation.kind === "rainwater_outlet" && !annotation.deleted);
+    if (!suggestions.some(annotation => annotation.id === selectedOutletAnnotationId)
+      && (!selectedOutletRecord || selectedOutletRecord.annotation_id)) {
+      const first = suggestions.find(annotation => annotation.review_status !== "rejected");
+      setSelectedOutletAnnotationId(first?.id ?? null);
+      setSelectedOutlet(first ? outletFromAnnotation(first) : null);
+    }
+  }, [currentStep, outletMode, activePage, selectedOutletAnnotationId, selectedOutletRecord]);
   const [showAdditionalUpload, setShowAdditionalUpload] = useState(false);
   const [projectDetails, setProjectDetails] = useState<ProjectDetails>({
     name: "",
@@ -99,6 +115,7 @@ export const NewBuildApp = () => {
     dispatch({ type: "activate", source, scale: uploadScale });
     setSelectionPending(false);
     setSelectedOutlet(null);
+    setSelectedOutletAnnotationId(null);
     setSelectedRoiId(null);
     setAddingRoi(false);
     setSelectedPenetrationId(null);
@@ -138,17 +155,30 @@ export const NewBuildApp = () => {
     holes: reconcilePolygons(drawing.holes, holes, activePage!.source.page_id) }));
 
   const handleAddOutlet = (x: number, y: number) => {
+    const owners = activePage?.drawing.outlines.filter(outline => pointInOutletRing({ x, y }, outline.points)) ?? [];
     updateDrawing((drawing) => ({ ...drawing, outlets: [...drawing.outlets,
-      { id: crypto.randomUUID(), page_id: activePage!.source.page_id, x, y, diameter: 0.15 }] }));
+      { id: crypto.randomUUID(), page_id: activePage!.source.page_id, x, y, diameter: 0.15,
+        diameter_confirmed: false, ...(owners.length === 1 ? { outline_id: owners[0].id } : {}) }] }));
   };
 
   const handleDeleteOutlet = (id: string) => {
-    updateDrawing((drawing) => ({ ...drawing, outlets: drawing.outlets.filter((outlet) => outlet.id !== id) }));
+    const outlet = outlets.find(outlet => outlet.id === id);
+    if (outlet?.annotation_id && activePage) {
+      dispatch({ type: "outlet-delete", page_id: activePage.source.page_id, id: outlet.annotation_id });
+      setSelectedOutletAnnotationId(null);
+    } else updateDrawing((drawing) => ({ ...drawing, outlets: drawing.outlets.filter((outlet) => outlet.id !== id) }));
     if (selectedOutlet?.id === id) setSelectedOutlet(null);
   };
 
   const handleMoveOutlet = (id: string, x: number, y: number) => {
-    updateDrawing((drawing) => ({ ...drawing, outlets: drawing.outlets.map((outlet) => outlet.id === id ? { ...outlet, x, y } : outlet) }));
+    const outlet = outlets.find(outlet => outlet.id === id);
+    if (outlet?.annotation_id && activePage) {
+      dispatch({ type: "outlet-move", page_id: activePage.source.page_id, id: outlet.annotation_id, anchor: { x, y } });
+      return;
+    }
+    const owners = activePage?.drawing.outlines.filter(outline => pointInOutletRing({ x, y }, outline.points)) ?? [];
+    updateDrawing((drawing) => ({ ...drawing, outlets: drawing.outlets.map((outlet) => outlet.id === id
+      ? { ...outlet, x, y, outline_id: owners.length === 1 ? owners[0].id : undefined } : outlet) }));
     if (selectedOutlet?.id === id) {
       setSelectedOutlet((prev) => (prev ? { ...prev, x, y } : null));
     }
@@ -195,6 +225,7 @@ export const NewBuildApp = () => {
     detection.cancel();
     penetrationDetection.cancel();
     outlineDetection.cancel();
+    outletDetection.cancel();
     setAddingPenetration(false);
     setAddingRoi(false);
     if (showAdditionalUpload) {
@@ -218,6 +249,7 @@ export const NewBuildApp = () => {
     detection.cancel();
     penetrationDetection.cancel();
     outlineDetection.cancel();
+    outletDetection.cancel();
     setAddingPenetration(false);
     setAddingRoi(false);
     if (showAdditionalUpload) return cancelAdditionalUpload();
@@ -311,10 +343,11 @@ export const NewBuildApp = () => {
             pdfCanvas={pdfCanvas}
             roofOutlines={roofOutlines}
             interiorHoles={[...interiorHoles, ...openingHoles]}
+            outlineIds={activePage?.drawing.outlines.map(outline => outline.id)}
             outlets={outlets}
             selectedOutlet={selectedOutlet}
             onAddOutlet={handleAddOutlet}
-            onSelectOutlet={setSelectedOutlet}
+            onSelectOutlet={outlet => { setSelectedOutlet(outlet); setSelectedOutletAnnotationId(outlet?.annotation_id ?? null); }}
             onMoveOutlet={handleMoveOutlet}
             drainageEdges={drainageEdges}
             onToggleDrainageEdge={handleToggleDrainageEdge}
@@ -345,6 +378,7 @@ export const NewBuildApp = () => {
       return (
         <>
         {roiClient.enabled && <PenetrationSummary pages={Object.values(state.pages)} />}
+        {roiClient.enabled && <OutletSummary pages={Object.values(state.pages)} />}
         <ProjectDetailsForm
           projectDetails={projectDetails}
           onProjectDetailsChange={setProjectDetails}
@@ -372,23 +406,33 @@ export const NewBuildApp = () => {
           undo={() => { outlineDetection.undo(); setPaintGeneration(generation => generation + 1); }}
           onReviewRegion={() => { outlineDetection.cancel(); setCurrentStep("roi"); }}
         />}
+        {currentStep === "outlets" && !showAdditionalUpload && roiClient.enabled && activePage && <OutletDetectionPanel
+          page={activePage} selectedId={selectedOutletAnnotationId} dispatch={dispatch} detection={outletDetection}
+          onModeChange={setOutletMode} onSelect={id => {
+            setSelectedOutletAnnotationId(id);
+            const annotation = activePage.annotations.find(candidate => candidate.id === id);
+            setSelectedOutlet(annotation ? outletFromAnnotation(annotation) : null);
+          }} />}
         <NewBuildSidebar
           currentStep={currentStep}
           roofOutlines={roofOutlines}
-          outlets={outlets}
-          selectedOutlet={selectedOutlet}
+          outlets={outlets.filter(outlet => !outlet.annotation_id)}
+          selectedOutlet={selectedOutlet?.annotation_id ? null : selectedOutlet}
           onDeleteOutlet={handleDeleteOutlet}
           drainageEdges={drainageEdges}
           outletMode={outletMode}
           onOutletModeChange={setOutletMode}
           savedOutlines={saved.roofOutlines}
           savedOutlets={saved.outlets}
+          savedInteriorHoles={saved.interiorHoles}
+          savedOutlineIds={saved.outlineRefs.map(outline => outline.id)}
         />
         {currentStep === "outlets" && !showAdditionalUpload && (
           <Button
             variant="outline"
             onClick={() => {
               additionalReturnPage.current = state.active_page_id;
+              outletDetection.cancel();
               setUploadScale(drawingScale);
               dispatch({ type: "select", page_id: null });
               setSelectedOutlet(null);
@@ -460,6 +504,7 @@ export const NewBuildApp = () => {
           {currentStep === "details" && (
             <RoofIllustrationCanvas
               roofOutlines={combined.roofOutlines}
+              outlineIds={combined.outlineRefs.map(outline => outline.id)}
               interiorHoles={combined.interiorHoles}
               outlets={combined.outlets}
               drainageEdges={combined.drainageEdges}

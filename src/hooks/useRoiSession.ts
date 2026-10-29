@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AnnotationKind, DetectionRequest } from "@/types/roi";
 import { initialRoiState, roiSessionReducer, type RoiSessionAction } from "@/utils/roiSession";
+import { outletScopeSignature } from "@/utils/outletScope";
 
 export function useRoiSession() {
   const [state, setState] = useState(initialRoiState);
@@ -33,7 +34,8 @@ export function useRoiSession() {
     if (!page) throw new Error("Select a rendered page first");
     const request: DetectionRequest = { page_id: page.source.page_id, request_id: crypto.randomUUID(), task,
       source_image_hash: page.source.source_image_hash, roi_revision: task === "roof_roi" ? null : page.roi_revision,
-      geometry_revision: page.geometry_revision };
+      geometry_revision: page.geometry_revision,
+      ...(task === "rainwater_outlet" ? { scope_signature: outletScopeSignature(page) } : {}) };
     dispatch({ type: "start", request });
     if (current.current.pages[request.page_id].pending[task]?.request_id !== request.request_id) {
       throw new Error("Child detection requires an accepted current ROI");

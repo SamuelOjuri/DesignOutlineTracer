@@ -1,6 +1,7 @@
 import type { DrainageEdge, Outlet, Penetration, Point } from "@/types/roof";
 import type { PagePolygon, PageSession } from "@/types/roi";
 import { penetrationOpenings } from "./penetrationOpenings";
+import { activePageOutlets } from "./outletScope";
 
 export function reconcilePolygons(previous: PagePolygon[], points: Point[][], pageId: string, editedIndex?: number): PagePolygon[] {
   const used = new Set<string>();
@@ -73,8 +74,8 @@ export function combinePageDrawings(pages: PageSession[], offsets: Record<string
         width: (right - left) * mmPerPixel(base) / 1000, height: (bottom - top) * mmPerPixel(base) / 1000,
         polygonPoints: points });
     }
-    for (const outlet of page.drawing.outlets) {
-      result.outlets.push({ id: outlet.id, diameter: outlet.diameter, ...transform(outlet, outlet.id) });
+    for (const outlet of activePageOutlets(page)) {
+      result.outlets.push({ ...outlet, ...transform(outlet, outlet.id) });
       result.outletRefs.push({ id: outlet.id, page_id: outlet.page_id,
         roi_id: page.annotations.find((annotation) => annotation.id === outlet.annotation_id)?.roi_id ?? null });
     }

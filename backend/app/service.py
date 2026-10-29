@@ -14,6 +14,7 @@ from .gemini import PROMPT_VERSIONS, SYSTEM_PROMPT, Provider, make_prompt, respo
 from .images import PREPARATION_VERSION, PreparedImage
 from .models import Annotation, DetectionInput, DetectionResponse, DetectionRun, PageContext
 from .outline_models import CachedOutline, OutlineResponse
+from .outlet_models import CachedOutlets, OutletResponse
 from .parsing import parse_proposals
 
 
@@ -40,6 +41,7 @@ class PageRecord:
     upload_id: str = field(default_factory=lambda: f"upload_{uuid4().hex}")
     cache: dict[str, CachedProposals] = field(default_factory=dict)
     outline_cache: dict[str, CachedOutline] = field(default_factory=dict)
+    outlet_cache: dict[str, CachedOutlets] = field(default_factory=dict)
     follow_ups: int = 0
 
 
@@ -48,7 +50,7 @@ class Operation:
     fingerprint: str
     key: str
     upload_id: str
-    task: asyncio.Task[DetectionResponse | OutlineResponse] | None
+    task: asyncio.Task[DetectionResponse | OutlineResponse | OutletResponse] | None
 
 
 @dataclass
@@ -73,6 +75,7 @@ class RoiService:
         page = session.pages.pop(page_id)
         page.cache.clear()
         page.outline_cache.clear()
+        page.outlet_cache.clear()
         for operation in session.operations.values():
             if operation.upload_id == page.upload_id and operation.task is not None:
                 operation.task.cancel()
@@ -87,6 +90,7 @@ class RoiService:
                 else:
                     page.cache = {key: cached for key, cached in page.cache.items() if cached.expires > now}
                     page.outline_cache = {key: cached for key, cached in page.outline_cache.items() if cached.expires > now}
+                    page.outlet_cache = {key: cached for key, cached in page.outlet_cache.items() if cached.expires > now}
             if session.expires <= now:
                 del self.sessions[owner]
 
@@ -204,7 +208,7 @@ class RoiService:
         session.operations[request.request_id] = Operation(fingerprint, key, page.upload_id, task)
         return await self.wait_for(task, session, page)
 
-    async def wait_for(self, task: asyncio.Task, session: Session, page: PageRecord) -> DetectionResponse | OutlineResponse:
+    async def wait_for(self, task: asyncio.Task, session: Session, page: PageRecord) -> DetectionResponse | OutlineResponse | OutletResponse:
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
