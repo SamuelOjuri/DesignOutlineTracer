@@ -19,6 +19,8 @@ from .errors import RoiError
 from .gemini import GeminiProvider, Provider
 from .images import prepare_image
 from .models import DetectionInput, PageContext
+from .outline_models import OutlineInput
+from .outline_service import OutlineService
 from .parsing import reject_constant, unique_object
 from .service import RoiService
 
@@ -63,7 +65,9 @@ class BoundedRequests:
         try:
             bounded_receive = receive
             if scope["method"] == "POST":
-                maximum = self.settings.max_upload_bytes + 16384 if scope["path"] == PREFIX + "/pages" else 65536
+                maximum = (self.settings.max_upload_bytes + 16384 if scope["path"] == PREFIX + "/pages"
+                           else 512 * 1024 if re.fullmatch(PREFIX + r"/pages/[a-zA-Z0-9_-]+/outlines", scope["path"])
+                           else 65536)
                 try:
                     if int(headers.get("content-length", "0")) > maximum:
                         raise RoiError("request_too_large", 413)
@@ -109,6 +113,7 @@ def decode_json(text: str):
 def create_app(settings: Settings | None = None, provider: Provider | None = None, clock=time.monotonic) -> FastAPI:
     settings = settings or Settings.from_env()
     service = RoiService(settings, provider or GeminiProvider(settings), clock)
+    outlines = OutlineService(service)
     image_slots = asyncio.Semaphore(settings.max_image_preparations)
 
     @asynccontextmanager
@@ -185,6 +190,19 @@ def create_app(settings: Settings | None = None, provider: Provider | None = Non
         if page_id != detection.page_id:
             raise RoiError("page_identity_conflict", 409)
         response = await service.detect(owner, detection)
+        return JSONResponse(response.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+
+    @application.post(PREFIX + "/pages/{page_id}/outlines")
+    async def generate_outline(page_id: str, request: Request):
+        owner = owner_from_headers(request.headers)
+        try:
+            body = (await request.body()).decode("utf-8")
+        except UnicodeDecodeError:
+            raise RoiError("invalid_request") from None
+        outline = OutlineInput.model_validate(decode_json(body))
+        if page_id != outline.page_id:
+            raise RoiError("page_identity_conflict", 409)
+        response = await outlines.generate(owner, outline)
         return JSONResponse(response.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
     @application.delete(PREFIX + "/pages/{page_id}", status_code=204)

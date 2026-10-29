@@ -89,7 +89,7 @@ async function canvasInk(canvas: Locator) {
     return { dark, red };
   });
 }
-const continueManually = (page: Page) => page.getByRole("button", { name: "Define roof manually", exact: true });
+const continueManually = (page: Page) => page.getByRole("button", { name: "Set Outlines", exact: true });
 
 test("ROI bounds constrain hover, click, drag and saved polygons on an open roof", async ({ page }) => {
   await enterReview(page, createOpenRoofPlanPdf);
@@ -133,7 +133,8 @@ test("ROI bounds constrain hover, click, drag and saved polygons on an open roof
   await move(0.1, 0.1);
   await page.mouse.down();
   await page.mouse.up();
-  await expect(page.getByRole("status")).toHaveText("Click inside a green roof region to select an area.");
+  await expect(page.getByRole("status").filter({ hasText: "Click inside a green roof region" }))
+    .toHaveText("Click inside a green roof region to select an area.");
   await expect(next).toBeDisabled();
   await page.getByTitle("Zoom in", { exact: true }).click();
   await move(0.35, 0.4);

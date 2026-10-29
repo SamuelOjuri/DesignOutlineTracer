@@ -7,6 +7,8 @@ import type { Box2D, RoiAnnotation } from "@/types/roi";
 import { buildRoiFillMask } from "@/utils/roiFillMask";
 import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/utils/rectangleCutout";
 import { AnnotationOverlay } from "./AnnotationOverlay";
+import type { OutlineProposal } from "@/types/outline";
+import { OutlineProposalOverlay } from "./OutlineProposalOverlay";
 import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler } from "lucide-react";
 
 type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust" | "straighten";
@@ -28,6 +30,7 @@ interface PaintBucketCanvasProps {
   penetrationHoles?: Point[][];
   acceptedRegions?: RoiAnnotation[];
   regionLabels?: Record<string, string>;
+  outlineProposals?: OutlineProposal[];
 }
 
 const FILL_COLOR: [number, number, number, number] = [220, 50, 50, 160];
@@ -46,6 +49,7 @@ export const PaintBucketCanvas = ({
   penetrationHoles = [],
   acceptedRegions = [],
   regionLabels,
+  outlineProposals = [],
 }: PaintBucketCanvasProps) => {
   // Step 4 owns these openings. Display them without folding them into Step 3's
   // editable base geometry, which would leave stale cutouts after a later move.
@@ -1262,6 +1266,10 @@ export const PaintBucketCanvas = ({
           {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
             <AnnotationOverlay annotations={acceptedRegions} labels={regionLabels} />
+          </div>}
+          {outlineProposals.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            <OutlineProposalOverlay proposals={outlineProposals} width={pdfCanvas.width} height={pdfCanvas.height} />
           </div>}
         </div>
       </div>

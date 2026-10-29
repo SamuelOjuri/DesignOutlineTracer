@@ -104,7 +104,7 @@ describe("manual New Build state", () => {
     render(<NewBuildApp />);
     const next = () => user.click(screen.getByRole("button", { name: "Next" }));
     const previous = () => user.click(screen.getByRole("button", { name: "Previous" }));
-    const paint = () => user.click(screen.getByRole("button", { name: "Define roof manually" }));
+    const paint = () => user.click(screen.getByRole("button", { name: "Set Outlines" }));
     await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
     await next();
     expect(screen.getByRole("heading", { name: "Roof Areas" })).toBeInTheDocument();
@@ -160,7 +160,7 @@ describe("manual New Build state", () => {
     await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
     await next();
     await user.click(screen.getByRole("button", { name: "Add test region" }));
-    await user.click(screen.getByRole("button", { name: "Define roof manually" }));
+    await user.click(screen.getByRole("button", { name: "Set Outlines" }));
     await user.click(screen.getByRole("button", { name: "Select roof" }));
     await user.click(screen.getByRole("button", { name: "Add cutout" }));
     await next();
@@ -198,7 +198,7 @@ describe("manual New Build state", () => {
     await user.clear(screen.getByRole("textbox", { name: "Region label" }));
     await user.type(screen.getByRole("textbox", { name: "Region label" }), "Revised roof");
     await user.click(screen.getByRole("button", { name: "Apply correction" }));
-    await user.click(screen.getByRole("button", { name: "Define roof manually" }));
+    await user.click(screen.getByRole("button", { name: "Set Outlines" }));
     await next();
     expect(JSON.parse(screen.getByTestId("review-regions").textContent!)[0]).toMatchObject({ id: "child", review_status: "accepted", validity: "needs_review" });
   });

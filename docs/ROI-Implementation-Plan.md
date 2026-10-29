@@ -19,6 +19,12 @@ This plan supersedes the previous backend implementation plan for this branch. I
 
 ### Non-Goals
 
+Historical scope note: the later user-requested automatic perimeter feature
+extends this plan's original exclusions of segmentation and source-line fitting.
+Its separate contract and implementation are documented in
+[Automatic roof outlines](Automatic-Roof-Outlines.md). The retired extraction
+backend remains unused; the following list records the original phase scope.
+
 - Automatic production-quality roof-perimeter tracing or segmentation masks.
 - Treating bounding boxes as exact roof polygons, holes, dimensions, or measured areas.
 - Generating tapered-insulation layouts, drainage designs, CAD geometry, or DXF exports.

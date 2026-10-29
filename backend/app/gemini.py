@@ -17,6 +17,7 @@ PROMPT_VERSIONS = {"roof_roi": "roof-roi-v2", "penetration": "penetration-v1",
                    "rainwater_outlet": "rainwater-outlet-draft-v1"}
 PROMPTS = Path(__file__).parent / "prompts"
 SYSTEM_PROMPT = (PROMPTS / "system-v1.txt").read_text(encoding="utf-8")
+OUTLINE_SYSTEM_PROMPT = (PROMPTS / "outline-system-v1.txt").read_text(encoding="utf-8")
 TASK_PROMPTS = {task: (PROMPTS / f"{version}.txt").read_text(encoding="utf-8")
                 for task, version in PROMPT_VERSIONS.items()}
 
@@ -83,18 +84,33 @@ class GeminiProvider:
         return self.client
 
     async def generate(self, image: bytes, prompt: str, schema: dict) -> ProviderResult:
+        return await self._generate(image, prompt, schema)
+
+    async def generate_with_context(self, image: bytes, prompt: str, schema: dict,
+                                    context_image: bytes) -> ProviderResult:
+        """The first image is the coordinate frame; the second is context only."""
+        return await self._generate(image, prompt, schema, context_image, system_prompt=OUTLINE_SYSTEM_PROMPT)
+
+    async def _generate(self, image: bytes, prompt: str, schema: dict,
+                        context_image: bytes | None = None, *, system_prompt: str = SYSTEM_PROMPT) -> ProviderResult:
         config = types.GenerateContentConfig(
             **self.settings.generation_settings,
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=system_prompt,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         if self.settings.structured_output:
             config.response_mime_type = "application/json"
             config.response_json_schema = schema
+        contents = [types.Part.from_text(text=prompt), types.Part.from_bytes(data=image, mime_type="image/png")]
+        if context_image is not None:
+            contents.extend([
+                types.Part.from_text(text="Full-page overview for context only. Return coordinates in the FIRST detailed crop image."),
+                types.Part.from_bytes(data=context_image, mime_type="image/png"),
+            ])
         try:
             stream = await self.get_client().aio.models.generate_content_stream(
                 model=self.settings.model,
-                contents=[types.Part.from_text(text=prompt), types.Part.from_bytes(data=image, mime_type="image/png")],
+                contents=contents,
                 config=config,
             )
             text_parts = []

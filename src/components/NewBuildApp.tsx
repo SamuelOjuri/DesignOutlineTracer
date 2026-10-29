@@ -18,6 +18,9 @@ import {
 import type { Box2D, PageDrawing, RenderedPdfPage } from "@/types/roi";
 import { useRoiSession } from "@/hooks/useRoiSession";
 import { useRoiDetection } from "@/hooks/useRoiDetection";
+import { useOutlineDetection } from "@/hooks/useOutlineDetection";
+import type { OutlineBoundaryPolicy } from "@/types/outline";
+import { OutlineGenerationPanel } from "./newbuild/OutlineGenerationPanel";
 import { roiClient } from "@/integrations/roi/client";
 import { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
 import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
@@ -49,6 +52,14 @@ export const NewBuildApp = () => {
   const [addingRoi, setAddingRoi] = useState(false);
   const roofRegions = activePage?.annotations.filter((annotation) => annotation.kind === "roof_roi") ?? [];
   const acceptedRegions = roofRegions.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current");
+  const outlineRoiId = acceptedRegions.find(region => region.id === selectedRoiId)?.id ?? acceptedRegions[0]?.id ?? null;
+  const [outlinePolicy, setOutlinePolicy] = useState<OutlineBoundaryPolicy>("inner_parapet");
+  const [outlineNotes, setOutlineNotes] = useState("");
+  const [paintGeneration, setPaintGeneration] = useState(0);
+  const outlineDetection = useOutlineDetection(session, {
+    roiId: outlineRoiId, boundaryPolicy: outlinePolicy, boundaryNotes: outlineNotes,
+    enabled: roiClient.enabled && currentStep === "paint",
+  });
   const canvases = useRef(new Map<string, HTMLCanvasElement>());
   const [uploadScale, setUploadScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
   const [selectionPending, setSelectionPending] = useState(false);
@@ -183,6 +194,7 @@ export const NewBuildApp = () => {
   const handleNext = () => {
     detection.cancel();
     penetrationDetection.cancel();
+    outlineDetection.cancel();
     setAddingPenetration(false);
     setAddingRoi(false);
     if (showAdditionalUpload) {
@@ -205,6 +217,7 @@ export const NewBuildApp = () => {
   const handlePrev = () => {
     detection.cancel();
     penetrationDetection.cancel();
+    outlineDetection.cancel();
     setAddingPenetration(false);
     setAddingRoi(false);
     if (showAdditionalUpload) return cancelAdditionalUpload();
@@ -257,7 +270,7 @@ export const NewBuildApp = () => {
       case "paint":
         return pdfCanvas ? (
           <PaintBucketCanvas
-            key={activePage?.source.page_id}
+            key={`${activePage?.source.page_id}:${paintGeneration}`}
             pdfCanvas={pdfCanvas}
             onOutlinesExtracted={handleOutlinesExtracted}
             onHolesExtracted={handleHolesExtracted}
@@ -266,6 +279,7 @@ export const NewBuildApp = () => {
             penetrationHoles={openingHoles}
             acceptedRegions={roiClient.enabled ? acceptedRegions : undefined}
             regionLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
+            outlineProposals={outlineDetection.result?.proposals}
           />
         ) : null;
       case "outlets":
@@ -344,6 +358,20 @@ export const NewBuildApp = () => {
     }
     return (
       <>
+        {currentStep === "paint" && roiClient.enabled && activePage && <OutlineGenerationPanel
+          key={activePage.source.page_id} page={activePage} regions={acceptedRegions} roiId={outlineRoiId}
+          onRoiChange={setSelectedRoiId} policy={outlinePolicy} onPolicyChange={setOutlinePolicy}
+          notes={outlineNotes} onNotesChange={setOutlineNotes} result={outlineDetection.result}
+          feedback={outlineDetection.feedback} busy={outlineDetection.busy} generate={outlineDetection.generate}
+          cancel={outlineDetection.cancel} dismiss={outlineDetection.dismiss} canUndo={outlineDetection.canUndo}
+          apply={replacements => {
+            const error = outlineDetection.apply(replacements);
+            if (!error) setPaintGeneration(generation => generation + 1);
+            return error;
+          }}
+          undo={() => { outlineDetection.undo(); setPaintGeneration(generation => generation + 1); }}
+          onReviewRegion={() => { outlineDetection.cancel(); setCurrentStep("roi"); }}
+        />}
         <NewBuildSidebar
           currentStep={currentStep}
           roofOutlines={roofOutlines}
@@ -386,9 +414,9 @@ export const NewBuildApp = () => {
         <div
           className={`${
             hasResponsiveCanvas ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
-          } shrink-0 border-r border-border bg-card p-4 ${hasResponsiveCanvas ? `flex flex-col overflow-hidden ${currentStep === "paint" ? "md:block md:overflow-y-auto" : ""}` : "overflow-y-auto"}`}
+          } shrink-0 border-r border-border bg-card p-4 ${hasResponsiveCanvas ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}
         >
-          <div className={hasResponsiveCanvas ? `flex-1 min-h-0 overflow-y-auto ${currentStep === "paint" ? "md:flex-none md:overflow-visible" : ""}` : undefined}>{renderSidebar()}</div>
+          <div className={hasResponsiveCanvas ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
 
           <div className="mt-6 flex gap-2 shrink-0">
             <Button

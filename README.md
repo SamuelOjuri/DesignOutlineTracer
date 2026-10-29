@@ -167,6 +167,18 @@ contracts, request limits, and lifecycle details.
 
 ### Roof Boundary Editing
 
+With ROI review enabled, **Set Outlines** now includes **Generate outline**.
+Choose an accepted roof region and the boundary convention, then review the
+suggested perimeter. The service uses a detailed crop and full-page context,
+followed by conservative fitting to PDF vector strokes or raster linework.
+Orange dashed edges need closer review. **Use outline** applies editable
+polygons; existing outlines are replaced only when selected explicitly.
+**Undo generated outline** restores the prior drawing while it remains the
+latest page edit. Rooflights remain a separate penetration-review step.
+See [Automatic roof outlines](docs/Automatic-Roof-Outlines.md) for the pipeline,
+API, verification and remaining live accuracy evaluation. Restart the backend
+and refresh/rebuild the frontend to use the new endpoint and controls.
+
 In Define Roof Area, **Adjust** moves edges or individual red vertices. Drop a
 vertex onto an adjacent vertex on the same roof to merge them. A green ring marks
 a valid merge target within 8 screen pixels; release removes the dragged vertex.

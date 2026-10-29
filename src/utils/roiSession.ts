@@ -3,6 +3,8 @@ import type { AnnotationKind, Box2D, DetectionRequest, DetectionRun, PageDrawing
 import { validateBox } from "./roiCoordinates";
 import { penetrationAssociationWarnings } from "./penetrationAssociation";
 import { penetrationFootprint } from "./penetrationOpenings";
+import type { OutlineResponse } from "@/types/outline";
+import { cloneOutlineDrawing, prepareOutlineApplication } from "./outlineSession";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
@@ -11,6 +13,8 @@ export type RoiSessionAction =
   | { type: "activate"; source: RenderedPdfPage; scale: DrawingScale }
   | { type: "select"; page_id: string | null }
   | { type: "drawing"; page_id: string; drawing: PageDrawing }
+  | { type: "apply_outline"; page_id: string; result: OutlineResponse; replace_outline_ids: string[] }
+  | { type: "undo_outline"; page_id: string }
   | { type: "add"; page_id: string; annotation: RoiAnnotation }
   | { type: "review"; page_id: string; id: string; patch: ReviewPatch }
   | { type: "remove"; page_id: string; id: string }
@@ -108,6 +112,21 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
   const pageId = action.type === "start" ? action.request.page_id : action.type === "result" ? action.run.page_id : action.page_id;
   const page = state.pages[pageId];
   if (!page) return state;
+
+  if (action.type === "apply_outline") {
+    if (pageId !== state.active_page_id) return state;
+    const prepared = prepareOutlineApplication(page, action.result, action.replace_outline_ids);
+    if (!prepared.drawing || prepared.error) return state;
+    const revision = page.revision + 1;
+    return storePage(state, invalidateChildren({ ...page, drawing: prepared.drawing, revision,
+      geometry_revision: page.geometry_revision + 1,
+      outline_undo: { drawing: cloneOutlineDrawing(page.drawing), applied_revision: revision } }));
+  }
+  if (action.type === "undo_outline") {
+    if (pageId !== state.active_page_id || !page.outline_undo || page.outline_undo.applied_revision !== page.revision) return state;
+    return storePage(state, invalidateChildren({ ...page, drawing: cloneOutlineDrawing(page.outline_undo.drawing),
+      revision: page.revision + 1, geometry_revision: page.geometry_revision + 1, outline_undo: undefined }));
+  }
 
   if (action.type === "start") {
     const request = action.request;

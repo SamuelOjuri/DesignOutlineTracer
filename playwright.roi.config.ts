@@ -8,7 +8,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 export default defineConfig({
   ...baseline,
   testIgnore: [],
-  testMatch: "**/roi-review.spec.ts",
+  testMatch: ["**/roi-review.spec.ts", "**/outline-generation.spec.ts"],
   use: { ...baseline.use, baseURL },
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,

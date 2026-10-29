@@ -16,6 +16,7 @@ import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { DrawingScale } from "@/types/roof";
 import type { RenderedPdfPage } from "@/types/roi";
 import { capturePdfPage, readBlobBytes, sha256 } from "@/utils/roiSource";
+import { extractPdfVectorSegments } from "@/utils/pdfVectorSegments";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
@@ -116,7 +117,7 @@ export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart,
     renderTask.current = task;
     await task.promise;
     if (selection !== generation.current) return;
-    const source = await capturePdfPage(canvas, {
+    const rasterSource = await capturePdfPage(canvas, {
       document_id: documentContext.documentId,
       file_name: documentContext.fileName,
       page_index: pageNum - 1,
@@ -125,6 +126,17 @@ export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart,
       render_version: `pdfjs-${pdfjsLib.version}-png-v1`,
       pdf_view_box: viewport.viewBox,
     });
+    if (selection !== generation.current) return;
+
+    let source = rasterSource;
+    try {
+      const operators = await page.getOperatorList();
+      if (selection !== generation.current) return;
+      const segments = extractPdfVectorSegments(operators, viewport.transform, canvas.width, canvas.height);
+      source = Object.freeze({ ...rasterSource, vector_segments: Object.freeze(segments) });
+    } catch {
+      // Unsupported PDF operators must never prevent manual work or raster outlining.
+    }
     if (selection !== generation.current) return;
 
     setPreviewUrl(canvas.toDataURL());

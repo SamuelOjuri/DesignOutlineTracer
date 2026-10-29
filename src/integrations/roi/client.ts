@@ -1,5 +1,7 @@
 import { z } from "zod";
 import type { DetectionRequest, DetectionRun, RenderedPdfPage, RoiAnnotation } from "@/types/roi";
+import type { OutlineRequest, OutlineResponse } from "@/types/outline";
+import { outlineRequestSchema, outlineResponseSchema } from "./outlineContracts";
 import {
   detectionSchema, healthSchema, identifier, pageContextSchema, parentSchema, receiptSchema, requestSchema, subtypes,
 } from "./contracts";
@@ -145,8 +147,10 @@ export function createRoiClient(options: ClientOptions = {}) {
     },
     async uploadPage(page: RenderedPdfPage, signal?: AbortSignal) {
       ensureEnabled();
-      const { source_blob, ...context } = page;
-      const validated = validate(pageContextSchema, context);
+      const { source_blob } = page;
+      // Render-only vector evidence is sent with an outline request, never page identity.
+      const validated = validate(pageContextSchema, Object.fromEntries(Object.keys(pageContextSchema.shape)
+        .map((key) => [key, page[key as keyof RenderedPdfPage]])));
       const body = new FormData();
       body.set("context", JSON.stringify(validated));
       body.set("image", source_blob, "source-page.png");
@@ -201,6 +205,19 @@ export function createRoiClient(options: ClientOptions = {}) {
           settings: result.run.settings, started_at: result.run.started_at, duration_ms: result.run.duration_ms,
           status: result.run.status, warnings: result.run.warnings, cached: result.run.cached, provider_attempts: result.run.provider_attempts },
       };
+    },
+    async generateOutline(request: OutlineRequest, signal?: AbortSignal): Promise<OutlineResponse> {
+      ensureEnabled();
+      const input = validate(outlineRequestSchema, request);
+      const result = validate(outlineResponseSchema, await send(`/pages/${input.page_id}/outlines`, "POST", JSON.stringify(input),
+        signal, detectionTimeoutMs()));
+      if (result.page_id !== input.page_id || result.request_id !== input.request_id
+        || result.source_image_hash !== input.source_image_hash || result.roi_revision !== input.roi_revision
+        || result.geometry_revision !== input.geometry_revision || result.roi_id !== input.roi.id
+        || result.roi_annotation_revision !== input.roi.revision || result.boundary_policy !== input.boundary_policy) {
+        throw new RoiApiError("response_identity_mismatch");
+      }
+      return result as OutlineResponse;
     },
     async deletePage(pageId: string, signal?: AbortSignal) {
       ensureEnabled();

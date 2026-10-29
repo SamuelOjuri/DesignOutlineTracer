@@ -1,4 +1,5 @@
 import type { DrawingScale, Outlet, Point } from "./roof";
+import type { OutlineUndo, VectorSegment } from "./outline";
 
 export type Box2D = readonly [ymin: number, xmin: number, ymax: number, xmax: number];
 export type AnnotationKind = "roof_roi" | "penetration" | "rainwater_outlet";
@@ -22,6 +23,7 @@ export interface PageContext {
 
 export interface RenderedPdfPage extends PageContext {
   readonly source_blob: Blob;
+  readonly vector_segments?: readonly VectorSegment[];
 }
 
 export interface AnnotationEdit {
@@ -99,6 +101,7 @@ export interface PageSession {
   runs: DetectionRun[];
   history: { id: string; index: number; before: RoiAnnotation | null; roi_revision: number; geometry_revision: number }[];
   drawing: PageDrawing;
+  outline_undo?: OutlineUndo;
 }
 
 export interface RoiSessionState {
