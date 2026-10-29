@@ -129,8 +129,8 @@ class RoiService:
         self.remove_page(session, page_id)
 
     def inference_settings(self, page: PageRecord) -> dict:
-        return {"temperature": 0.5, "max_image_side": 1024, "max_output_tokens": self.settings.max_output_tokens,
-                "structured_output": self.settings.structured_output, "thinking_config": None,
+        return {**self.settings.generation_settings, "max_image_side": 1024,
+                "structured_output": self.settings.structured_output,
                 "automatic_function_calling": False, "api_version": "v1beta",
                 "max_annotations": self.settings.max_annotations, "preparation_version": PREPARATION_VERSION,
                 "inference_image_hash": sha256(page.image.png).hexdigest(),
@@ -265,11 +265,11 @@ class RoiService:
                     page.cache[key] = result
             run = DetectionRun(**{name: getattr(request, name) for name in (
                 "page_id", "request_id", "task", "source_image_hash", "roi_revision", "geometry_revision")},
-                prompt_version=PROMPT_VERSIONS[request.task], settings=settings,
+                model=self.settings.model, prompt_version=PROMPT_VERSIONS[request.task], settings=settings,
                 started_at=started_at, duration_ms=(time.monotonic() - started) * 1000,
                 status=result.status, warnings=result.warnings, cached=cached is not None, provider_attempts=attempts)
             return DetectionResponse(page_id=request.page_id, request_id=request.request_id, task=request.task,
-                                     roi_revision=request.roi_revision, status=result.status,
+                                     model=self.settings.model, roi_revision=request.roi_revision, status=result.status,
                                      prompt_version=run.prompt_version, warnings=result.warnings,
                                      annotations=[annotation.model_copy(deep=True) for annotation in result.annotations], run=run)
         except TimeoutError:

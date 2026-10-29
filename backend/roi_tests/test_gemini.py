@@ -29,7 +29,8 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
                          {"rooflight", "vent", "flue", "access_hatch"})
         self.assertEqual(set(schema["items"]["required"]), {"label", "box_2d", "roi_id", "subtype"})
 
-    async def make_call(self, payload=None, status=200, structured=False, max_bytes=262144, chunks=None):
+    async def make_call(self, payload=None, status=200, structured=False, max_bytes=262144, chunks=None,
+                        model="gemini-4-argon", thinking_level="medium", temperature=0.5):
         captured = []
 
         def respond(request):
@@ -44,7 +45,8 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
             async_client_args={"transport": httpx.MockTransport(respond)},
         ))
         provider = GeminiProvider(Settings(allow_live=True, api_key="synthetic-not-a-real-key",
-                                          structured_output=structured, max_response_bytes=max_bytes), client)
+                                          structured_output=structured, max_response_bytes=max_bytes,
+                                          model=model, thinking_level=thinking_level, temperature=temperature), client)
         try:
             result = await provider.generate(b"synthetic-image", make_prompt("roof_roi", [], 25),
                                              response_schema("roof_roi", [], 25))
@@ -67,15 +69,33 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sdk_wire_contract_and_optional_structured_output(self):
         payload = {"candidates": [{"content": {"parts": [{"text": "[]"}]}, "finishReason": "STOP"}]}
-        for structured in (False, True):
-            result, captured = await self.make_call(payload, structured=structured)
-            self.assertEqual(result.text, "[]")
-            self.assertEqual(len(captured), 1)
-            self.assertIn("gemini-3.7-flash", str(captured[0].url))
+        for model in ("gemini-4-argon", "gemini-3.7-flash"):
+            for structured in (False, True):
+                with self.subTest(model=model, structured=structured):
+                    result, captured = await self.make_call(payload, structured=structured, model=model)
+                    self.assertEqual(result.text, "[]")
+                    self.assertEqual(len(captured), 1)
+                    self.assertIn(model, str(captured[0].url))
+                    config = json.loads(captured[0].content)["generationConfig"]
+                    self.assertEqual(config["maxOutputTokens"], 32768)
+                    if model == "gemini-4-argon":
+                        self.assertNotIn("temperature", config)
+                        # The SDK retains proto field names inside thinkingConfig.
+                        self.assertEqual(config["thinkingConfig"], {"thinking_level": "MEDIUM"})
+                    else:
+                        self.assertEqual(config["temperature"], 0.5)
+                        self.assertNotIn("thinkingConfig", config)
+                    self.assertEqual("responseJsonSchema" in config, structured)
+
+    async def test_model_specific_generation_overrides_reach_the_provider(self):
+        payload = {"candidates": [{"content": {"parts": [{"text": "[]"}]}, "finishReason": "STOP"}]}
+        for level in ("low", "high"):
+            _, captured = await self.make_call(payload, thinking_level=level, temperature=1.2)
             config = json.loads(captured[0].content)["generationConfig"]
-            self.assertEqual(config["temperature"], 0.5)
-            self.assertNotIn("thinkingConfig", config)
-            self.assertEqual("responseJsonSchema" in config, structured)
+            self.assertEqual(config["thinkingConfig"], {"thinking_level": level.upper()})
+            self.assertNotIn("temperature", config)
+        _, captured = await self.make_call(payload, model="gemini-3.7-flash", temperature=0.25)
+        self.assertEqual(json.loads(captured[0].content)["generationConfig"]["temperature"], 0.25)
 
     async def test_safe_errors_no_sdk_retries(self):
         for status, code, retryable in ((400, "unsupported_request_or_settings", False),

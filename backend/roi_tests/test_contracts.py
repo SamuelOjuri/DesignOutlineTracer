@@ -1,5 +1,7 @@
 import json
+import os
 import unittest
+from unittest.mock import patch
 
 from pydantic import ValidationError
 
@@ -17,6 +19,28 @@ class ContractTests(unittest.TestCase):
                 Settings(**changes)
         self.assertNotIn("api_key", Settings(api_key="synthetic-key").model_dump())
         self.assertNotIn("synthetic-key", repr(Settings(api_key="synthetic-key")))
+
+    def test_llm_environment_selects_model_and_generation_limits(self):
+        for model in ("gemini-4-argon", "gemini-3.7-flash"):
+            with self.subTest(model=model), patch.dict(os.environ, {
+                "ROI_MODEL": model, "ROI_THINKING_LEVEL": "low", "ROI_TEMPERATURE": "0.25",
+                "ROI_MAX_OUTPUT_TOKENS": "32768", "ROI_TIMEOUT_SECONDS": "900",
+                "GOOGLE_API_KEY": "synthetic-key",
+            }, clear=True):
+                settings = Settings.from_env()
+                self.assertEqual(settings.model, model)
+                self.assertEqual(settings.max_output_tokens, 32768)
+                self.assertEqual(settings.timeout_seconds, 900)
+                if model == "gemini-4-argon":
+                    self.assertEqual(settings.generation_settings["thinking_config"], {"thinking_level": "LOW"})
+                    self.assertNotIn("temperature", settings.generation_settings)
+                else:
+                    self.assertEqual(settings.generation_settings["temperature"], 0.25)
+                    self.assertNotIn("thinking_config", settings.generation_settings)
+        for changes in ({"thinking_level": "minimal"}, {"max_output_tokens": 65537},
+                        {"timeout_seconds": 901}, {"temperature": float("nan")}, {"temperature": 2.1}):
+            with self.subTest(changes=changes), self.assertRaises(ValidationError):
+                Settings(**changes)
 
     def test_fractional_box_and_invalid_geometry(self):
         self.assertEqual(Geometry(box_2d=[0.25, 10, 900, 999.9]).box_2d[0], 0.25)

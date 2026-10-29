@@ -84,7 +84,7 @@ class GeminiProvider:
 
     async def generate(self, image: bytes, prompt: str, schema: dict) -> ProviderResult:
         config = types.GenerateContentConfig(
-            temperature=0.5, max_output_tokens=self.settings.max_output_tokens,
+            **self.settings.generation_settings,
             system_instruction=SYSTEM_PROMPT,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )

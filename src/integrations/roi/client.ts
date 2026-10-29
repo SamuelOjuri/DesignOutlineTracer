@@ -93,7 +93,16 @@ export function createRoiClient(options: ClientOptions = {}) {
     }
   }
 
-  async function send(path: string, method: string, body?: BodyInit, signal?: AbortSignal): Promise<unknown> {
+  function detectionTimeoutMs() {
+    const timeout = options.timeoutMs ?? Number(import.meta.env.VITE_ROI_DETECTION_TIMEOUT_MS ?? 930_000);
+    if (!Number.isInteger(timeout) || timeout <= 0 || timeout > 3_600_000) {
+      throw new RoiApiError("invalid_configuration");
+    }
+    return timeout;
+  }
+
+  async function send(path: string, method: string, body?: BodyInit, signal?: AbortSignal,
+    timeoutMs = options.timeoutMs ?? 70_000): Promise<unknown> {
     const url = endpoint(path);
     if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
     if (!sessionToken) {
@@ -103,7 +112,7 @@ export function createRoiClient(options: ClientOptions = {}) {
     const abort = () => controller.abort();
     signal?.addEventListener("abort", abort, { once: true });
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, options.timeoutMs ?? 70000);
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     try {
       const response = await fetcher(url, {
         method, body, signal: controller.signal, credentials: "omit", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer",
@@ -159,9 +168,11 @@ export function createRoiClient(options: ClientOptions = {}) {
       }
       const followUpOf = detectionOptions.followUpOf === undefined ? undefined : validate(identifier, detectionOptions.followUpOf);
       const payload = { ...identity, accepted_rois: parents, ...(followUpOf ? { follow_up_of: followUpOf } : {}) };
-      const result = validate(detectionSchema, await send(`/pages/${identity.page_id}/detections`, "POST", JSON.stringify(payload), detectionOptions.signal));
+      const result = validate(detectionSchema, await send(`/pages/${identity.page_id}/detections`, "POST", JSON.stringify(payload),
+        detectionOptions.signal, detectionTimeoutMs()));
       if (result.page_id !== identity.page_id || result.request_id !== identity.request_id || result.task !== identity.task
-        || result.roi_revision !== identity.roi_revision || result.status !== result.run.status || result.prompt_version !== result.run.prompt_version
+        || result.roi_revision !== identity.roi_revision || result.status !== result.run.status || result.model !== result.run.model
+        || result.prompt_version !== result.run.prompt_version
         || Object.entries(identity).some(([key, value]) => result.run[key] !== value)) throw new RoiApiError("response_identity_mismatch");
       if (new Set(result.annotations.map((annotation) => annotation.id)).size !== result.annotations.length
         || (result.status === "no_detections" && result.annotations.length !== 0)

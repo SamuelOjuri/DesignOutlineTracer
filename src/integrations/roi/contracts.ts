@@ -7,6 +7,7 @@ export const box = z.tuple([coordinate, coordinate, coordinate, coordinate])
   .refine(([ymin, xmin, ymax, xmax]) => ymin < ymax && xmin < xmax);
 export const task = z.enum(["roof_roi", "penetration", "rainwater_outlet"]);
 const status = z.enum(["complete", "no_detections", "partial"]);
+const model = z.enum(["gemini-3.7-flash", "gemini-4-argon"]);
 const warnings = z.array(z.string().max(500)).max(50);
 const subtype = z.enum(["rooflight", "vent", "flue", "access_hatch", "internal_outlet", "parapet_outlet", "scupper"]);
 export const subtypes = {
@@ -42,7 +43,7 @@ const annotationSchema = z.object({
 }).strict();
 
 const runSchema = requestSchema.extend({
-  model: z.literal("gemini-3.7-flash"), prompt_version: z.string().min(1).max(100), schema_version: z.literal("1"),
+  model, prompt_version: z.string().min(1).max(100), schema_version: z.literal("1"),
   settings: z.record(z.unknown()), started_at: z.string().datetime({ offset: true }),
   duration_ms: z.number().finite().nonnegative(), status, warnings,
   cached: z.boolean(), provider_attempts: z.number().int().min(0).max(2),
@@ -50,10 +51,10 @@ const runSchema = requestSchema.extend({
 
 export const detectionSchema = z.object({
   schema_version: z.literal("1"), page_id: identifier, request_id: identifier, task, status,
-  roi_revision: z.number().int().nonnegative().nullable(), model: z.literal("gemini-3.7-flash"),
+  roi_revision: z.number().int().nonnegative().nullable(), model,
   prompt_version: z.string().min(1).max(100), annotations: z.array(annotationSchema).max(25), warnings, run: runSchema,
 }).strict();
 
 export const healthSchema = z.object({
-  status: z.enum(["ready", "not_configured"]), model: z.literal("gemini-3.7-flash"), mode: z.literal("localhost_only"),
+  status: z.enum(["ready", "not_configured"]), model, mode: z.literal("localhost_only"),
 }).strict();

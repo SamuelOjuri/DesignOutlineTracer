@@ -104,6 +104,39 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.delete(PREFIX + "/pages/page")).status_code, 204)
         self.assertEqual((await self.detect()).status_code, 404)
 
+    async def test_selected_model_and_effective_settings_are_reported_for_cached_and_fresh_results(self):
+        for model in ("gemini-4-argon", "gemini-3.7-flash"):
+            with self.subTest(model=model):
+                settings = Settings(model=model, thinking_level="low", temperature=0.25, max_output_tokens=32768)
+                provider = FakeProvider()
+                app = create_app(settings, provider)
+                try:
+                    async with httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app, client=("127.0.0.1", 1234)),
+                        base_url="http://127.0.0.1", headers=TOKEN,
+                    ) as client:
+                        self.assertEqual((await client.get(PREFIX + "/health")).json()["model"], model)
+                        uploaded = await client.post(PREFIX + "/pages", data={"context": json.dumps(self.context)},
+                                                     files={"image": ("plan.png", self.image, "image/png")})
+                        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+                        for index in range(2):
+                            response = await client.post(PREFIX + "/pages/page/detections",
+                                                         json=self.request(request_id=f"request-{index}"))
+                            self.assertEqual(response.status_code, 200, response.text)
+                            data = response.json()
+                            self.assertEqual(data["model"], model)
+                            self.assertEqual(data["run"]["model"], model)
+                            self.assertEqual(data["run"]["cached"], index == 1)
+                            self.assertEqual(data["run"]["settings"]["max_output_tokens"], 32768)
+                            if model == "gemini-4-argon":
+                                self.assertNotIn("temperature", data["run"]["settings"])
+                                self.assertEqual(data["run"]["settings"]["thinking_config"], {"thinking_level": "LOW"})
+                            else:
+                                self.assertEqual(data["run"]["settings"]["temperature"], 0.25)
+                        self.assertEqual(len(provider.calls), 1)
+                finally:
+                    await app.state.roi_service.close()
+
     async def test_server_checks_hash_dimensions_and_bad_upload(self):
         for field, value in (("source_width", 99), ("source_image_hash", "0" * 64)):
             response = await self.upload(context={**self.context, field: value})

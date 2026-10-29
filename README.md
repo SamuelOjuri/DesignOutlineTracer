@@ -5,8 +5,9 @@ penetration recommendations. The frontend uses React 18, TypeScript, Vite 5,
 Tailwind, and shadcn/ui.
 
 **The active backend is [`backend/app`](backend/app).** It is a FastAPI
-annotation service using `gemini-3.7-flash`, with its own dependency lock and
-tests. All new application-backend work belongs in this package. It contains
+annotation service using `ROI_MODEL` to select `gemini-4-argon` (default) or
+`gemini-3.7-flash`. It has its own dependency lock and tests. All new
+application-backend work belongs in this package. It contains
 the ROI implementation; the former extraction backend has been retired and is
 not imported or called by the ROI workflow.
 
@@ -63,7 +64,7 @@ py -3.13 -m venv backend/app/.venv
 In a backend terminal, start the service with live model calls disabled:
 
 ```powershell
-$env:ROI_MODEL = "gemini-3.7-flash"
+$env:ROI_MODEL = "gemini-4-argon"
 $env:ROI_ALLOW_LIVE = "false"
 $env:ROI_ALLOWED_ORIGINS = "http://127.0.0.1:8081"
 & ./backend/app/.venv/Scripts/python.exe -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8080 --workers 1 --no-proxy-headers --no-access-log
@@ -77,7 +78,7 @@ Invoke-RestMethod http://127.0.0.1:8080/api/roi/v1/health
 ```
 
 With live calls disabled, health returns HTTP 200 with `status: not_configured`,
-`model: gemini-3.7-flash`, and `mode: localhost_only`. Detection requests return
+`model: gemini-4-argon`, and `mode: localhost_only`. Detection requests return
 `provider_not_configured`; the offline service does not fabricate detections.
 Health never calls Gemini, and `status: ready` only indicates local provider
 configuration, not verified model access.
@@ -105,7 +106,13 @@ If either port changes, update the corresponding setting. `localhost` and
 | --- | --- | --- |
 | `VITE_ROI_ENABLED` | Frontend | Set to `true` to show ROI/penetration review and enable ROI requests. |
 | `VITE_ROI_API_BASE_URL` | Frontend | Loopback API origin, such as `http://127.0.0.1:8080`, without the `/api/roi/v1` suffix. |
-| `ROI_MODEL` | Backend | Selected provider model: `gemini-3.7-flash`. |
+| `VITE_ROI_DETECTION_TIMEOUT_MS` | Frontend | Detection deadline in milliseconds; defaults to `930000` (15 minutes plus 30 seconds). Health, upload and delete retain their 70-second deadlines. |
+| `ROI_MODEL` | Backend | `gemini-4-argon` (default) or `gemini-3.7-flash`. |
+| `ROI_THINKING_LEVEL` | Backend | Argon reasoning level: `low`, `medium` (default), or `high`. Not sent to Flash. |
+| `ROI_TEMPERATURE` | Backend | Flash sampling temperature, from `0` to `2`; defaults to `0.5`. Omitted for Argon. |
+| `ROI_MAX_OUTPUT_TOKENS` | Backend | Thinking and output token budget; defaults to `32768`, with a maximum of `65536`. |
+| `ROI_TIMEOUT_SECONDS` | Backend | Overall detection deadline, including retries; defaults to `900`, with a maximum of `900`. |
+| `ROI_PAGE_TTL_SECONDS` | Backend | Uploaded-page lifetime; defaults to `1800` seconds to allow room for long detections. |
 | `ROI_ALLOW_LIVE` | Backend | Set to `true` to permit model requests; defaults to `false` in code. |
 | `GOOGLE_API_KEY` | Backend | Server-side credential required for live detection. |
 | `ROI_ALLOWED_ORIGINS` | Backend | Comma-separated frontend origins allowed to call the API. |
@@ -124,6 +131,23 @@ an untracked backend environment file, set `ROI_ALLOW_LIVE=true`, and restart
 the API. Keep the key out of `VITE_*` variables and tracked files. An explicit
 detection action sends the selected page image to the API and Gemini; it can
 incur provider charges. Confirm model access and review limits before live use.
+
+To use the settings in `backend/app/.env`, start the API from the repository root:
+
+```powershell
+& ./backend/app/.venv/Scripts/python.exe -m uvicorn backend.app.main:app --env-file backend/app/.env --host 127.0.0.1 --port 8080 --workers 1 --no-proxy-headers --no-access-log
+```
+
+Environment variables already set in that terminal take precedence over the file.
+Remove an old terminal `ROI_MODEL` override when switching models through `.env`.
+Keep the browser detection deadline longer than the backend deadline, and the
+page/session lifetimes long enough to finish detection. Responses and cached runs
+record the selected model and the effective generation settings.
+
+Argon omits sampling parameters and uses the larger token/time budgets recommended
+in [Google's migration guide](https://ai.google.dev/gemini-api/docs/latest-model#migration-checklist).
+The offline `backend/roi_reference` package retains its original Flash baseline;
+it does not configure the application service.
 
 The API checks loopback client addresses, hosts, and frontend origins, and the
 frontend accepts only loopback API URLs. Keep one API worker: sessions, images,

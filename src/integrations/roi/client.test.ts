@@ -7,8 +7,8 @@ const page = { ...syntheticPage(), source_image_hash: "a".repeat(64) };
 const request: DetectionRequest = { page_id: page.page_id, request_id: "request", task: "roof_roi",
   source_image_hash: page.source_image_hash, roi_revision: null, geometry_revision: 0 };
 
-function responseEnvelope(identity = request) {
-  const run = { ...syntheticRun(identity), model: "gemini-3.7-flash", prompt_version: "roof-roi-v1", cached: false, provider_attempts: 1 };
+function responseEnvelope(identity = request, model = "gemini-4-argon") {
+  const run = { ...syntheticRun(identity), model, prompt_version: "roof-roi-v1", cached: false, provider_attempts: 1 };
   return { schema_version: "1", page_id: identity.page_id, request_id: identity.request_id, task: identity.task,
     roi_revision: identity.roi_revision, model: run.model, prompt_version: run.prompt_version, status: run.status,
     annotations: [syntheticAnnotation("annotation", { origin: "gemini", review_status: "suggested" })], warnings: [], run };
@@ -25,6 +25,23 @@ function setup(fetcher = vi.fn<typeof fetch>()) {
 afterEach(() => { vi.unstubAllEnvs(); vi.useRealTimers(); });
 
 describe("isolated ROI client", () => {
+  it.each(["gemini-4-argon", "gemini-3.7-flash"])("accepts health and detections for %s", async (model) => {
+    const { fetcher, client } = setup();
+    fetcher.mockResolvedValueOnce(jsonResponse({ status: "ready", model, mode: "localhost_only" }));
+    expect((await client.health()).model).toBe(model);
+    fetcher.mockResolvedValueOnce(jsonResponse(responseEnvelope(request, model)));
+    const result = await client.detect(request);
+    expect(result.model).toBe(model);
+    expect(result.run.model).toBe(model);
+  });
+
+  it("rejects inconsistent models between a detection and its run", async () => {
+    const { fetcher, client } = setup();
+    const envelope = responseEnvelope();
+    fetcher.mockResolvedValueOnce(jsonResponse({ ...envelope, run: { ...envelope.run, model: "gemini-3.7-flash" } }));
+    await expect(client.detect(request)).rejects.toMatchObject({ code: "response_identity_mismatch" });
+  });
+
   it("makes zero requests with the feature flag disabled, including invalid inputs", async () => {
     vi.stubEnv("VITE_ROI_ENABLED", "false");
     const fetcher = vi.fn<typeof fetch>();
@@ -160,5 +177,28 @@ describe("isolated ROI client", () => {
     const remote = createRoiClient({ enabled: true, baseUrl: "https://unreviewed.example", fetch: fetcher });
     await expect(remote.health()).rejects.toMatchObject({ code: "invalid_configuration" });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([undefined, "120000"])("allows long detections and honors the configured deadline %s", async (configured) => {
+    vi.useFakeTimers();
+    if (configured === undefined) vi.stubEnv("VITE_ROI_DETECTION_TIMEOUT_MS", undefined);
+    else vi.stubEnv("VITE_ROI_DETECTION_TIMEOUT_MS", configured);
+    const { fetcher, client } = setup();
+    fetcher.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    }));
+    const pending = expect(client.detect(request)).rejects.toMatchObject({ code: "request_timeout" });
+    await vi.advanceTimersByTimeAsync(70_001);
+    expect(fetcher.mock.calls[0][1].signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync((configured === undefined ? 930_000 : Number(configured)) - 70_001);
+    await pending;
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["", "invalid", "-1", "0", "3600001"])("rejects invalid detection timeout %s before networking", async (timeout) => {
+    vi.stubEnv("VITE_ROI_DETECTION_TIMEOUT_MS", timeout);
+    const { fetcher, client } = setup();
+    await expect(client.detect(request)).rejects.toMatchObject({ code: "invalid_configuration" });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

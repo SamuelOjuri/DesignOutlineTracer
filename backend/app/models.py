@@ -3,7 +3,8 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, model_validator
 
 
-MODEL = "gemini-3.7-flash"
+ModelName = Literal["gemini-3.7-flash", "gemini-4-argon"]
+DEFAULT_MODEL: ModelName = "gemini-4-argon"
 Task = Literal["roof_roi", "penetration", "rainwater_outlet"]
 Identifier = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^[a-zA-Z0-9_-]+$")]
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
@@ -104,7 +105,7 @@ class DetectionRun(Contract):
     source_image_hash: Sha256
     roi_revision: int | None
     geometry_revision: int
-    model: Literal["gemini-3.7-flash"] = MODEL
+    model: ModelName
     prompt_version: str
     schema_version: Literal["1"] = "1"
     settings: dict
@@ -123,7 +124,7 @@ class DetectionResponse(Contract):
     task: Task
     status: Literal["complete", "no_detections", "partial"]
     roi_revision: int | None
-    model: Literal["gemini-3.7-flash"] = MODEL
+    model: ModelName
     prompt_version: str
     annotations: list[Annotation]
     warnings: list[str]
