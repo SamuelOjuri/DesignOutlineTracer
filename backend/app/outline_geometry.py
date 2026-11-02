@@ -19,6 +19,16 @@ ALGORITHM_VERSION = "source-supported-outline-v2"
 MAX_POLYGONS = 8
 MAX_POINTS = 128
 EPS = 1e-7
+# Furthest raster read from the ROI: 12 px snapping radius + 3 px side samples + rounding.
+RASTER_MARGIN = 24
+
+
+@dataclass(frozen=True)
+class SourceRaster:
+    """Grayscale page pixels around one ROI; reads outside it behave like the page edge."""
+    gray: Image.Image
+    origin: tuple[int, int]
+    page_size: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -27,14 +37,28 @@ class PreparedOutlineCrop:
     crop: dict
     source_width: int
     source_height: int
+    source: SourceRaster | None = None
 
 
-def _rgb(data: bytes) -> Image.Image:
+def _page_size(data: bytes) -> tuple[int, int]:
     with Image.open(BytesIO(data)) as source:
-        rgba = source.convert("RGBA")
+        return source.size
+
+
+def _rgb(data: bytes, region: tuple[int, int, int, int] | None = None) -> Image.Image:
+    """Decode once and flatten onto white; cropping first avoids converting the whole page."""
+    with Image.open(BytesIO(data)) as source:
+        image = source.crop(region) if region is not None else source
+        rgba = image.convert("RGBA")
         white = Image.new("RGBA", rgba.size, "white")
         white.alpha_composite(rgba)
         return white.convert("RGB")
+
+
+def _raster_region(bounds, width: int, height: int) -> tuple[int, int, int, int]:
+    left, top, right, bottom = bounds
+    return (max(0, math.floor(left) - RASTER_MARGIN), max(0, math.floor(top) - RASTER_MARGIN),
+            min(width, math.ceil(right) + RASTER_MARGIN), min(height, math.ceil(bottom) + RASTER_MARGIN))
 
 
 def _number(value) -> float:
@@ -57,20 +81,25 @@ def prepare_outline_crop(original: bytes, box: Sequence[float], max_side: int = 
     """Crop ORIGINAL page pixels, with context, before any inference downsampling."""
     if not 256 <= max_side <= 4096 or not 0 <= padding_fraction <= .25:
         raise ValueError("invalid_outline_preparation_settings")
-    rgb = _rgb(original)
-    width, height = rgb.size
-    left, top, right, bottom = _bounds(box, width, height)
+    width, height = _page_size(original)
+    bounds = _bounds(box, width, height)
+    left, top, right, bottom = bounds
     padding = max(4, max(right - left, bottom - top) * padding_fraction)
     x, y = max(0, math.floor(left - padding)), max(0, math.floor(top - padding))
     x2, y2 = min(width, math.ceil(right + padding)), min(height, math.ceil(bottom + padding))
-    crop = rgb.crop((x, y, x2, y2))
+    # One decode serves both the inference crop and the fitting pixels around the ROI.
+    raster = _raster_region(bounds, width, height)
+    region = min(x, raster[0]), min(y, raster[1]), max(x2, raster[2]), max(y2, raster[3])
+    rgb = _rgb(original, region)
+    crop = rgb.crop((x - region[0], y - region[1], x2 - region[0], y2 - region[1]))
+    source = SourceRaster(rgb.convert("L"), (region[0], region[1]), (width, height))
     crop.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     output = BytesIO()
     crop.save(output, format="PNG")
     return PreparedOutlineCrop(output.getvalue(), {
         "x": x, "y": y, "width": x2 - x, "height": y2 - y,
         "inference_width": crop.width, "inference_height": crop.height,
-    }, width, height)
+    }, width, height, source)
 
 
 def _cross(a, b, c) -> float:
@@ -270,7 +299,8 @@ def _vector_candidates(a, b, segments, max_shift):
     return result
 
 
-def _raster_support(a, b, normal, offset, pixels, width, height):
+def _raster_support(a, b, normal, offset, raster):
+    pixels, (ox, oy), width, height = raster
     # Project original endpoints onto this candidate line; signs are irrelevant.
     p = [(a[0] - normal[0] * (normal[0] * a[0] + normal[1] * a[1] - offset),
           a[1] - normal[1] * (normal[0] * a[0] + normal[1] * a[1] - offset)),
@@ -283,7 +313,7 @@ def _raster_support(a, b, normal, offset, pixels, width, height):
         x, y = p[0][0] + (p[1][0] - p[0][0]) * t, p[0][1] + (p[1][1] - p[0][1]) * t
         values = []
         for distance in (0, -3, 3):
-            px, py = round(x + normal[0] * distance), round(y + normal[1] * distance)
+            px, py = round(x + normal[0] * distance) - ox, round(y + normal[1] * distance) - oy
             values.append(pixels[px, py] if 0 <= px < width and 0 <= py < height else 255)
         # Contrast on at least one side supports roof edges beside shaded roofs.
         # A uniform dark fill does not qualify as a drawn boundary.
@@ -304,7 +334,7 @@ def _dominant_direction(points):
     return math.atan2(cy, cx) / 4 if math.hypot(cx, cy) / total >= .9 else None
 
 
-def _raster_candidates(a, b, pixels, width, height, max_shift, dominant):
+def _raster_candidates(a, b, raster, max_shift, dominant):
     direction, normal, offset = _line(a, b)
     orientations = [normal]
     if dominant is not None:
@@ -321,7 +351,7 @@ def _raster_candidates(a, b, pixels, width, height, max_shift, dominant):
             displacement = max(abs(candidate_normal[0] * p[0] + candidate_normal[1] * p[1] - candidate_offset) for p in (a, b))
             if displacement > max_shift:
                 continue
-            support = _raster_support(a, b, candidate_normal, candidate_offset, pixels, width, height)
+            support = _raster_support(a, b, candidate_normal, candidate_offset, raster)
             if support >= .55:
                 result.append({"normal": candidate_normal, "offset": candidate_offset, "support": support,
                                "source": "raster", "displacement": displacement,
@@ -329,7 +359,7 @@ def _raster_candidates(a, b, pixels, width, height, max_shift, dominant):
     return result
 
 
-def _fit_ring(points, segments, pixels, width, height, bounds):
+def _fit_ring(points, segments, raster, bounds):
     left, top, right, bottom = bounds
     max_shift = _max_shift(bounds)
     dominant = _dominant_direction(points)
@@ -338,7 +368,7 @@ def _fit_ring(points, segments, pixels, width, height, bounds):
         _, normal, offset = _line(a, b)
         candidates = _vector_candidates(a, b, segments, max_shift)
         if not candidates:
-            candidates = _raster_candidates(a, b, pixels, width, height, max_shift, dominant)
+            candidates = _raster_candidates(a, b, raster, max_shift, dominant)
         candidates.sort(key=lambda candidate: (-candidate["score"], candidate["displacement"], candidate["offset"]))
         chosen = candidates[0] if candidates else None
         ambiguous = False
@@ -360,7 +390,7 @@ def _fit_ring(points, segments, pixels, width, height, bounds):
                 warnings.append("unsupported_boundary_segments")
         else:
             lines.append((normal, offset))
-            support = _raster_support(a, b, normal, offset, pixels, width, height)
+            support = _raster_support(a, b, normal, offset, raster)
             evidence.append({"index": index, "support": round(support, 4),
                              "source": "raster" if support >= .55 else "unsupported", "ambiguous": ambiguous})
             warnings.append("ambiguous_parallel_edges" if ambiguous else "unsupported_boundary_segments")
@@ -381,7 +411,7 @@ def _fit_ring(points, segments, pixels, width, height, bounds):
         warnings.append("fitting_rejected")
         for edge, a, b in zip(evidence, points, points[1:] + points[:1]):
             _, n, c = _line(a, b)
-            edge["support"] = round(_raster_support(a, b, n, c, pixels, width, height), 4)
+            edge["support"] = round(_raster_support(a, b, n, c, raster), 4)
             edge["source"] = "raster" if edge["support"] >= .55 else "unsupported"
     for a, b in zip(fitted, fitted[1:] + fitted[:1]):
         if any(abs(a[axis] - value) < .5 and abs(b[axis] - value) < .5
@@ -400,15 +430,18 @@ def _serialize(points, bounds):
 
 
 def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
-                            polygons: list[list[dict]], vector_segments: list[dict] | None = None) -> dict:
+                            polygons: list[list[dict]], vector_segments: list[dict] | None = None, *,
+                            source: SourceRaster | None = None, cleanup: str = "none") -> dict:
     """Map crop-normalized proposals to the source page and conservatively fit.
 
     No proposal is returned for an ROI that excludes any part of the proposed
     scope. Invalid rings, nested rings (holes) and touching components are errors.
     Evidence scores measure line support, not semantic or construction confidence.
+    `source` reuses the pixels decoded by prepare_outline_crop for the same ROI.
+    `cleanup="shapely"` first repairs invalid rings, clips ROI overshoot within the
+    snapping radius and removes thinner spikes/slots (see outline_cleanup).
     """
-    rgb = _rgb(original)
-    width, height = rgb.size
+    width, height = source.page_size if source is not None else _page_size(original)
     bounds = _bounds(box, width, height)
     if not isinstance(polygons, list) or len(polygons) > MAX_POLYGONS:
         raise RoiError("invalid_outline_geometry", 502)
@@ -418,7 +451,9 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
     x0, y0, cw, ch = [_number(crop[name]) for name in required]
     if cw <= 0 or ch <= 0 or x0 < 0 or y0 < 0 or x0 + cw > width or y0 + ch > height:
         raise RoiError("invalid_outline_geometry", 502)
-    rings = []
+    if cleanup not in {"none", "shapely"}:
+        raise ValueError("invalid_outline_cleanup")
+    rings, cleanup_warnings = [], set()
     for polygon in polygons:
         if not isinstance(polygon, list) or not 3 <= len(polygon) <= MAX_POINTS:
             raise RoiError("invalid_outline_geometry", 502)
@@ -434,10 +469,20 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
                 ring.append(mapped)
         if len(ring) > 1 and _distance(ring[0], ring[-1]) <= EPS:
             ring.pop()
-        if not _valid_ring(ring):
-            raise RoiError("invalid_outline_geometry", 502)
-        rings.append(_simplify(ring))
-    if not _disjoint(rings):
+        if cleanup == "shapely":
+            from .outline_cleanup import clean_ring
+
+            parts, notes = clean_ring(ring, bounds=bounds, snap=_max_shift(bounds))
+            cleanup_warnings |= notes
+            if not parts:
+                raise RoiError("invalid_outline_geometry", 502)
+        else:
+            parts = [ring]
+        for part in parts:
+            if not _valid_ring(part):
+                raise RoiError("invalid_outline_geometry", 502)
+            rings.append(_simplify(part))
+    if len(rings) > MAX_POLYGONS or not _disjoint(rings):
         raise RoiError("invalid_outline_geometry", 502)
     left, top, right, bottom = bounds
     if any(not left - EPS <= x <= right + EPS or not top - EPS <= y <= bottom + EPS for ring in rings for x, y in ring):
@@ -459,13 +504,17 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
             endpoints.append((x, y))
         if _distance(*endpoints) > .1:
             segments.append(endpoints)
-    gray = rgb.convert("L")
-    pixels = gray.load()
+    region = _raster_region(bounds, width, height)
+    if source is None or not (source.origin[0] <= region[0] and source.origin[1] <= region[1]
+                              and source.origin[0] + source.gray.width >= region[2]
+                              and source.origin[1] + source.gray.height >= region[3]):
+        source = SourceRaster(_rgb(original, region).convert("L"), region[:2], (width, height))
+    raster = (source.gray.load(), source.origin, source.gray.width, source.gray.height)
     tolerance = 2 * _max_shift(bounds)
     cleaned = [_collapse_corner_steps(ring, tolerance, bounds) for ring in rings]
     if not _disjoint(cleaned):
         cleaned = rings
-    fitted = [_fit_ring(ring, segments, pixels, width, height, bounds) for ring in cleaned]
+    fitted = [_fit_ring(ring, segments, raster, bounds) for ring in cleaned]
     if not _disjoint([item[0] for item in fitted]):
         # Do not merge separate roofs as a side effect of source snapping.
         fitted = [(ring, [{"index": index, "support": 0., "source": "unsupported", "ambiguous": True}
@@ -474,6 +523,8 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
     for (_, _, warnings), ring, original in zip(fitted, cleaned, rings):
         if len(ring) != len(original):
             warnings[:] = sorted({*warnings, "corner_steps_straightened"})
+        if cleanup_warnings:
+            warnings[:] = sorted({*warnings, *cleanup_warnings})
     proposals = [{"points": _serialize(points, bounds), "proposed_points": _serialize(original_points, bounds),
                   "edges": edges, "warnings": warnings}
                  for original_points, (points, edges, warnings) in zip(rings, fitted)]

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from .contracts import TASKS, ReferenceError
 from .evaluation import audit_manifest, check_fixtures, evaluate, load_manifest
+from .outline_benchmark import capture, markdown, review_sheets, score
 from .runner import INPUT_VARIANTS, ROOT, read_bounded_json, run_reference
 
 
@@ -37,10 +38,38 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--allow-live", action="store_true")
     run.add_argument("--max-calls", type=int, default=0)
     run.add_argument("--max-output-tokens", type=int, default=4096)
+    outline_capture = commands.add_parser(
+        "outline-capture", help="Capture model outlines for the outline manifest (billable; explicit cap required)")
+    outline_capture.add_argument("--case", action="append", dest="cases")
+    outline_capture.add_argument("--runs", type=int, default=1)
+    outline_capture.add_argument("--allow-live", action="store_true")
+    outline_capture.add_argument("--max-calls", type=int, default=0)
+    outline_capture.add_argument("--env-file", type=Path)
+    outline_score = commands.add_parser("outline-score", help="Score geometry variants on captured outlines; never calls a provider")
+    outline_score.add_argument("--variant", action="append", dest="variants")
+    outline_score.add_argument("--since", help="Only captures at or after this ISO timestamp")
+    outline_score.add_argument("--output", type=Path, help="Also write the JSON report here")
+    outline_score.add_argument("--markdown", action="store_true", help="Print a Markdown table instead of JSON")
+    outline_review = commands.add_parser("outline-review", help="Render reference review sheets; never calls a provider")
+    outline_review.add_argument("--case", action="append", dest="cases")
+    outline_review.add_argument("--output", type=Path, help="Directory for the sheets (default: private/outline/review)")
     arguments = parser.parse_args(argv)
     logging.disable(logging.CRITICAL)
     try:
-        if arguments.command == "fixtures":
+        if arguments.command == "outline-review":
+            result = review_sheets(arguments.cases, output=arguments.output)
+        elif arguments.command == "outline-capture":
+            result = capture(arguments.cases, arguments.runs, allow_live=arguments.allow_live,
+                             max_calls=arguments.max_calls, env_file=arguments.env_file)
+        elif arguments.command == "outline-score":
+            report = score(arguments.variants, since=arguments.since)
+            if arguments.output:
+                arguments.output.write_text(json.dumps(report, indent=2, allow_nan=False), encoding="utf-8")
+            if arguments.markdown:
+                print(markdown(report))
+                return 0
+            result = report
+        elif arguments.command == "fixtures":
             result = check_fixtures(arguments.path)
         elif arguments.command == "audit":
             result = audit_manifest(load_manifest(arguments.manifest), arguments.manifest.parent)

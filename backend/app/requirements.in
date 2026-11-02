@@ -6,3 +6,4 @@ pydantic==2.13.5
 pillow==12.3.0
 httpx==0.28.1
 python-dotenv==1.2.3
+shapely==2.2.0

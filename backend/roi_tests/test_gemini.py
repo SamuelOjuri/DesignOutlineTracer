@@ -30,7 +30,7 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(schema["items"]["required"]), {"label", "box_2d", "roi_id", "subtype"})
 
     async def make_call(self, payload=None, status=200, structured=False, max_bytes=262144, chunks=None,
-                        model="gemini-4-argon", thinking_level="medium", temperature=0.5):
+                        model="gemini-4-argon", thinking_level="medium", temperature=0.5, json_mode=True):
         captured = []
 
         def respond(request):
@@ -45,7 +45,7 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
             async_client_args={"transport": httpx.MockTransport(respond)},
         ))
         provider = GeminiProvider(Settings(allow_live=True, api_key="synthetic-not-a-real-key",
-                                          structured_output=structured, max_response_bytes=max_bytes,
+                                          structured_output=structured, max_response_bytes=max_bytes, json_mode=json_mode,
                                           model=model, thinking_level=thinking_level, temperature=temperature), client)
         try:
             result = await provider.generate(b"synthetic-image", make_prompt("roof_roi", [], 25),
@@ -88,6 +88,17 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
                         self.assertEqual(config["temperature"], 0.5)
                         self.assertNotIn("thinkingConfig", config)
                     self.assertEqual("responseJsonSchema" in config, structured)
+
+    async def test_json_mode_requests_json_without_a_schema_and_can_be_disabled(self):
+        payload = {"candidates": [{"content": {"parts": [{"text": "[]"}]}, "finishReason": "STOP"}]}
+        self.assertTrue(Settings().json_mode)
+        for json_mode, structured, mime in ((True, False, "application/json"), (False, False, None),
+                                            (False, True, "application/json")):
+            with self.subTest(json_mode=json_mode, structured=structured):
+                _, captured = await self.make_call(payload, structured=structured, json_mode=json_mode)
+                config = json.loads(captured[0].content)["generationConfig"]
+                self.assertEqual(config.get("responseMimeType"), mime)
+                self.assertEqual("responseJsonSchema" in config, structured)
 
     async def test_model_specific_generation_overrides_reach_the_provider(self):
         payload = {"candidates": [{"content": {"parts": [{"text": "[]"}]}, "finishReason": "STOP"}]}

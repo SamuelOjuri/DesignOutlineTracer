@@ -107,6 +107,14 @@ part list. The shared parser now removes up to eight leading non-ASCII,
 non-whitespace characters directly before the JSON and unwraps that exact
 part list. This applies to ROI, outline and outlet responses.
 
+A 26-reply outline benchmark on 2026-11-02 showed that the remaining free-form
+failures are leaked reasoning text with no JSON, which cannot be recovered.
+JSON mode (`ROI_JSON_MODE=true`, now the default) removed these: 13/13 replies
+parsed, against 9/13 free-form. Its only noise was a `💭` line followed by a few
+non-ASCII tokens, so the leading-noise rule now accepts up to three such
+groups separated by short whitespace. See
+[outline-benchmark.md](roi-evaluation/outline-benchmark.md).
+
 A live outlet run on the same drawing returned the key `" label"` (leading
 space), followed by the same `"label"` member. Outlets reject unknown fields,
 so the whole response was rejected as `outlet_fields` even though the inlet was

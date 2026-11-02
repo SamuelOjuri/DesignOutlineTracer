@@ -29,10 +29,11 @@ def vectors(points):
 
 
 class OutlineGeometryTests(unittest.TestCase):
-    def refine(self, rings, *, image=None, box=(0, 0, 1000, 1000), segments=None):
+    def refine(self, rings, *, image=None, box=(0, 0, 1000, 1000), segments=None, cleanup="none"):
         image = image or drawing()
         crop = prepare_outline_crop(image, box)
-        return refine_outline_polygons(image, box, crop.crop, [normalized(ring, crop.crop) for ring in rings], segments)
+        return refine_outline_polygons(image, box, crop.crop, [normalized(ring, crop.crop) for ring in rings], segments,
+                                       cleanup=cleanup)
 
     def assert_points(self, actual, expected, places=5):
         self.assertEqual(len(actual), len(expected))
@@ -103,6 +104,54 @@ class OutlineGeometryTests(unittest.TestCase):
                 proposal = result["proposals"][0]
                 self.assert_points(proposal["points"], ring)
                 self.assertNotIn("corner_steps_straightened", proposal["warnings"])
+
+    def test_shapely_cleanup_repairs_back_tracking_ring_that_would_otherwise_fail(self):
+        rectangle = [(50, 50), (350, 50), (350, 250), (50, 250)]
+        # Captured live: the closing edge doubles back over the first edge.
+        ring = [(60, 50), (350, 50), (350, 250), (50, 250), (50, 50), (80, 50)]
+        with self.assertRaises(RoiError):
+            self.refine([ring], image=drawing(rings=[rectangle]), segments=vectors(rectangle))
+        proposal = self.refine([ring], image=drawing(rings=[rectangle]), segments=vectors(rectangle),
+                               cleanup="shapely")["proposals"][0]
+        self.assertEqual({(round(p["x"]), round(p["y"])) for p in proposal["points"]}, set(rectangle))
+        self.assertIn("outline_repaired", proposal["warnings"])
+
+    def test_shapely_cleanup_clips_overshoot_only_within_the_snapping_radius(self):
+        box = (100, 100, 900, 900)  # bounds x 40-360, y 30-270; snapping radius 3.2 px
+        rectangle = [(50, 40), (360, 40), (360, 260), (50, 260)]
+        image = drawing(rings=[rectangle])
+        slight = [(50, 40), (363, 40), (363, 260), (50, 260)]
+        self.assertEqual(self.refine([slight], image=image, box=box)["status"], "roi_too_tight")
+        proposal = self.refine([slight], image=image, box=box, segments=vectors(rectangle), cleanup="shapely")["proposals"][0]
+        self.assertEqual(max(point["x"] for point in proposal["points"]), 360)
+        self.assertIn("clipped_to_roi", proposal["warnings"])
+        far = [(50, 40), (366, 40), (366, 260), (50, 260)]
+        self.assertEqual(self.refine([far], image=image, box=box, cleanup="shapely")["status"], "roi_too_tight")
+
+    def test_shapely_cleanup_removes_thin_spikes_and_leaves_clean_rings_unchanged(self):
+        rectangle = [(50, 50), (350, 50), (350, 250), (50, 250)]
+        spiked = [(50, 50), (200, 50), (200, 10), (202, 10), (202, 50), (350, 50), (350, 250), (50, 250)]
+        image = drawing(rings=[rectangle])
+        self.assertEqual(len(self.refine([spiked], image=image, segments=vectors(rectangle))["proposals"][0]["points"]), 8)
+        proposal = self.refine([spiked], image=image, segments=vectors(rectangle), cleanup="shapely")["proposals"][0]
+        points = [(point["x"], point["y"]) for point in proposal["points"]]
+        self.assertEqual({(round(x), round(y)) for x, y in points}, set(rectangle))
+        signed = lambda ring: sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:] + ring[:1]))
+        self.assertGreater(signed(points) * signed(spiked), 0)
+        self.assertIn("thin_features_removed", proposal["warnings"])
+        stepped = [(40, 170), (120, 170), (120, 70), (200, 70), (200, 100), (340, 100),
+                   (340, 220), (160, 220), (160, 270), (80, 270), (80, 190), (40, 190)]
+        plain = self.refine([stepped], image=drawing(rings=[stepped]), segments=vectors(stepped))
+        cleaned = self.refine([stepped], image=drawing(rings=[stepped]), segments=vectors(stepped), cleanup="shapely")
+        self.assertEqual(plain, cleaned)
+
+    def test_prepared_source_pixels_match_decoding_the_page(self):
+        ring = [(50, 50), (300, 50), (300, 220), (50, 220)]
+        image = drawing(rings=[ring])
+        prepared = prepare_outline_crop(image, (0, 0, 1000, 1000))
+        proposed = [normalized([(x + 2, y + 2) for x, y in ring], prepared.crop)]
+        self.assertEqual(refine_outline_polygons(image, (0, 0, 1000, 1000), prepared.crop, proposed),
+                         refine_outline_polygons(image, (0, 0, 1000, 1000), prepared.crop, proposed, source=prepared.source))
 
     def test_diagonal_rotated_roof_retains_its_directions(self):
         angle = math.radians(23)

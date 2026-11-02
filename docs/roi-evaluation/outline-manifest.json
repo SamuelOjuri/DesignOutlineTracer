@@ -1,0 +1,347 @@
+{
+  "schema_version": "outline-evaluation-v1",
+  "policy_status": "draft",
+  "render": {
+    "scale": 2,
+    "raster": "pdfium page render (the app uses PDF.js; anti-aliasing differs slightly)",
+    "vectors": "scripts/extract-pdf-vectors.ts (the app's own extractor)"
+  },
+  "cases": [
+    {
+      "id": "251004-terrace",
+      "document": "docs/251004 WD03 C7.pdf",
+      "source_sha256": "f0685959462376e7766adf9aad40845688e586be44338bab4818ae294a5afef7",
+      "page_index": 0,
+      "split": "development",
+      "tags": [
+        "l_shaped",
+        "parallel_faces",
+        "interior_dimension_lines",
+        "green_roof"
+      ],
+      "roi_box": [
+        355,
+        70,
+        741,
+        357
+      ],
+      "boundary_policy": "inner_parapet",
+      "status": "awaiting_review",
+      "review": null,
+      "reference": {
+        "polygons": [
+          [
+            [
+              1371.12,
+              1241.84
+            ],
+            [
+              1656.0,
+              1241.84
+            ],
+            [
+              1656.0,
+              2448.08
+            ],
+            [
+              385.92,
+              2448.08
+            ],
+            [
+              385.92,
+              1713.92
+            ],
+            [
+              1371.12,
+              1713.92
+            ]
+          ]
+        ],
+        "edges": [
+          {
+            "kind": "H",
+            "approximate": 1240.0,
+            "chosen": 1241.84,
+            "source": "override"
+          },
+          {
+            "kind": "V",
+            "approximate": 1660.0,
+            "chosen": 1656.0,
+            "source": "vector"
+          },
+          {
+            "kind": "H",
+            "approximate": 2440.0,
+            "chosen": 2448.08,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 381.0,
+            "chosen": 385.92,
+            "source": "vector"
+          },
+          {
+            "kind": "H",
+            "approximate": 1714.0,
+            "chosen": 1713.92,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 1372.0,
+            "chosen": 1371.12,
+            "source": "vector"
+          }
+        ],
+        "method": "Approximate L-shape (terrace + ASHP area, as consistently proposed by the model and accepted in the app) snapped with snap_reference(search=16, overpaint=8, min_coverage=0.5) to PDF.js vector lines; ASHP top edge overridden to y=1241.84.",
+        "notes": "Scope includes the green roof. Edges follow the inner line of the roof-edge upstand pair. The nested inner pair (x~1640/1646, y~1246/1252, y~2149/2155, x~396/401) bounds the paved terrace/balustrade zone, not the insulation scope, hence the ASHP-top override. The 5.5 px step in the top face at x 386-453 (y 1719.4 vs 1713.9) is simplified to y=1713.92."
+      }
+    },
+    {
+      "id": "tp17221-roof",
+      "document": "docs/TP17221_25.01_input.pdf",
+      "source_sha256": "e069b96aa12e4627b18b47c9a3480ecd5c7310de46a008ccc0b016a6826547ef",
+      "page_index": 0,
+      "split": "development",
+      "tags": [
+        "stepped",
+        "nonrectangular",
+        "fill_boundaries",
+        "hip_roof_abutment"
+      ],
+      "roi_box": [
+        478,
+        156,
+        797,
+        699
+      ],
+      "boundary_policy": "inner_parapet",
+      "status": "awaiting_review",
+      "review": null,
+      "reference": {
+        "polygons": [
+          [
+            [
+              816.96,
+              2088.08
+            ],
+            [
+              1470.5,
+              2088.08
+            ],
+            [
+              1470.5,
+              1624.4
+            ],
+            [
+              2233.5,
+              1624.4
+            ],
+            [
+              2233.5,
+              1773.2
+            ],
+            [
+              3240.72,
+              1773.2
+            ],
+            [
+              3240.72,
+              2351.12
+            ],
+            [
+              1788.96,
+              2351.12
+            ],
+            [
+              1788.96,
+              2618.96
+            ],
+            [
+              1115.4,
+              2618.96
+            ],
+            [
+              1115.4,
+              2223.44
+            ],
+            [
+              816.96,
+              2223.44
+            ]
+          ]
+        ],
+        "edges": [
+          {
+            "kind": "H",
+            "approximate": 2089.92,
+            "chosen": 2088.08,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 1486.56,
+            "chosen": 1470.5,
+            "source": "raster"
+          },
+          {
+            "kind": "H",
+            "approximate": 1630.08,
+            "chosen": 1624.4,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 2232.0,
+            "chosen": 2233.5,
+            "source": "raster"
+          },
+          {
+            "kind": "H",
+            "approximate": 1775.04,
+            "chosen": 1773.2,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 3237.12,
+            "chosen": 3240.72,
+            "source": "vector_merged_step"
+          },
+          {
+            "kind": "H",
+            "approximate": 2349.12,
+            "chosen": 2351.12,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 1785.6,
+            "chosen": 1788.96,
+            "source": "vector"
+          },
+          {
+            "kind": "H",
+            "approximate": 2616.0,
+            "chosen": 2618.96,
+            "source": "vector"
+          },
+          {
+            "kind": "V",
+            "approximate": 1107.84,
+            "chosen": 1115.4,
+            "source": "vector_merged_step"
+          },
+          {
+            "kind": "H",
+            "approximate": 2219.52,
+            "chosen": 2223.44,
+            "source": "vector_merged_step"
+          },
+          {
+            "kind": "V",
+            "approximate": 817.92,
+            "chosen": 816.96,
+            "source": "vector"
+          }
+        ],
+        "method": "docs/validation/TP17221_2501_mask.jpg (cyan HSV 86-106/35-130/180-255, scaled 2/(150/72)) cleaned of features < 12 px, then snap_reference(search=16, overpaint=3, min_coverage=0.5) with raster fallback for unstroked edges.",
+        "notes": "Mask jogs at outlets (rwp.1-3, 5) are paint bleed: the same drawn line continues across them, so they were merged. Two edges against filled existing-roof areas and the hip-roof abutment have no stroked line and use the raster boundary. ROI is the observed roof-roi-v3 box widened by 4/1000 at the top so it does not clip the reference."
+      }
+    },
+    {
+      "id": "tp17202-north",
+      "document": "docs/TP17202_25.01_input.pdf",
+      "source_sha256": "24d0686db2f06b33776292370cd29a37a7a42a6e9ffa1e69410ede2cd64ad071",
+      "page_index": 0,
+      "split": "development",
+      "tags": [
+        "multiple_disconnected",
+        "small_roof",
+        "rotated_slightly",
+        "wall_abutment"
+      ],
+      "roi_box": [
+        324,
+        232,
+        444,
+        281
+      ],
+      "boundary_policy": "inner_parapet",
+      "status": "awaiting_review",
+      "review": null,
+      "reference": {
+        "polygons": [
+          [
+            [
+              565.68,
+              558.72
+            ],
+            [
+              650.38,
+              559.53
+            ],
+            [
+              649.66,
+              737.07
+            ],
+            [
+              564.96,
+              736.56
+            ]
+          ]
+        ],
+        "method": "Inner left/top/bottom faces from PDF.js vector lines; width 1494 mm from the drawing's own dimension and docs/validation/TP17202_25.01_outline-validation.jpg, at 1:100 (verified: inner height 177.84 px = 3136 mm).",
+        "notes": "The right side abuts the adjacent building wall, which is skewed and partly undrawn; the dimensioned width defines it."
+      }
+    },
+    {
+      "id": "tp17202-south",
+      "document": "docs/TP17202_25.01_input.pdf",
+      "source_sha256": "24d0686db2f06b33776292370cd29a37a7a42a6e9ffa1e69410ede2cd64ad071",
+      "page_index": 0,
+      "split": "development",
+      "tags": [
+        "multiple_disconnected",
+        "small_roof",
+        "rotated_slightly",
+        "wall_abutment"
+      ],
+      "roi_box": [
+        532,
+        230,
+        653,
+        281
+      ],
+      "boundary_policy": "inner_parapet",
+      "status": "awaiting_review",
+      "review": null,
+      "reference": {
+        "polygons": [
+          [
+            [
+              562.32,
+              909.12
+            ],
+            [
+              651.27,
+              909.93
+            ],
+            [
+              650.55,
+              1087.47
+            ],
+            [
+              561.6,
+              1086.96
+            ]
+          ]
+        ],
+        "method": "Inner left/top/bottom faces from PDF.js vector lines; width 1569 mm from the drawing's own dimension and the outline-validation layout, at 1:100.",
+        "notes": "As tp17202-north."
+      }
+    }
+  ]
+}

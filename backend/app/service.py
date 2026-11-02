@@ -139,6 +139,7 @@ class RoiService:
     def inference_settings(self, page: PageRecord) -> dict:
         return {**self.settings.generation_settings, "max_image_side": 1024,
                 "structured_output": self.settings.structured_output,
+                "json_mode": self.settings.json_mode,
                 "automatic_function_calling": False, "api_version": "v1beta",
                 "max_annotations": self.settings.max_annotations, "preparation_version": PREPARATION_VERSION,
                 "inference_image_hash": sha256(page.image.png).hexdigest(),

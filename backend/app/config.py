@@ -16,6 +16,12 @@ class Settings(BaseModel):
     allow_live: bool = False
     api_key: SecretStr | None = Field(default=None, exclude=True)
     structured_output: bool = False
+    # "shapely" repairs model outlines and removes sub-snapping-radius artefacts before fitting.
+    # Benchmarked: 2 extra usable outlines, identical results elsewhere (docs/roi-evaluation/outline-benchmark.md).
+    outline_cleanup: Literal["none", "shapely"] = "shapely"
+    # Constrain the reply to JSON without sending a schema (gemini-4-argon rejects response
+    # schemas). Measured on outlines: 13/13 parsed vs 9/13 free-form (docs/roi-evaluation/outline-benchmark.md).
+    json_mode: bool = True
     allowed_origins: tuple[str, ...] = ("http://127.0.0.1:8080", "http://localhost:8080")
     max_upload_bytes: Annotated[int, Field(gt=0, le=40 * 1024 * 1024)] = 20 * 1024 * 1024
     max_decoded_pixels: Annotated[int, Field(gt=0, le=80_000_000)] = 40_000_000

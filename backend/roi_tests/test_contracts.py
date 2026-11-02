@@ -85,11 +85,13 @@ class ContractTests(unittest.TestCase):
     def test_observed_envelope_noise_is_recovered_without_accepting_prose(self):
         record = '[{"label":"Roof","box_2d":[1.25,2.5,300,400]}]'
         for text in ("\u5bc6\u7684" + record, "\u9cbb" + record, "\u5bc6\u7684```json\n" + record + "\n```",
+                     "\u5bc6 " + record, "\U0001f4ad\n" + record, "\U0001f4ad\n\u0bc8\u0baf\u0bbe\u0ba9" + record,
                      json.dumps([{"think": ""}, {"text": record}]),
                      json.dumps([{"think": "reasoning"}, {"text": "\u5bc6" + record}])):
             with self.subTest(text=text):
                 self.assertEqual(parse_proposals(text, "roof_roi", set(), 1024, 25)[0].box_2d, (1.25, 2.5, 300, 400))
-        for text in ("note" + record, "\u5bc6 " + record, "\u5bc6" * 9 + record, record + "\u5bc6",
+        for text in ("note" + record, "\u5bc6 note " + record, "\u5bc6" * 9 + record, "\u5bc6 \u5bc6 \u5bc6 \u5bc6 " + record,
+                     "\U0001f4adThe crop shows " + record, record + "\u5bc6",
                      json.dumps([{"text": record}, {"label": "x"}]), json.dumps([{"text": record, "think": ""}]),
                      json.dumps([{"think": ""}]), json.dumps([{"text": "prose " + record}])):
             with self.subTest(text=text), self.assertRaises(RoiError):

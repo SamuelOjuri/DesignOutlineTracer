@@ -59,9 +59,10 @@ def validation_detail(error: ValidationError) -> str:
 
 
 FENCE = re.compile(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", re.IGNORECASE | re.DOTALL)
-# Gemini intermittently emits a few stray non-ASCII tokens (e.g. "密的") glued to the
-# JSON. Only such a short, whitespace-free run is dropped; prose is still rejected.
-LEADING_NOISE = re.compile(r"[^\x00-\x7f\s]{1,8}(?=[\[{`])")
+# Gemini intermittently emits stray non-ASCII tokens before the JSON, e.g. "密的{" or, in JSON
+# mode, a thought marker such as "💭\nையான{". At most three short non-ASCII tokens separated
+# only by whitespace are dropped; any ASCII word (prose, leaked reasoning) is still rejected.
+LEADING_NOISE = re.compile(r"[^\x00-\x7f\s]{1,8}(?:\s{1,2}[^\x00-\x7f\s]{1,8}){0,2}\s{0,2}(?=[\[{`])")
 
 
 def _payload(text: str) -> str:

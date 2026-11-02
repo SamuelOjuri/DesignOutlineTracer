@@ -65,6 +65,9 @@ class ProviderTests(unittest.TestCase):
                     generate(client, request_for_test(), b"image")
 
     def test_reference_code_has_no_app_or_colab_imports(self):
+        # The outline benchmark deliberately measures the app's own outline pipeline;
+        # every other reference module stays independent of backend.app.
+        measures_app = {"outline_benchmark.py", "outline_side_aware.py"}
         for path in ROOT.glob("*.py"):
             for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
                 modules = []
@@ -73,4 +76,6 @@ class ProviderTests(unittest.TestCase):
                 elif isinstance(node, ast.ImportFrom):
                     modules = [node.module or ""]
                 for module in modules:
-                    self.assertFalse(module == "app" or module.startswith(("app.", "backend.app", "google.colab")), Path(path).name)
+                    self.assertFalse(module.startswith("google.colab"), Path(path).name)
+                    if Path(path).name not in measures_app:
+                        self.assertFalse(module == "app" or module.startswith(("app.", "backend.app")), Path(path).name)

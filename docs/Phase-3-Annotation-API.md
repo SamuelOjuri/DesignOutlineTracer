@@ -20,12 +20,18 @@ New Build/Refurbishment editors and the email payload are unchanged.
   Penetration/outlet prompts are explicitly draft policy, not verified detectors.
 - `ROI_STRUCTURED_OUTPUT=false` is the compatibility default. Exact JSON or a
   single JSON code fence is strictly parsed and Pydantic-validated. The only
-  tolerated envelope noise is what Gemini was observed to emit: up to eight
-  stray non-ASCII, non-whitespace characters glued to the start of the JSON,
-  and a leaked `[{"think": ...}, {"text": "<json>"}]` part list. Prose is still
-  rejected. `gemini-4-argon` returned HTTP 400 when the JSON schema option was
-  enabled (2026-11-01). Enable the
+  tolerated envelope noise is what Gemini was observed to emit. First, up to
+  three groups of at most eight stray non-ASCII, non-whitespace characters,
+  separated by short whitespace, directly before the JSON (for example `密的{`
+  or `💭\n…{`). Second, a leaked `[{"think": ...}, {"text": "<json>"}]` part
+  list. Prose is still rejected. `gemini-4-argon` returned HTTP 400 when the
+  JSON schema option was enabled (2026-11-01). Enable the
   SDK JSON schema option only after an authorized Phase 1 compatibility run.
+- `ROI_JSON_MODE=true` (default) sends `response_mime_type="application/json"`
+  without a schema, which `gemini-4-argon` accepts. Outline replies parsed
+  13/13 in JSON mode against 9/13 free-form; ROI and outlet checks parsed 2/2
+  each (see [outline-benchmark.md](roi-evaluation/outline-benchmark.md)). It
+  is ignored when `ROI_STRUCTURED_OUTPUT=true`.
   SDK mock transport tests prove serialization, not model support. Thinking
   settings are not sent; automatic function calling is disabled and no tools
   are supplied. Provider defaults may still include thinking.

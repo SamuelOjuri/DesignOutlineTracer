@@ -56,6 +56,15 @@ New Build screen; this feature does not add persistence.
 - Crop coordinates are mapped back to the source page. Invalid, intersecting,
   touching or nested components are rejected. Scope beyond the accepted ROI
   returns `roi_too_tight`, rather than silently clipping the roof.
+- With `ROI_OUTLINE_CLEANUP=shapely` (the default), each ring is first cleaned
+  with Shapely. Self-intersecting rings are repaired (`outline_repaired`).
+  Overshoot of the ROI by no more than the snapping radius is clipped
+  (`clipped_to_roi`); larger overshoot is still `roi_too_tight`. Spikes and
+  slots narrower than the snapping radius are removed (`thin_features_removed`).
+  On the outline benchmark this recovered 2 of 26 replies that were previously
+  rejected and changed nothing on the rest
+  ([outline-benchmark.md](roi-evaluation/outline-benchmark.md)).
+  `proposed_points` are then the cleaned rings.
 - Before fitting, a chamfer or Z-jog of one or two short edges at a corner is
   replaced by the meeting point of the two long edges either side. "Short" means
   under twice the snapping radius, which is 24 px at most. The model sometimes
@@ -75,6 +84,10 @@ New Build screen; this feature does not add persistence.
 - No mask dilation, convex hull, blanket orthogonalisation or inferred rooflight
   holes are applied. Evidence scores measure line support, not calibrated model
   confidence or construction accuracy.
+- The page image is decoded once per request. Fitting reads only the ROI region
+  plus a 24 px margin, which gives results identical to full-page conversion.
+  This reduced crop preparation from about 314 to 176 ms and fitting from 244 to
+  16 ms. The Gemini call (about 11–14 s) remains the main cost.
 
 The algorithm intentionally uses local, bounded fitting, not unrestricted CAD
 reconstruction. A proposal far from the true edge can remain approximate and
@@ -110,7 +123,11 @@ scope, preserves unrelated roofs/outlets, and removes drainage-edge assignments
 belonging to replaced outlines. The current editor, penetration processing,
 illustration and project form consume the resulting `PagePolygon` records.
 
-No new dependency or environment variable is required. Existing
+The backend lock now includes `shapely` (and `numpy`). Reinstall from
+`backend/app/requirements.lock` before restarting. `ROI_JSON_MODE` (default
+`true`) asks Gemini for a JSON-only reply without a schema. `ROI_OUTLINE_CLEANUP`
+(default `shapely`; `none` disables) controls the clean-up step above. Both are
+part of the cache key and the reported generation settings. Existing
 `VITE_ROI_ENABLED=true`, provider configuration and `ROI_ALLOW_LIVE` govern
 availability. Restart the backend to load the new endpoint/prompts; restart or
 rebuild the frontend to load these changes. Do not reset budgets merely to retry
@@ -142,3 +159,8 @@ excess scope, boundary-distance errors, retained returns/components and user
 correction time. Use agreed boundary conventions and verified scale before
 converting errors to physical units. Keep reference answers out of model inputs
 when measuring accuracy.
+
+[outline-benchmark.md](roi-evaluation/outline-benchmark.md) is the first step:
+draft references for four cases, a capped live-capture command, and offline
+scoring of geometry variants on the same captured replies. It also records an
+OpenCV "which side is the roof" experiment that is not in the live service.

@@ -106,6 +106,8 @@ class GeminiProvider:
         if self.settings.structured_output:
             config.response_mime_type = "application/json"
             config.response_json_schema = schema
+        elif self.settings.json_mode:
+            config.response_mime_type = "application/json"
         contents = [types.Part.from_text(text=prompt), types.Part.from_bytes(data=image, mime_type="image/png")]
         if context_image is not None:
             contents.extend([

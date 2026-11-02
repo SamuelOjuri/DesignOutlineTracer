@@ -2,3 +2,7 @@ google-genai==2.22.0
 Pillow==12.3.0
 httpx==0.28.1
 pydantic==2.13.5
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+shapely==2.2.0
+pypdfium2==5.14.0

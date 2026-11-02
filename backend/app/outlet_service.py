@@ -79,6 +79,7 @@ class OutletService:
         settings = {
             **service.settings.generation_settings,
             "structured_output": service.settings.structured_output,
+            "json_mode": service.settings.json_mode,
             "automatic_function_calling": False, "api_version": "v1beta",
             "max_image_side": 2048, "crop_padding_fraction": .06, "max_crops": MAX_CROPS,
             "max_attempts": service.settings.max_attempts,

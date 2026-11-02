@@ -31,6 +31,12 @@ No captured live response is being claimed as sanitized or independently verifie
 The audit intentionally exits **2 (blocked)** while sources, labels, or category
 approval are missing. Normal tests never load credentials or call a provider.
 
+The lock also pins `numpy`, `opencv-python-headless`, `shapely` and `pypdfium2`
+for the outline benchmark (`outline-capture`, `outline-score`,
+`outline-review`). See [outline-benchmark.md](outline-benchmark.md). That
+benchmark is the only reference module that imports `backend.app`, because it
+measures the app's own outline pipeline.
+
 ## Reference Inputs And Profiles
 
 The original `TP17202_25.01_input.jpg` was not found in the local reference
