@@ -15,11 +15,12 @@ from PIL import Image
 from .errors import RoiError
 
 
-ALGORITHM_VERSION = "source-supported-outline-v2"
+ALGORITHM_VERSION = "source-supported-outline-v3"
 MAX_POLYGONS = 8
 MAX_POINTS = 128
 EPS = 1e-7
-# Furthest raster read from the ROI: 12 px snapping radius + 3 px side samples + rounding.
+# Covers ordinary fitting (12 px + 3 px samples) and continuity side samples
+# (8 px from candidate boundaries, which must stay within the ROI).
 RASTER_MARGIN = 24
 
 
@@ -359,13 +360,197 @@ def _raster_candidates(a, b, raster, max_shift, dominant):
     return result
 
 
-def _fit_ring(points, segments, raster, bounds):
+def _side_contrast(a, b, normal, offset, raster, winding):
+    """Outside minus inside ink in strips beside a line, with winding-independent signs."""
+    pixels, (ox, oy), width, height = raster
+    inside = outside = count = 0
+    for index in range(96):
+        t = .1 + .8 * (index + .5) / 96  # Avoid corners and their perpendicular strokes.
+        x, y = a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+        shift = normal[0] * x + normal[1] * y - offset
+        x, y = x - normal[0] * shift, y - normal[1] * shift
+        for depth in range(2, 9):
+            values = []
+            for sign in (winding, -winding):
+                px, py = round(x + normal[0] * depth * sign) - ox, round(y + normal[1] * depth * sign) - oy
+                if not (0 <= px < width and 0 <= py < height):
+                    return None  # Missing pixels cannot establish which side is open roof.
+                values.append(pixels[px, py] < 190)
+            inside += values[0]
+            outside += values[1]
+            count += 1
+    return (outside - inside) / count
+
+
+def _point_to_ring_distance(point, ring):
+    distances = []
+    for a, b in zip(ring, ring[1:] + ring[:1]):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        t = min(1., max(0., ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / (dx * dx + dy * dy)))
+        distances.append(_distance(point, (a[0] + t * dx, a[1] + t * dy)))
+    return min(distances)
+
+
+def _within_continuity_limits(candidate, original, bounds):
+    """Check total changes, including fitting after a repair that changes vertex count."""
+    left, top, right, bottom = bounds
+    return (_valid_ring(candidate) and .96 <= _area(candidate) / _area(original) <= 1.04
+            and all(left - EPS <= x <= right + EPS and top - EPS <= y <= bottom + EPS for x, y in candidate)
+            and all(_point_to_ring_distance(point, ring) <= 3 * _max_shift(bounds)
+                    for points, ring in ((original, candidate), (candidate, original)) for point in points))
+
+
+def _anchored_corner(corner, neighbour, normal, offset, segments, snap):
+    """A drawn adjoining edge must meet the common line near the proposed corner.
+
+    Checking the finite segments at their intersection excludes a nearby dimension
+    line that merely parallels the perimeter without joining the roof corners.
+    """
+    tangent = (normal[1], -normal[0])
+    on_line = (normal[0] * offset, normal[1] * offset)
+    along = (on_line[0] + tangent[0], on_line[1] + tangent[1])
+    options = _vector_candidates(neighbour, corner, segments, snap)
+    for option in options:
+        if option["support"] < .7:
+            continue
+        n, c = option["normal"], option["offset"]
+        base = (n[0] * c, n[1] * c)
+        meet = _meet(on_line, along, base, (base[0] + n[1], base[1] - n[0]))
+        if meet is None or _distance(meet, corner) > snap:
+            continue
+        # Both finite lines must actually reach the intersection (allow antialias/roundoff gaps).
+        def reaches(line_normal, line_offset):
+            return any(abs(line_normal[0] * p[0] + line_normal[1] * p[1] - line_offset) < .5
+                       and abs(line_normal[0] * q[0] + line_normal[1] * q[1] - line_offset) < .5
+                       and _distance(p, meet) + _distance(meet, q) <= _distance(p, q) + 2
+                       for p, q in segments)
+        if reaches(normal, offset) and reaches(n, c):
+            return True
+    return False
+
+
+def _repair_boundary_steps(points, segments, raster, bounds, policy):
+    """Join a false face switch only with continuous, corner-anchored vector evidence.
+
+    Raster-only or semantically ambiguous junctions stay editable and are flagged.
+    The wider search is confined to this pattern; ordinary fitting keeps its radius.
+    """
+    snap = _max_shift(bounds)
+    original_area = _area(points)
+    winding = 1 if original_area > 0 else -1
+    result, repaired_lines = list(points), []
+    while True:
+        uncertain = set()
+        changed = False
+        size = len(result)
+        for index in range(size):
+            # A--B and C--D are the long runs; B--C is the possible face switch.
+            a, b, c, d = [result[(index + k) % size] for k in range(4)]
+            step = _distance(b, c)
+            if size < 6 or not .5 < step <= 2 * snap or min(_distance(a, b), _distance(c, d)) < 4 * step:
+                continue
+            direction, normal, _ = _line(a, b)
+            other, _, _ = _line(c, d)
+            if (sum(x * y for x, y in zip(direction, other)) < math.cos(math.radians(3))
+                    or abs(direction[0] * (c[0] - b[0]) + direction[1] * (c[1] - b[1])) > .15 * step):
+                continue
+            # A real connector, even slightly displaced from the model, is not tracing noise.
+            if (any(option["support"] >= .65 for option in _vector_candidates(b, c, segments, snap))
+                    or _raster_candidates(b, c, raster, min(2., snap), None)):
+                continue
+            affected = {index, (index + 1) % size, (index + 2) % size}
+            radius = min(3 * snap, step + snap)
+            before, after = result[index - 1], result[(index + 4) % size]
+            candidates = []
+            for option in _vector_candidates(a, b, segments, radius):
+                n, offset = option["normal"], option["offset"]
+                aligned = [segment for segment in segments if all(
+                    abs(n[0] * p[0] + n[1] * p[1] - offset) < .5 for p in segment)]
+                # Check each run separately: a long upper fragment must not hide an unsupported lower run.
+                if option["support"] < .9 or not any(
+                        other["support"] >= .9 for other in _vector_candidates(c, d, aligned, radius)):
+                    continue
+                base = (n[0] * offset, n[1] * offset)
+                end = (base[0] + n[1], base[1] - n[0])
+                start_corner, end_corner = _meet(before, a, base, end), _meet(d, after, base, end)
+                if start_corner is None or end_corner is None:
+                    continue
+                if (not _anchored_corner(start_corner, before, n, offset, segments, snap * 1.6)
+                        or not _anchored_corner(end_corner, after, n, offset, segments, snap * 1.6)):
+                    continue
+                # Keep the source line continuous across the junction, not just on both distant runs.
+                if not any(option["support"] >= .9 for option in
+                           _vector_candidates(start_corner, end_corner, aligned, .5)):
+                    continue
+                middle = ((b[0] + c[0]) / 2, (b[1] + c[1]) / 2)
+                shift = n[0] * middle[0] + n[1] * middle[1] - offset
+                middle = (middle[0] - n[0] * shift, middle[1] - n[1] * shift)
+                bridge = [(middle[0] + sign * 2 * snap * n[1], middle[1] - sign * 2 * snap * n[0])
+                          for sign in (-1, 1)]
+                if not any(option["support"] >= .9 for option in _vector_candidates(*bridge, aligned, .5)):
+                    continue
+                replacements = {index: start_corner, (index + 3) % size: end_corner}
+                removed = {(index + 1) % size, (index + 2) % size}
+                candidate = [replacements.get(i, point) for i, point in enumerate(result) if i not in removed]
+                displacement = max(_distance(a, start_corner), _distance(d, end_corner),
+                                   *(abs(n[0] * p[0] + n[1] * p[1] - offset) for p in (b, c)))
+                if displacement > radius or not _within_continuity_limits(candidate, points, bounds):
+                    continue
+                candidates.append({"points": candidate, "normal": n, "offset": offset,
+                                   "contrast": _side_contrast(start_corner, end_corner, n, offset, raster, winding)})
+            chosen = candidates[0] if len(candidates) == 1 else None
+            if len(candidates) == 2 and policy != "roof_deck":
+                # Only resolve a close pair of faces when the image also establishes the desired side.
+                first, second = candidates
+                separation = abs(first["offset"] - second["offset"])
+                if (2 < separation <= snap and all(item["contrast"] is not None for item in candidates)
+                        and sum(x * y for x, y in zip(first["normal"], second["normal"])) > .9999):
+                    sign = 1 if policy == "inner_parapet" else -1
+                    ranked = sorted(candidates, key=lambda item: sign * item["contrast"], reverse=True)
+                    # The selected face must agree with BOTH geometry and side contrast.
+                    geometric = max(candidates, key=lambda item: sign * winding * item["offset"])
+                    if (ranked[0] is geometric and sign * ranked[0]["contrast"] >= .08
+                            and sign * (ranked[0]["contrast"] - ranked[1]["contrast"]) >= .12):
+                        chosen = ranked[0]
+            if chosen is None:
+                uncertain |= affected
+                continue
+            result = chosen["points"]
+            repaired_lines.append((chosen["normal"], chosen["offset"]))
+            changed = True
+            break
+        if not changed:
+            break
+    fixed = {}
+    for index, (a, b) in enumerate(zip(result, result[1:] + result[:1])):
+        if index in uncertain or any(all(abs(n[0] * p[0] + n[1] * p[1] - offset) < .05 for p in (a, b))
+                                    for n, offset in repaired_lines):
+            fixed[index] = index in uncertain
+    warnings = (["boundary_steps_straightened"] if repaired_lines else [])
+    if uncertain:
+        warnings.append("boundary_continuity_ambiguous")
+    return result, fixed, warnings
+
+
+def _fit_ring(points, segments, raster, bounds, fixed_edges=None):
     left, top, right, bottom = bounds
     max_shift = _max_shift(bounds)
     dominant = _dominant_direction(points)
     lines, evidence, warnings = [], [], []
     for index, (a, b) in enumerate(zip(points, points[1:] + points[:1])):
         _, normal, offset = _line(a, b)
+        if fixed_edges is not None and index in fixed_edges:
+            # Preserve the continuity decision; ordinary edge fitting must not switch faces again.
+            candidates = _vector_candidates(a, b, segments, .05)
+            support = max((candidate["support"] for candidate in candidates), default=0.)
+            source = "vector"
+            if support < .55:
+                support = _raster_support(a, b, normal, offset, raster)
+                source = "raster" if support >= .55 else "unsupported"
+            lines.append((normal, offset))
+            evidence.append({"index": index, "support": round(support, 4), "source": source,
+                             "ambiguous": fixed_edges[index]})
+            continue
         candidates = _vector_candidates(a, b, segments, max_shift)
         if not candidates:
             candidates = _raster_candidates(a, b, raster, max_shift, dominant)
@@ -431,7 +616,8 @@ def _serialize(points, bounds):
 
 def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
                             polygons: list[list[dict]], vector_segments: list[dict] | None = None, *,
-                            source: SourceRaster | None = None, cleanup: str = "none") -> dict:
+                            source: SourceRaster | None = None, cleanup: str = "none",
+                            boundary_policy: str = "inner_parapet") -> dict:
     """Map crop-normalized proposals to the source page and conservatively fit.
 
     No proposal is returned for an ROI that excludes any part of the proposed
@@ -453,6 +639,8 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
         raise RoiError("invalid_outline_geometry", 502)
     if cleanup not in {"none", "shapely"}:
         raise ValueError("invalid_outline_cleanup")
+    if boundary_policy not in {"inner_parapet", "roof_deck", "outer_roof"}:
+        raise ValueError("invalid_boundary_policy")
     rings, cleanup_warnings = [], set()
     for polygon in polygons:
         if not isinstance(polygon, list) or not 3 <= len(polygon) <= MAX_POINTS:
@@ -514,13 +702,24 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
     cleaned = [_collapse_corner_steps(ring, tolerance, bounds) for ring in rings]
     if not _disjoint(cleaned):
         cleaned = rings
-    fitted = [_fit_ring(ring, segments, raster, bounds) for ring in cleaned]
+    continuous = [_repair_boundary_steps(ring, segments, raster, bounds, boundary_policy) for ring in cleaned]
+    if not _disjoint([item[0] for item in continuous]):
+        continuous = [(ring, {i: True for i in range(len(ring))},
+                       ["boundary_continuity_ambiguous", "component_conflict"]) for ring in cleaned]
+    fitted = [_fit_ring(ring, segments, raster, bounds, fixed) for ring, fixed, _ in continuous]
+    for index, ((points, _, _), original, (_, _, warnings)) in enumerate(zip(fitted, cleaned, continuous)):
+        if "boundary_steps_straightened" in warnings and not _within_continuity_limits(points, original, bounds):
+            # Fitting and repair must not each spend the full area/displacement allowance.
+            fixed = {i: True for i in range(len(original))}
+            continuous[index] = (original, fixed, ["boundary_continuity_ambiguous", "fitting_rejected"])
+            fitted[index] = _fit_ring(original, segments, raster, bounds, fixed)
     if not _disjoint([item[0] for item in fitted]):
         # Do not merge separate roofs as a side effect of source snapping.
         fitted = [(ring, [{"index": index, "support": 0., "source": "unsupported", "ambiguous": True}
                           for index in range(len(ring))], ["fitting_rejected", "component_conflict"])
-                  for ring in cleaned]
-    for (_, _, warnings), ring, original in zip(fitted, cleaned, rings):
+                  for ring, _, _ in continuous]
+    for (_, _, warnings), ring, original, (_, _, continuity_warnings) in zip(fitted, cleaned, rings, continuous):
+        warnings[:] = sorted({*warnings, *continuity_warnings})
         if len(ring) != len(original):
             warnings[:] = sorted({*warnings, "corner_steps_straightened"})
         if cleanup_warnings:

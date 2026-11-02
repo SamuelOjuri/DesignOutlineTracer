@@ -1,0 +1,254 @@
+[
+  {
+    "case": "251004-terrace",
+    "capture": "2026-11-02T00:51:14.143196+00:00",
+    "before": {
+      "status": "needs_review",
+      "proposals": [
+        {
+          "points": [
+            {
+              "x": 1371.12,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1637.3648967674658,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1637.3648967674658,
+              "y": 2141.125
+            },
+            {
+              "x": 1660.190944734098,
+              "y": 2141.125
+            },
+            {
+              "x": 1660.190944734098,
+              "y": 2448.08
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 2448.08
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 1713.92
+            },
+            {
+              "x": 1371.12,
+              "y": 1713.92
+            }
+          ],
+          "proposed_points": [
+            {
+              "x": 1372.1892429614181,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1637.3648967674658,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1637.3648967674658,
+              "y": 2141.125
+            },
+            {
+              "x": 1660.190944734098,
+              "y": 2141.125
+            },
+            {
+              "x": 1660.190944734098,
+              "y": 2439.165
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 2439.165
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 1713.915
+            },
+            {
+              "x": 1372.1892429614181,
+              "y": 1713.915
+            }
+          ],
+          "edges": [
+            {
+              "index": 0,
+              "support": 0.015,
+              "source": "unsupported",
+              "ambiguous": true
+            },
+            {
+              "index": 1,
+              "support": 0.0208,
+              "source": "unsupported",
+              "ambiguous": true
+            },
+            {
+              "index": 2,
+              "support": 0.0,
+              "source": "unsupported",
+              "ambiguous": false
+            },
+            {
+              "index": 3,
+              "support": 0.7267,
+              "source": "raster",
+              "ambiguous": true
+            },
+            {
+              "index": 4,
+              "support": 0.9921,
+              "source": "vector",
+              "ambiguous": false
+            },
+            {
+              "index": 5,
+              "support": 1.0,
+              "source": "raster",
+              "ambiguous": true
+            },
+            {
+              "index": 6,
+              "support": 0.5051,
+              "source": "vector",
+              "ambiguous": false
+            },
+            {
+              "index": 7,
+              "support": 1.0,
+              "source": "vector",
+              "ambiguous": false
+            }
+          ],
+          "warnings": [
+            "ambiguous_parallel_edges",
+            "unsupported_boundary_segments"
+          ]
+        }
+      ],
+      "warnings": [
+        "ambiguous_parallel_edges",
+        "unsupported_boundary_segments"
+      ]
+    },
+    "after": {
+      "status": "needs_review",
+      "proposals": [
+        {
+          "points": [
+            {
+              "x": 1371.12,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1656.0,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1656.0,
+              "y": 2448.08
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 2448.08
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 1713.92
+            },
+            {
+              "x": 1371.12,
+              "y": 1713.92
+            }
+          ],
+          "proposed_points": [
+            {
+              "x": 1372.1892429614181,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1637.3648967674658,
+              "y": 1239.5625000000002
+            },
+            {
+              "x": 1637.3648967674658,
+              "y": 2141.125
+            },
+            {
+              "x": 1660.190944734098,
+              "y": 2141.125
+            },
+            {
+              "x": 1660.190944734098,
+              "y": 2439.165
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 2439.165
+            },
+            {
+              "x": 380.05434827945777,
+              "y": 1713.915
+            },
+            {
+              "x": 1372.1892429614181,
+              "y": 1713.915
+            }
+          ],
+          "edges": [
+            {
+              "index": 0,
+              "support": 0.0141,
+              "source": "unsupported",
+              "ambiguous": true
+            },
+            {
+              "index": 1,
+              "support": 0.9981,
+              "source": "vector",
+              "ambiguous": false
+            },
+            {
+              "index": 2,
+              "support": 0.9954,
+              "source": "vector",
+              "ambiguous": false
+            },
+            {
+              "index": 3,
+              "support": 1.0,
+              "source": "raster",
+              "ambiguous": true
+            },
+            {
+              "index": 4,
+              "support": 0.5051,
+              "source": "vector",
+              "ambiguous": false
+            },
+            {
+              "index": 5,
+              "support": 1.0,
+              "source": "vector",
+              "ambiguous": false
+            }
+          ],
+          "warnings": [
+            "ambiguous_parallel_edges",
+            "boundary_steps_straightened",
+            "unsupported_boundary_segments"
+          ]
+        }
+      ],
+      "warnings": [
+        "ambiguous_parallel_edges",
+        "boundary_steps_straightened",
+        "unsupported_boundary_segments"
+      ]
+    }
+  }
+]

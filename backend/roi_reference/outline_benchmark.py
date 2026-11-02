@@ -250,7 +250,7 @@ def _production(**options) -> Callable:
         from backend.app.outline_geometry import refine_outline_polygons
 
         result = refine_outline_polygons(context["png"], context["case"].roi_box, record["crop"], record["polygons"],
-                                         context["vectors"], **options)
+                                         context["vectors"], boundary_policy=context["case"].boundary_policy, **options)
         if not result["proposals"]:
             return None, result["status"]
         return [[(point["x"], point["y"]) for point in proposal["points"]] for proposal in result["proposals"]], None

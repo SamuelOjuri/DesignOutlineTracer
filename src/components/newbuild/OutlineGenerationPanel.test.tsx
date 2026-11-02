@@ -82,3 +82,17 @@ it("renders canonical polygon coordinates and differentiates uncertain edges wit
   expect(container.querySelector('[data-outline-edge="2"]')).toHaveAttribute("stroke-dasharray", "7 4");
   expect(JSON.stringify(result.proposals)).toBe(original);
 });
+
+it("explains a straightened boundary and highlights unresolved continuity for review", () => {
+  const reviewed: OutlineResponse = { ...result, warnings: ["boundary_steps_straightened", "boundary_continuity_ambiguous"],
+    proposals: [{ ...result.proposals[0], warnings: ["boundary_continuity_ambiguous"],
+      edges: result.proposals[0].edges.map(edge => ({ ...edge, ambiguous: edge.index <= 2 })) }] };
+  const { container } = render(<>
+    <OutlineGenerationPanel {...props({ result: reviewed })} />
+    <OutlineProposalOverlay proposals={reviewed.proposals} width={800} height={600} />
+  </>);
+  expect(screen.getByText(/aligned to a continuous drawn roof edge/)).toBeInTheDocument();
+  expect(screen.getAllByText(/A small step may switch between different boundary lines/)).toHaveLength(1);
+  expect(container.querySelectorAll('[data-uncertain="true"]')).toHaveLength(3);
+  expect(screen.getByRole("button", { name: "Use outline" })).toBeEnabled();
+});

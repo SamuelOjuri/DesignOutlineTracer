@@ -22,6 +22,8 @@ const issueMessages: Record<string, string> = {
   unsupported_boundary_segments: "Some edges have little supporting linework. Review the orange dashed edges.",
   fitting_rejected: "The initial shape was retained where fitting would change the geometry too much. Check the perimeter before using it.",
   corner_steps_straightened: "A small step traced at a corner was squared off. Check that corner against the drawing.",
+  boundary_steps_straightened: "A small step between nearby boundary lines was aligned to a continuous drawn roof edge. Check the straightened side against the drawing.",
+  boundary_continuity_ambiguous: "A small step may switch between different boundary lines. Review the orange dashed edges at that junction against the drawing.",
   outline_repaired: "The model's perimeter crossed itself and was repaired. Check the repaired area against the drawing.",
   clipped_to_roi: "The perimeter overshot the roof region slightly and was trimmed to it. Check the trimmed edge.",
   thin_features_removed: "Thin spikes or slots in the model's perimeter were removed. Check the affected edges.",

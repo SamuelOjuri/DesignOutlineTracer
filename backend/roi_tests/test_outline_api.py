@@ -8,7 +8,7 @@ import unittest
 import httpx
 from google import genai
 from google.genai import types
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from backend.app.config import Settings
 from backend.app.errors import OutputDiagnostic, RoiError
@@ -106,6 +106,46 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
         self.now = 6
         await self.generate(request_id="after-cache-expiry")
         self.assertEqual(len(self.provider.calls), 2 + len(cases))
+
+    async def test_boundary_policy_reaches_continuity_repair_and_cached_results(self):
+        await self.client.delete(PREFIX + "/pages/page")
+        inner = [(100, 100), (900, 100), (900, 700), (100, 700)]
+        outer = [(94, 94), (906, 94), (906, 706), (94, 706)]
+        model = [(100, 100), (887, 100), (887, 500), (903, 500), (903, 700), (100, 700)]
+        image = Image.new("RGB", (1200, 800), "white")
+        draw = ImageDraw.Draw(image)
+        vectors = []
+        for ring in (inner, outer):
+            draw.line(ring + ring[:1], fill="black", width=1)
+            vectors.extend({"start": {"x": a[0], "y": a[1]}, "end": {"x": b[0], "y": b[1]}}
+                           for a, b in zip(ring, ring[1:] + ring[:1]))
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        self.image = buffer.getvalue()
+        self.context["source_image_hash"] = sha256(self.image).hexdigest()
+        self.assertEqual((await self.upload()).status_code, 200)
+        self.provider.result = ProviderResult(json.dumps({"polygons": [{"points": [
+            {"x": x * 1000 / 1200, "y": y * 1000 / 800} for x, y in model]}], "roi_too_tight": False}))
+        for policy, right in (("inner_parapet", 900), ("outer_roof", 906), ("roof_deck", None)):
+            options = dict(boundary_policy=policy, vector_segments=vectors,
+                           roi={"id": "roof", "revision": 2, "box_2d": [0, 0, 1000, 1000]})
+            response = await self.generate(request_id=policy, **options)
+            self.assertEqual(response.status_code, 200, response.text)
+            result = response.json()
+            self.assertEqual(result["run"]["algorithm_version"], "source-supported-outline-v3")
+            proposal = result["proposals"][0]
+            if right is None:
+                self.assertEqual(len(proposal["points"]), 6)
+                self.assertIn("boundary_continuity_ambiguous", result["warnings"])
+            else:
+                self.assertEqual(len(proposal["points"]), 4)
+                self.assertAlmostEqual(proposal["points"][1]["x"], right)
+                self.assertAlmostEqual(proposal["points"][2]["x"], right)
+                self.assertIn("boundary_steps_straightened", result["warnings"])
+            cached = (await self.generate(request_id=policy + "-cached", **options)).json()
+            self.assertTrue(cached["run"]["cached"])
+            self.assertEqual(cached["proposals"], result["proposals"])
+        self.assertEqual(len(self.provider.calls), 3)
 
     async def test_owner_hash_path_and_vector_bounds_before_provider_call(self):
         other = {"Authorization": "Bearer " + "b" * 64}

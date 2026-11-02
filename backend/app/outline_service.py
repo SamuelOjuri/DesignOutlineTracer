@@ -216,7 +216,8 @@ class OutlineService:
                 else:
                     result = await bounded_cpu(
                         partial(refine_outline_polygons, source=prepared.source,
-                                cleanup=service.settings.outline_cleanup), page.image.original,
+                                cleanup=service.settings.outline_cleanup,
+                                boundary_policy=request.boundary_policy), page.image.original,
                         request.roi.box_2d, crop,
                         [[point.model_dump() for point in polygon.points] for polygon in model_result.polygons],
                         [segment.model_dump() for segment in request.vector_segments],

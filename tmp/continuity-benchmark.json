@@ -1,0 +1,171 @@
+{
+  "provisional": true,
+  "tolerances_px": [
+    2.0,
+    5.0
+  ],
+  "cases": {
+    "251004-terrace": {
+      "captures": 12,
+      "usable": 9,
+      "parsed_by_mode": {
+        "free": "3/6",
+        "json": "6/6"
+      },
+      "variants": {
+        "v2+shapely": {
+          "n": 12,
+          "failures": 3,
+          "iou": 0.727,
+          "iou_success": 0.9693,
+          "boundary_f1_2px": 0.2627,
+          "boundary_f1_5px": 0.4688,
+          "hausdorff_median": 18.64,
+          "mean_distance": 6.7553,
+          "vertices_mean": 6.2222,
+          "ms_mean": 104.1099
+        },
+        "production+shapely": {
+          "n": 12,
+          "failures": 3,
+          "iou": 0.7284,
+          "iou_success": 0.9711,
+          "boundary_f1_2px": 0.2829,
+          "boundary_f1_5px": 0.4841,
+          "hausdorff_median": 18.59,
+          "mean_distance": 6.3525,
+          "vertices_mean": 6.0,
+          "ms_mean": 102.6171
+        }
+      }
+    },
+    "tp17221-roof": {
+      "captures": 6,
+      "usable": 5,
+      "parsed_by_mode": {
+        "free": "2/3",
+        "json": "3/3"
+      },
+      "variants": {
+        "v2+shapely": {
+          "n": 6,
+          "failures": 1,
+          "iou": 0.8066,
+          "iou_success": 0.9679,
+          "boundary_f1_2px": 0.453,
+          "boundary_f1_5px": 0.5014,
+          "hausdorff_median": 19.41,
+          "mean_distance": 6.934,
+          "vertices_mean": 14.4,
+          "ms_mean": 148.5523
+        },
+        "production+shapely": {
+          "n": 6,
+          "failures": 1,
+          "iou": 0.8066,
+          "iou_success": 0.9679,
+          "boundary_f1_2px": 0.453,
+          "boundary_f1_5px": 0.5014,
+          "hausdorff_median": 19.41,
+          "mean_distance": 6.934,
+          "vertices_mean": 14.4,
+          "ms_mean": 149.4054
+        }
+      }
+    },
+    "tp17202-north": {
+      "captures": 4,
+      "usable": 4,
+      "parsed_by_mode": {
+        "free": "2/2",
+        "json": "2/2"
+      },
+      "variants": {
+        "v2+shapely": {
+          "n": 4,
+          "failures": 0,
+          "iou": 0.9595,
+          "iou_success": 0.9595,
+          "boundary_f1_2px": 0.7187,
+          "boundary_f1_5px": 0.9767,
+          "hausdorff_median": 9.1,
+          "mean_distance": 1.1778,
+          "vertices_mean": 7.0,
+          "ms_mean": 19.912
+        },
+        "production+shapely": {
+          "n": 4,
+          "failures": 0,
+          "iou": 0.9595,
+          "iou_success": 0.9595,
+          "boundary_f1_2px": 0.7187,
+          "boundary_f1_5px": 0.9767,
+          "hausdorff_median": 9.1,
+          "mean_distance": 1.1778,
+          "vertices_mean": 7.0,
+          "ms_mean": 18.9542
+        }
+      }
+    },
+    "tp17202-south": {
+      "captures": 4,
+      "usable": 4,
+      "parsed_by_mode": {
+        "free": "2/2",
+        "json": "2/2"
+      },
+      "variants": {
+        "v2+shapely": {
+          "n": 4,
+          "failures": 0,
+          "iou": 0.9691,
+          "iou_success": 0.9691,
+          "boundary_f1_2px": 0.8711,
+          "boundary_f1_5px": 0.9309,
+          "hausdorff_median": 6.52,
+          "mean_distance": 0.9225,
+          "vertices_mean": 8.0,
+          "ms_mean": 20.2406
+        },
+        "production+shapely": {
+          "n": 4,
+          "failures": 0,
+          "iou": 0.9691,
+          "iou_success": 0.9691,
+          "boundary_f1_2px": 0.8711,
+          "boundary_f1_5px": 0.9309,
+          "hausdorff_median": 6.52,
+          "mean_distance": 0.9225,
+          "vertices_mean": 8.0,
+          "ms_mean": 19.1225
+        }
+      }
+    }
+  },
+  "overall": {
+    "v2+shapely": {
+      "n": 26,
+      "failures": 4,
+      "iou": 0.8184,
+      "iou_success": 0.9672,
+      "boundary_f1_2px": 0.4704,
+      "boundary_f1_5px": 0.6256,
+      "hausdorff_median": 15.58,
+      "mean_distance": 4.7213,
+      "vertices_mean": 8.5455,
+      "ms_mean": 88.5094
+    },
+    "production+shapely": {
+      "n": 26,
+      "failures": 4,
+      "iou": 0.819,
+      "iou_success": 0.9679,
+      "boundary_f1_2px": 0.4797,
+      "boundary_f1_5px": 0.6326,
+      "hausdorff_median": 11.03,
+      "mean_distance": 4.5565,
+      "vertices_mean": 8.4545,
+      "ms_mean": 87.6979
+    }
+  }
+}

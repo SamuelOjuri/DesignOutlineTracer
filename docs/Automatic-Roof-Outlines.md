@@ -75,6 +75,22 @@ New Build screen; this feature does not add persistence.
   outside the ROI and invalid results. It adds the
   `corner_steps_straightened` warning, and `proposed_points` keep the model's
   original vertices.
+- Algorithm `source-supported-outline-v3` then checks for a short transverse
+  step between long, nearly parallel runs. It joins them only when PDF vectors
+  support at least 90% of each run, the combined span and a window across the
+  junction, and connect to drawn edges at both adjoining corners. Supported real
+  connectors are preserved. The extra search is local to this pattern (at most
+  36 source pixels); the ordinary fitter still uses at most 12 px.
+  A close pair of faces requires agreement between the selected inner/outer
+  boundary convention and raster ink on each side. `roof_deck` keeps ambiguous
+  pairs for review. Missing vectors, ambiguous faces, ROI violations and
+  component conflicts do not trigger automatic straightening.
+  Repairs preserve the original proposal and add `boundary_steps_straightened`.
+  Unresolved junctions add `boundary_continuity_ambiguous` and mark their three
+  edges for review. Fitting preserves these continuity decisions, and the
+  combined repair/fitting change remains subject to topology, area and
+  displacement checks. The algorithm version invalidates previous cache entries.
+  See the [251004 regression](roi-evaluation/251004-right-boundary-diagnosis.md).
 - Vector segments supply candidate supporting lines; high-resolution raster
   contrast is the fallback. Collinear fragments contribute joint edge support.
   Small movements and consistent rotated directions are allowed. Equally

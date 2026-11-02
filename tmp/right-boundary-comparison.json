@@ -1,0 +1,466 @@
+{
+  "case": "251004-terrace",
+  "capture": "2026-11-02T00:51:14.143196+00:00",
+  "current": {
+    "status": "needs_review",
+    "proposals": [
+      {
+        "points": [
+          {
+            "x": 1371.12,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2448.08
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 2448.08
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 1713.92
+          },
+          {
+            "x": 1371.12,
+            "y": 1713.92
+          }
+        ],
+        "proposed_points": [
+          {
+            "x": 1372.1892429614181,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 1713.915
+          },
+          {
+            "x": 1372.1892429614181,
+            "y": 1713.915
+          }
+        ],
+        "edges": [
+          {
+            "index": 0,
+            "support": 0.015,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 1,
+            "support": 0.0208,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 2,
+            "support": 0.0,
+            "source": "unsupported",
+            "ambiguous": false
+          },
+          {
+            "index": 3,
+            "support": 0.7267,
+            "source": "raster",
+            "ambiguous": true
+          },
+          {
+            "index": 4,
+            "support": 0.9921,
+            "source": "vector",
+            "ambiguous": false
+          },
+          {
+            "index": 5,
+            "support": 1.0,
+            "source": "raster",
+            "ambiguous": true
+          },
+          {
+            "index": 6,
+            "support": 0.5051,
+            "source": "vector",
+            "ambiguous": false
+          },
+          {
+            "index": 7,
+            "support": 1.0,
+            "source": "vector",
+            "ambiguous": false
+          }
+        ],
+        "warnings": [
+          "ambiguous_parallel_edges",
+          "unsupported_boundary_segments"
+        ]
+      }
+    ],
+    "warnings": [
+      "ambiguous_parallel_edges",
+      "unsupported_boundary_segments"
+    ]
+  },
+  "opencv_side": {
+    "status": "needs_review",
+    "proposals": [
+      {
+        "points": [
+          {
+            "x": 1371.12,
+            "y": 1246.1599999999999
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 1246.1599999999999
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 2141.125
+          },
+          {
+            "x": 1656.0,
+            "y": 2141.125
+          },
+          {
+            "x": 1656.0,
+            "y": 2448.08
+          },
+          {
+            "x": 385.91999999999996,
+            "y": 2448.08
+          },
+          {
+            "x": 385.91999999999996,
+            "y": 1702.16
+          },
+          {
+            "x": 1371.12,
+            "y": 1702.16
+          }
+        ],
+        "proposed_points": [
+          {
+            "x": 1372.1892429614181,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 1713.915
+          },
+          {
+            "x": 1372.1892429614181,
+            "y": 1713.915
+          }
+        ],
+        "edges": [
+          {
+            "index": 0,
+            "support": 0.015,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 1,
+            "support": 0.0208,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 2,
+            "support": 0.0,
+            "source": "unsupported",
+            "ambiguous": false
+          },
+          {
+            "index": 3,
+            "support": 0.7267,
+            "source": "raster",
+            "ambiguous": true
+          },
+          {
+            "index": 4,
+            "support": 0.9921,
+            "source": "vector",
+            "ambiguous": false
+          },
+          {
+            "index": 5,
+            "support": 1.0,
+            "source": "raster",
+            "ambiguous": true
+          },
+          {
+            "index": 6,
+            "support": 0.5051,
+            "source": "vector",
+            "ambiguous": false
+          },
+          {
+            "index": 7,
+            "support": 1.0,
+            "source": "vector",
+            "ambiguous": false
+          }
+        ],
+        "warnings": [
+          "ambiguous_parallel_edges",
+          "side_aware_reselection",
+          "unsupported_boundary_segments"
+        ]
+      }
+    ],
+    "warnings": [
+      "ambiguous_parallel_edges",
+      "unsupported_boundary_segments"
+    ]
+  },
+  "radius_24": {
+    "status": "needs_review",
+    "proposals": [
+      {
+        "points": [
+          {
+            "x": 1372.1892429614181,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 2155.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2155.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 1695.44
+          },
+          {
+            "x": 1372.1892429614181,
+            "y": 1695.44
+          }
+        ],
+        "proposed_points": [
+          {
+            "x": 1372.1892429614181,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 1239.5625000000002
+          },
+          {
+            "x": 1637.3648967674658,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2141.125
+          },
+          {
+            "x": 1660.190944734098,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 2439.165
+          },
+          {
+            "x": 380.05434827945777,
+            "y": 1713.915
+          },
+          {
+            "x": 1372.1892429614181,
+            "y": 1713.915
+          }
+        ],
+        "edges": [
+          {
+            "index": 0,
+            "support": 0.015,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 1,
+            "support": 0.0208,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 2,
+            "support": 0.75,
+            "source": "raster",
+            "ambiguous": false
+          },
+          {
+            "index": 3,
+            "support": 0.7267,
+            "source": "raster",
+            "ambiguous": true
+          },
+          {
+            "index": 4,
+            "support": 0.2604,
+            "source": "unsupported",
+            "ambiguous": true
+          },
+          {
+            "index": 5,
+            "support": 1.0,
+            "source": "raster",
+            "ambiguous": true
+          },
+          {
+            "index": 6,
+            "support": 0.9757,
+            "source": "vector",
+            "ambiguous": false
+          },
+          {
+            "index": 7,
+            "support": 0.9948,
+            "source": "raster",
+            "ambiguous": true
+          }
+        ],
+        "warnings": [
+          "ambiguous_parallel_edges"
+        ]
+      }
+    ],
+    "warnings": [
+      "ambiguous_parallel_edges"
+    ]
+  },
+  "illustrative_candidate": [
+    [
+      1371.12,
+      1239.5625000000002
+    ],
+    [
+      1656.0,
+      1239.5625000000002
+    ],
+    [
+      1656.0,
+      2448.08
+    ],
+    [
+      380.05434827945777,
+      2448.08
+    ],
+    [
+      380.05434827945777,
+      1713.92
+    ],
+    [
+      1371.12,
+      1713.92
+    ]
+  ],
+  "current_score": {
+    "iou": 0.978607009899858,
+    "area_error": 0.00989676616103654,
+    "boundary_precision": {
+      "2px": 0.5512253917235838,
+      "5px": 0.6697468862997188
+    },
+    "boundary_recall": {
+      "2px": 0.5540076721179084,
+      "5px": 0.6705027256208359
+    },
+    "boundary_f1": {
+      "2px": 0.5526130299063537,
+      "5px": 0.6701245928309191
+    },
+    "hausdorff": 18.63510323253422,
+    "mean_distance": 4.623907031338192,
+    "vertices": 8
+  },
+  "candidate_score": {
+    "iou": 0.9953771633374138,
+    "area_error": 0.004644306533099708,
+    "boundary_precision": {
+      "2px": 0.7931173274300665,
+      "5px": 0.8518816663312537
+    },
+    "boundary_recall": {
+      "2px": 0.7960831819099535,
+      "5px": 0.8538259640621846
+    },
+    "boundary_f1": {
+      "2px": 0.794597487148623,
+      "5px": 0.8528527070661114
+    },
+    "hausdorff": 5.865651720542245,
+    "mean_distance": 0.9988620056387095,
+    "vertices": 6
+  }
+}
