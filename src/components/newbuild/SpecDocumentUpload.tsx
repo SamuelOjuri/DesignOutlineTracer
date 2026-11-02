@@ -51,7 +51,7 @@ export const SpecDocumentUpload = ({ file, onChange }: SpecDocumentUploadProps) 
     <Card className="p-4 mb-4">
       <h3 className="text-base font-semibold mb-1">Performance Specification</h3>
       <p className="text-xs text-muted-foreground mb-3">
-        Optional. Upload the specification PDF from the CRM. It is added to the download package exactly as
+        Upload the specification PDF from the CRM. It is added to the download package exactly as
         provided and is not copied into the form below.
       </p>
       {file ? (
