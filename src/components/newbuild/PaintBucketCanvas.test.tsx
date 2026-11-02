@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockCanvasContext } from "@/test/canvas";
 import { steppedRoof, trimmedRoof, trimmedRoofWithNotch } from "@/test/roofBoundary";
 import { rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
+import { syntheticAnnotation } from "@/test/roi";
 import type { Point } from "@/types/roof";
 import { PaintBucketCanvas } from "./PaintBucketCanvas";
 
@@ -90,13 +91,16 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout]) 
 }
 
 it("highlights a merge at zoom, commits only on release and restores points and cutouts with one undo", async () => {
-  const { canvas, event, context, outlinesChanged, holesChanged } = await adjustmentEditor();
+  const { canvas, event, outlinesChanged, holesChanged } = await adjustmentEditor();
   fireEvent.click(screen.getByTitle("Zoom in"));
   vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({ left: -80, top: -40 } as DOMRect);
   event("pointerDown", 202, 160);
   event("pointerMove", 203, 42);
   expect(screen.getByRole("status")).toHaveTextContent("Merge vertex");
-  expect(context.arc).toHaveBeenCalledWith(200, 40, 11 / (parseFloat(canvas.style.width) / 400), 0, Math.PI * 2);
+  const target = screen.getByTestId("outline-merge-target");
+  expect(target).toHaveAttribute("cx", "200");
+  expect(target).toHaveAttribute("cy", "40");
+  expect(Number(target.getAttribute("r")) * parseFloat(canvas.style.width) / 400).toBeCloseTo(8);
   expect(outlinesChanged).not.toHaveBeenCalled();
   fireEvent.mouseLeave(canvas);
   expect(outlinesChanged).not.toHaveBeenCalled();
@@ -104,10 +108,45 @@ it("highlights a merge at zoom, commits only on release and restores points and 
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
   expect(outlinesChanged).toHaveBeenLastCalledWith([roof.filter((_, index) => index !== 2), otherRoof], 0);
   expect(holesChanged).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("outline-merge-target")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   expect(outlinesChanged.mock.lastCall![0]).toEqual([roof, otherRoof]);
   expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("keeps accepted geometry aligned at zoom, shows handles only for Adjust and excludes both kinds of openings", async () => {
+  const source = document.createElement("canvas");
+  source.width = 400; source.height = 300;
+  const onOutlinesExtracted = vi.fn();
+  const penetration = [{ x: 130, y: 80 }, { x: 160, y: 80 }, { x: 160, y: 100 }, { x: 130, y: 100 }];
+  const regions = [syntheticAnnotation()];
+  const { rerender } = render(<PaintBucketCanvas pdfCanvas={source} roofOutlines={[roof]} interiorHoles={[cutout]}
+    penetrationHoles={[penetration]} acceptedRegions={regions} onOutlinesExtracted={onOutlinesExtracted} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Adjust" })).toBeEnabled());
+  const overlay = screen.getByTestId("accepted-outline-overlay");
+  const boundary = overlay.querySelector('[data-accepted-outline="0"]');
+  const coordinates = roof.map(point => `${point.x},${point.y}`).join(" ");
+  expect(boundary).toHaveAttribute("points", coordinates);
+  expect(overlay.querySelectorAll("[data-outline-opening]")).toHaveLength(2);
+  expect(overlay.querySelectorAll("circle")).toHaveLength(0);
+  expect(screen.getByTestId("annotation-box-roi-1")).toHaveAttribute("data-contextual", "true");
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  expect(boundary).toHaveAttribute("points", coordinates);
+  expect(boundary).toHaveAttribute("vector-effect", "non-scaling-stroke");
+  expect(overlay.parentElement?.style.width).toBe(screen.getByTestId("paint-source-canvas").style.width);
+  fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
+  expect(overlay.querySelectorAll("[data-outline-vertex]")).toHaveLength(roof.length);
+  const handle = overlay.querySelector("circle")!;
+  const scale = parseFloat(screen.getByTestId("paint-source-canvas").style.width) / 400;
+  expect(Number(handle.getAttribute("r")) * scale).toBeCloseTo(3);
+  fireEvent.click(screen.getByRole("button", { name: "Straighten" }));
+  expect(overlay.querySelectorAll("circle")).toHaveLength(0);
+  expect(onOutlinesExtracted).not.toHaveBeenCalled();
+  rerender(<PaintBucketCanvas pdfCanvas={source} roofOutlines={[]} acceptedRegions={regions}
+    onOutlinesExtracted={onOutlinesExtracted} />);
+  expect(screen.queryByTestId("accepted-outline-overlay")).not.toBeInTheDocument();
+  expect(screen.getByTestId("annotation-box-roi-1")).toHaveAttribute("data-contextual", "false");
 });
 
 it("straightens a multi-point side separately from merging, preserves cutouts and ignores an already straight side", async () => {
@@ -201,8 +240,13 @@ it.each(["outside", "partial"])("shrinks the scope with an %s cutout, previews w
 it("cancels cutout reconciliation without changing geometry or adding undo", async () => {
   const { event, outlinesChanged, holesChanged } = await adjustmentEditor();
   event("pointerDown", 120, 40);
+  const before = screen.getByTestId("accepted-outline-overlay").querySelector('[data-accepted-outline="0"]')!.getAttribute("points");
   event("pointerMove", 120, 130);
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector('[data-accepted-outline="0"]')).not.toHaveAttribute("points", before);
+  expect(screen.getByTestId("accepted-outline-overlay").querySelectorAll("[data-outline-opening]")).toHaveLength(0);
   fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector('[data-accepted-outline="0"]')).toHaveAttribute("points", before);
+  expect(screen.getByTestId("accepted-outline-overlay").querySelectorAll("[data-outline-opening]")).toHaveLength(1);
   event("pointerUp", 120, 130);
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(holesChanged).not.toHaveBeenCalled();

@@ -9,6 +9,7 @@ import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/uti
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import type { OutlineProposal } from "@/types/outline";
 import { OutlineProposalOverlay } from "./OutlineProposalOverlay";
+import { AcceptedOutlineOverlay } from "./AcceptedOutlineOverlay";
 import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler } from "lucide-react";
 
 type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust" | "straighten";
@@ -33,7 +34,7 @@ interface PaintBucketCanvasProps {
   outlineProposals?: OutlineProposal[];
 }
 
-const FILL_COLOR: [number, number, number, number] = [220, 50, 50, 160];
+const FILL_COLOR: [number, number, number, number] = [37, 99, 235, 15];
 const PREVIEW_FILL_COLOR = [50, 130, 220, 100] as const;
 const PREVIEW_REMOVE_COLOR = [220, 50, 50, 80] as const;
 const PREVIEW_CUTOUT_COLOR = [255, 140, 0, 100] as const;
@@ -97,13 +98,12 @@ export const PaintBucketCanvas = ({
   const dragMaskBeforeRef = useRef<Uint8Array | null>(null);
   const justDraggedRef = useRef(false);
 
-  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewRafRef = useRef<number | null>(null);
 
   // Adjust tool state
   const [hoveredEdge, setHoveredEdge] = useState<{ outlineIndex: number; edgeIndex: number } | null>(null);
   const [hoveredVertex, setHoveredVertex] = useState<{ outlineIndex: number; vertexIndex: number } | null>(null);
-  const [adjustmentVersion, setAdjustmentVersion] = useState(0);
+  const [, setAdjustmentVersion] = useState(0);
   const adjustDragRef = useRef<{
     type: "edge" | "vertex";
     outlineIndex: number;
@@ -244,84 +244,20 @@ export const PaintBucketCanvas = ({
   const redrawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas || !originalImageDataRef.current) return;
-    const ctx = canvas.getContext("2d")!;
-    const { width, height } = canvas;
+    // Keep the PDF pristine. Accepted geometry is rendered by the SVG layer;
+    // pixel masks remain solely for selection, cutouts and pointer previews.
+    canvas.getContext("2d")!.putImageData(originalImageDataRef.current, 0, 0);
+  }, []);
 
-    ctx.putImageData(originalImageDataRef.current, 0, 0);
+  useEffect(() => { redrawCanvas(); }, [roofOutlines, fillCount, redrawCanvas]);
 
-    const previewMask = adjustDragRef.current?.previewMask ?? filledMaskRef.current;
-    if (previewMask) {
-      if (!overlayCanvasRef.current || overlayCanvasRef.current.width !== width || overlayCanvasRef.current.height !== height) {
-        overlayCanvasRef.current = document.createElement("canvas");
-        overlayCanvasRef.current.width = width;
-        overlayCanvasRef.current.height = height;
-      }
-      const offCtx = overlayCanvasRef.current.getContext("2d")!;
-      const overlayData = offCtx.createImageData(width, height);
-      const mask = previewMask;
-      const od = overlayData.data;
-      for (let i = 0; i < width * height; i++) {
-        if (mask[i] && !openingMask?.[i]) {
-          const idx = i * 4;
-          od[idx] = FILL_COLOR[0];
-          od[idx + 1] = FILL_COLOR[1];
-          od[idx + 2] = FILL_COLOR[2];
-          od[idx + 3] = FILL_COLOR[3];
-        }
-      }
-      offCtx.putImageData(overlayData, 0, 0);
-      ctx.globalAlpha = 0.35;
-      ctx.drawImage(overlayCanvasRef.current, 0, 0);
-      ctx.globalAlpha = 1.0;
-    }
-
-    // Draw outlines with edge highlighting for adjust tool
-    const displayedOutlines = adjustDragRef.current?.previewEdit?.outlines ?? roofOutlines;
-    for (let oi = 0; oi < displayedOutlines.length; oi++) {
-      const outline = displayedOutlines[oi];
-      if (outline.length <= 2) continue;
-
-      // Draw each edge individually to support highlighting
-      for (let ei = 0; ei < outline.length; ei++) {
-        const p1 = outline[ei];
-        const p2 = outline[(ei + 1) % outline.length];
-        const isHovered = (activeTool === "adjust" || activeTool === "straighten") &&
-          hoveredEdge?.outlineIndex === oi &&
-          hoveredEdge?.edgeIndex === ei;
-
-        ctx.strokeStyle = isHovered ? "hsl(210, 85%, 55%)" : "hsl(0, 85%, 50%)";
-        const edgeScale = activeTool === "adjust" || activeTool === "straighten" ? displayScale : 1;
-        ctx.lineWidth = (isHovered ? 5 : 3) / edgeScale;
-        ctx.setLineDash([]);
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
-      }
-
-      for (let vi = 0; vi < outline.length; vi++) {
-        const pt = outline[vi];
-        const isVertexHovered = activeTool === "adjust" &&
-          hoveredVertex?.outlineIndex === oi &&
-          hoveredVertex?.vertexIndex === vi;
-        ctx.fillStyle = isVertexHovered ? "hsl(210, 85%, 55%)" : "hsl(0, 85%, 50%)";
-        ctx.beginPath();
-        const handleScale = activeTool === "adjust" || activeTool === "straighten" ? displayScale : 1;
-        ctx.arc(pt.x, pt.y, (isVertexHovered ? 7 : 4) / handleScale, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    const mergeTarget = adjustDragRef.current?.mergeTarget;
-    if (mergeTarget) {
-      ctx.strokeStyle = "#00875a";
-      ctx.lineWidth = 2 / displayScale;
-      ctx.beginPath();
-      ctx.arc(mergeTarget.x, mergeTarget.y, 11 / displayScale, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }, [roofOutlines, activeTool, hoveredEdge, hoveredVertex, displayScale, openingMask]);
-
-  useEffect(() => { redrawCanvas(); }, [roofOutlines, fillCount, redrawCanvas, hoveredEdge, adjustmentVersion]);
+  // Pointer previews live in a ref; the version update requests a render without
+  // committing those coordinates to the saved drawing until pointer release.
+  const displayedGeometry = {
+    outlines: adjustDragRef.current?.previewEdit?.outlines ?? roofOutlines,
+    holes: adjustDragRef.current?.previewEdit?.holes ?? interiorHoles,
+    mergeTarget: adjustDragRef.current?.mergeTarget ?? null,
+  };
 
   // --- Preview logic ---
   const clearPreview = useCallback(() => {
@@ -1246,6 +1182,14 @@ export const PaintBucketCanvas = ({
       >
         <div className="min-w-fit min-h-fit p-2 relative">
           <canvas ref={canvasRef} className="block mx-auto" data-testid="paint-source-canvas" />
+          {displayedGeometry.outlines.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            <AcceptedOutlineOverlay outlines={displayedGeometry.outlines} holes={displayedGeometry.holes}
+              penetrationHoles={penetrationHoles} width={pdfCanvas.width} height={pdfCanvas.height}
+              displayScale={displayScale} showVertices={activeTool === "adjust"}
+              hoveredEdge={activeTool === "adjust" || activeTool === "straighten" ? hoveredEdge : null}
+              hoveredVertex={activeTool === "adjust" ? hoveredVertex : null} mergeTarget={displayedGeometry.mergeTarget} />
+          </div>}
           <canvas
             ref={previewCanvasRef}
             data-testid="paint-interaction-canvas"
@@ -1265,7 +1209,7 @@ export const PaintBucketCanvas = ({
           />
           {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
-            <AnnotationOverlay annotations={acceptedRegions} labels={regionLabels} />
+            <AnnotationOverlay annotations={acceptedRegions} labels={regionLabels} contextual={roofOutlines.length > 0} />
           </div>}
           {outlineProposals.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>

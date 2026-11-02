@@ -74,17 +74,44 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await expect(overlay).toHaveCount(0);
   await expect(next).toBeEnabled();
   await expect(page.getByRole("button", { name: "Adjust", exact: true })).toBeEnabled();
-  const selection = await page.getByTestId("paint-source-canvas").evaluate((element: HTMLCanvasElement) => {
-    const context = element.getContext("2d")!;
-    const red = (x: number, y: number) => {
-      const [r, g, b] = context.getImageData(x, y, 1, 1).data;
-      // The editor deliberately composites a translucent tint over the source.
-      return r > 180 && r - g > 20 && r - b > 20;
-    };
-    return { inside: red(80, 250), notch: red(200, 270) };
+  const accepted = page.getByTestId("accepted-outline-overlay");
+  await expect(accepted).toBeVisible();
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(0);
+  const selection = await accepted.evaluate(async (element: SVGSVGElement) => {
+    // Sample the browser-rendered SVG: the notch and subsequently cut holes must stay transparent.
+    const copy = element.cloneNode(true) as SVGSVGElement;
+    copy.setAttribute("width", String(element.viewBox.baseVal.width));
+    copy.setAttribute("height", String(element.viewBox.baseVal.height));
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(copy)], { type: "image/svg+xml" }));
+    try {
+      const image = new Image(); image.src = url; await image.decode();
+      const canvas = document.createElement("canvas"); canvas.width = image.width; canvas.height = image.height;
+      const context = canvas.getContext("2d")!; context.drawImage(image, 0, 0);
+      const inside = Array.from(context.getImageData(80, 250, 1, 1).data);
+      return { inside, notch: context.getImageData(200, 270, 1, 1).data[3] };
+    } finally { URL.revokeObjectURL(url); }
   });
-  expect(selection).toEqual({ inside: true, notch: false });
+  expect(selection.inside[2]).toBeGreaterThan(selection.inside[0] + 100);
+  expect(selection.inside[3]).toBeGreaterThanOrEqual(14);
+  expect(selection.inside[3]).toBeLessThanOrEqual(16);
+  expect(selection.notch).toBe(0);
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("stroke", "#2563eb");
+  const acceptedPoints = await accepted.locator("[data-accepted-outline]").getAttribute("points");
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  const zoomedSource = (await page.getByTestId("paint-source-canvas").boundingBox())!;
+  const zoomedOverlay = (await accepted.boundingBox())!;
+  for (const key of ["x", "y", "width", "height"] as const) expect(Math.abs(zoomedSource[key] - zoomedOverlay[key])).toBeLessThan(1);
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", acceptedPoints!);
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("stroke-width", "2");
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("vector-effect", "non-scaling-stroke");
+  await testInfo.attach("accepted-outline", { body: await page.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(points.length);
+  await testInfo.attach("accepted-outline-adjust", { body: await page.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(0);
   await page.getByRole("button", { name: "Undo generated outline", exact: true }).click();
+  await expect(accepted).toHaveCount(0);
   await expect(next).toBeDisabled();
   await page.getByRole("button", { name: "Generate outline", exact: true }).click();
   await expect(overlay).toBeVisible();

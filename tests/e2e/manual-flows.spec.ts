@@ -74,20 +74,23 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and package download"
   await expect(next).toBeDisabled();
   const paint = page.locator("canvas").nth(-2);
   const interaction = page.locator("canvas").last();
-  expect(await redPixels(paint)).toBe(0);
+  const accepted = page.getByTestId("accepted-outline-overlay");
+  await expect(accepted).toHaveCount(0);
   await clickCanvas(interaction, 0.7, 0.5);
   await expect(next).toBeEnabled();
-  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await expect(accepted).toBeVisible();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(next).toBeDisabled();
-  await expect.poll(() => redPixels(paint)).toBe(0);
+  await expect(accepted).toHaveCount(0);
   await clickCanvas(interaction, 0.7, 0.5);
   await expect(next).toBeEnabled();
   const paintedImage = await paint.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  const outlinePoints = await accepted.locator("[data-accepted-outline]").getAttribute("points");
   const fitWidth = await paint.evaluate((canvas) => canvas.getBoundingClientRect().width);
   await page.getByTitle("Zoom in", { exact: true }).click();
   await expect.poll(() => paint.evaluate((canvas) => canvas.getBoundingClientRect().width)).toBeGreaterThan(fitWidth);
   expect(await paint.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).toBe(paintedImage);
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", outlinePoints!);
   await page.getByTitle("Fit to screen", { exact: true }).click();
   await capture(page, testInfo, "new-build-manual-roof");
 
@@ -101,7 +104,7 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and package download"
   await capture(page, testInfo, "new-build-outlet");
   await page.getByRole("button", { name: "Previous", exact: true }).click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
-  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await expect(accepted).toBeVisible();
   await clickCanvas(interaction, 0.7, 0.5);
   await expect(next).toBeDisabled();
   await page.getByRole("button", { name: "Undo", exact: true }).click();
@@ -113,7 +116,7 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and package download"
   await next.click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
   await expect(next).toBeDisabled();
-  await expect.poll(() => redPixels(paint)).toBe(0);
+  await expect(accepted).toHaveCount(0);
   await page.getByRole("button", { name: "Previous", exact: true }).click();
   await page.locator('input[type="file"]').setInputFiles(await createRoofPlanPdf());
   await expect(page.getByText("1 / 2", { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -122,7 +125,7 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and package download"
   await next.click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
   await expect(next).toBeEnabled();
-  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await expect(accepted).toBeVisible();
   await capture(page, testInfo, "new-build-restored-page");
   await next.click();
   await expect(page.getByText(/^Outlet 1\b/)).toBeVisible();
@@ -196,16 +199,19 @@ test("New Build: selection sensitivity preserves geometry and fits desktop and m
   await expect(slider).toHaveAttribute("max", "100");
   const paint = page.getByTestId("paint-source-canvas");
   const interaction = page.getByTestId("paint-interaction-canvas");
+  const accepted = page.getByTestId("accepted-outline-overlay");
   await clickCanvas(interaction, 0.25, 0.5);
-  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await expect(accepted).toBeVisible();
   await page.getByTitle("Zoom in", { exact: true }).click();
   const paintedImage = await paint.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  const outlinePoints = await accepted.locator("[data-accepted-outline]").getAttribute("points");
   const zoomWidth = await paint.evaluate(canvas => canvas.getBoundingClientRect().width);
   await slider.focus();
   await slider.press("Home");
   for (let step = 0; step < 9; step++) await slider.press("ArrowRight");
   await expect(slider).toHaveValue("10");
   expect(await paint.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).toBe(paintedImage);
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", outlinePoints!);
   expect(await paint.evaluate(canvas => canvas.getBoundingClientRect().width)).toBe(zoomWidth);
   await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Cut Out", exact: true }).click();
@@ -234,12 +240,13 @@ test("New Build: selection sensitivity preserves geometry and fits desktop and m
         control.bottom <= other.top || other.bottom <= control.top).toBe(true);
     }
   }
-  await expect.poll(() => redPixels(paint)).toBeGreaterThan(100);
+  await expect(accepted).toBeVisible();
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", outlinePoints!);
   await page.screenshot({ path: testInfo.outputPath("selection-sensitivity-mobile.png"), fullPage: true });
   await slider.press("End");
   await expect(slider).toHaveValue("100");
   await page.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect.poll(() => redPixels(paint)).toBe(0);
+  await expect(accepted).toHaveCount(0);
   await expect(next).toBeDisabled();
 });
 

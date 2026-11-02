@@ -7,6 +7,7 @@ import type { Point } from "@/types/roof";
 import { drawnRoiBox, editRoiBox, type BoxHandle } from "@/utils/roiBoxEditing";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import { drawingWithPenetrations } from "@/utils/penetrationOpenings";
+import { OUTLINE_APPEARANCE } from "@/utils/outlineAppearance";
 
 interface RoiReviewCanvasProps {
   kind?: "roof_roi" | "penetration";
@@ -162,14 +163,15 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
               {displayedDrawing.holes.map(hole => <polygon key={hole.id} data-testid={`opening-mask-${hole.id}`}
                 points={hole.points.map(point => `${point.x},${point.y}`).join(" ")} fill="black" />)}
             </mask></defs>
-            <rect width={pdfCanvas.width} height={pdfCanvas.height} fill="#dc3232" fillOpacity={0.25} mask={`url(#${maskId})`} />
+            <rect width={pdfCanvas.width} height={pdfCanvas.height} fill={OUTLINE_APPEARANCE.stroke}
+              fillOpacity={OUTLINE_APPEARANCE.acceptedFillOpacity} mask={`url(#${maskId})`} />
             {displayedDrawing.outlines.map((outline) => <polygon key={outline.id} points={outline.points.map((point) => `${point.x},${point.y}`).join(" ")}
-              fill="none" stroke="#047857" strokeWidth={2} vectorEffect="non-scaling-stroke" />)}
+              fill="none" stroke={OUTLINE_APPEARANCE.stroke} strokeWidth={OUTLINE_APPEARANCE.strokeWidth} vectorEffect="non-scaling-stroke" />)}
             {displayedDrawing.holes.map((hole) => <polygon key={hole.id} points={hole.points.map((point) => `${point.x},${point.y}`).join(" ")}
-              fill="none" stroke="#b91c1c" strokeWidth={2} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />)}
+              fill="none" stroke={OUTLINE_APPEARANCE.stroke} strokeWidth={OUTLINE_APPEARANCE.strokeWidth} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />)}
           </svg>}
           {contextAnnotations.length > 0 && <AnnotationOverlay annotations={contextAnnotations} labels={contextLabels} labelsAbove />}
-          <AnnotationOverlay annotations={annotations} selectedId={selectedId} draft={draft} interactive={!adding && !panning}
+          <AnnotationOverlay annotations={annotations} selectedId={selectedId} draft={draft} draftKind={kind} interactive={!adding && !panning}
             onSelect={onSelect} onEdit={onEdit} />
         </div>
       </div>

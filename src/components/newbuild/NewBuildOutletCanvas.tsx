@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
 import { insulationPolygons } from "@/utils/penetrationOpenings";
 import { drawOutletMarker, outletMarkerGeometry, OUTLET_HIT_RADIUS } from "@/utils/outletMarker";
+import { OUTLINE_APPEARANCE } from "@/utils/outlineAppearance";
 
 interface NewBuildOutletCanvasProps {
   pdfCanvas: HTMLCanvasElement;
@@ -141,8 +142,11 @@ export const NewBuildOutletCanvas = ({
           ctx.closePath();
         }
       }
-      ctx.fillStyle = "hsla(0, 85%, 50%, 0.08)";
+      ctx.save();
+      ctx.fillStyle = OUTLINE_APPEARANCE.stroke;
+      ctx.globalAlpha = OUTLINE_APPEARANCE.acceptedFillOpacity;
       ctx.fill("evenodd");
+      ctx.restore();
 
       // Draw each edge individually
       for (let ei = 0; ei < outline.length; ei++) {
@@ -156,13 +160,13 @@ export const NewBuildOutletCanvas = ({
 
         if (isDrainage) {
           ctx.strokeStyle = "hsl(210, 85%, 50%)";
-          ctx.lineWidth = 5;
+          ctx.lineWidth = 5 / displayScale;
         } else if (isHovered) {
           ctx.strokeStyle = "hsl(210, 85%, 65%)";
-          ctx.lineWidth = 4;
+          ctx.lineWidth = OUTLINE_APPEARANCE.hoverStrokeWidth / displayScale;
         } else {
-          ctx.strokeStyle = "hsl(0, 85%, 50%)";
-          ctx.lineWidth = 3;
+          ctx.strokeStyle = OUTLINE_APPEARANCE.stroke;
+          ctx.lineWidth = OUTLINE_APPEARANCE.strokeWidth / displayScale;
         }
 
         ctx.beginPath();
@@ -172,7 +176,7 @@ export const NewBuildOutletCanvas = ({
 
         // Draw drainage arrows
         if (isDrainage) {
-          drawDrainageArrows(ctx, p1, p2);
+          drawDrainageArrows(ctx, p1, p2, displayScale);
         }
       }
     }
@@ -181,9 +185,9 @@ export const NewBuildOutletCanvas = ({
     for (const hole of interiorHoles) {
       if (hole.length < 3) continue;
       ctx.fillStyle = "hsla(0, 0%, 50%, 0.15)";
-      ctx.strokeStyle = "hsl(0, 0%, 40%)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = OUTLINE_APPEARANCE.stroke;
+      ctx.lineWidth = OUTLINE_APPEARANCE.strokeWidth / displayScale;
+      ctx.setLineDash([6 / displayScale, 4 / displayScale]);
       ctx.beginPath();
       ctx.moveTo(hole[0].x, hole[0].y);
       for (let i = 1; i < hole.length; i++) ctx.lineTo(hole[i].x, hole[i].y);
@@ -201,7 +205,7 @@ export const NewBuildOutletCanvas = ({
     });
   }, [pdfCanvas, roofOutlines, outlineIds, interiorHoles, outlets, selectedOutlet, drainageEdges, hoveredEdge, outletMode, displayScale, dragPreview]);
 
-  const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point) => {
+  const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point, scale: number) => {
     const dx = p2.x - p1.x;
     const dy = p2.y - p1.y;
     const len = Math.sqrt(dx * dx + dy * dy);
@@ -217,7 +221,7 @@ export const NewBuildOutletCanvas = ({
     const numArrows = Math.max(1, Math.floor(len / arrowSpacing));
 
     ctx.strokeStyle = "hsl(210, 85%, 50%)";
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 2 / scale;
 
     for (let i = 0; i < numArrows; i++) {
       const t = (i + 0.5) / numArrows;
