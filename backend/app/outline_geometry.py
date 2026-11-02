@@ -15,7 +15,7 @@ from PIL import Image
 from .errors import RoiError
 
 
-ALGORITHM_VERSION = "source-supported-outline-v1"
+ALGORITHM_VERSION = "source-supported-outline-v2"
 MAX_POLYGONS = 8
 MAX_POINTS = 128
 EPS = 1e-7
@@ -167,6 +167,60 @@ def _line(a, b):
     return direction, normal, normal[0] * a[0] + normal[1] * a[1]
 
 
+def _max_shift(bounds) -> float:
+    # Small, source-pixel search radius; never a percentage-wide roof expansion.
+    left, top, right, bottom = bounds
+    return min(12., max(2., math.hypot(right - left, bottom - top) * .008))
+
+
+def _meet(a, b, c, d):
+    """Intersection of lines ab and cd, or None unless they cross at 30 degrees or more."""
+    first, second = (b[0] - a[0], b[1] - a[1]), (d[0] - c[0], d[1] - c[1])
+    det = first[0] * second[1] - first[1] * second[0]
+    if abs(det) < .5 * math.hypot(*first) * math.hypot(*second):
+        return None
+    t = ((c[0] - a[0]) * second[1] - (c[1] - a[1]) * second[0]) / det
+    return a[0] + t * first[0], a[1] + t * first[1]
+
+
+def _collapse_corner_steps(points, tolerance, bounds):
+    """Replace a chamfer or Z-jog of one or two short edges at a corner with the corner itself.
+
+    The model sometimes traces a wall nib or line offset at a corner as extra
+    vertices. Steps shorter than twice the snapping radius cannot be told apart
+    from tracing noise, so the two long edges are extended to meet. Steps along a
+    straight edge, larger returns and changes that would leave the ROI are kept.
+    """
+    left, top, right, bottom = bounds
+    result = list(points)
+    changed = True
+    while changed:
+        changed = False
+        size = len(result)
+        for start in range(size):
+            for count in (1, 2):
+                if size - count < 3:
+                    continue
+                run = [result[(start + k) % size] for k in range(count + 1)]
+                before, after = result[start - 1], result[(start + count + 1) % size]
+                if (any(_distance(a, b) >= tolerance for a, b in zip(run, run[1:]))
+                        or _distance(before, run[0]) < 2 * tolerance or _distance(run[-1], after) < 2 * tolerance):
+                    continue
+                corner = _meet(before, run[0], run[-1], after)
+                if (corner is None or any(_distance(corner, point) > 1.5 * tolerance for point in run)
+                        or not (left - EPS <= corner[0] <= right + EPS and top - EPS <= corner[1] <= bottom + EPS)):
+                    continue
+                removed = {(start + k) % size for k in range(count + 1)}
+                candidate = [corner if index == start else point
+                             for index, point in enumerate(result) if index == start or index not in removed]
+                if _valid_ring(candidate):
+                    result, changed = candidate, True
+                    break
+            if changed:
+                break
+    return result
+
+
 def _union_length(intervals):
     end, length = -math.inf, 0.
     for start, stop in sorted(intervals):
@@ -277,8 +331,7 @@ def _raster_candidates(a, b, pixels, width, height, max_shift, dominant):
 
 def _fit_ring(points, segments, pixels, width, height, bounds):
     left, top, right, bottom = bounds
-    # Small, source-pixel search radius; never a percentage-wide roof expansion.
-    max_shift = min(12., max(2., math.hypot(right - left, bottom - top) * .008))
+    max_shift = _max_shift(bounds)
     dominant = _dominant_direction(points)
     lines, evidence, warnings = [], [], []
     for index, (a, b) in enumerate(zip(points, points[1:] + points[:1])):
@@ -408,12 +461,19 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
             segments.append(endpoints)
     gray = rgb.convert("L")
     pixels = gray.load()
-    fitted = [_fit_ring(ring, segments, pixels, width, height, bounds) for ring in rings]
+    tolerance = 2 * _max_shift(bounds)
+    cleaned = [_collapse_corner_steps(ring, tolerance, bounds) for ring in rings]
+    if not _disjoint(cleaned):
+        cleaned = rings
+    fitted = [_fit_ring(ring, segments, pixels, width, height, bounds) for ring in cleaned]
     if not _disjoint([item[0] for item in fitted]):
         # Do not merge separate roofs as a side effect of source snapping.
         fitted = [(ring, [{"index": index, "support": 0., "source": "unsupported", "ambiguous": True}
                           for index in range(len(ring))], ["fitting_rejected", "component_conflict"])
-                  for ring in rings]
+                  for ring in cleaned]
+    for (_, _, warnings), ring, original in zip(fitted, cleaned, rings):
+        if len(ring) != len(original):
+            warnings[:] = sorted({*warnings, "corner_steps_straightened"})
     proposals = [{"points": _serialize(points, bounds), "proposed_points": _serialize(original_points, bounds),
                   "edges": edges, "warnings": warnings}
                  for original_points, (points, edges, warnings) in zip(rings, fitted)]

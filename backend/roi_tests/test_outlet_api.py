@@ -12,7 +12,7 @@ from google.genai import types
 from PIL import Image
 
 from backend.app.config import Settings
-from backend.app.errors import RoiError
+from backend.app.errors import OutputDiagnostic, RoiError
 from backend.app.gemini import GeminiProvider, OUTLET_SYSTEM_PROMPT, ProviderResult
 from backend.app.main import PREFIX, create_app
 from backend.app.outlet_geometry import MAX_CROPS, _overlaps_polygon, plan_crops
@@ -231,6 +231,38 @@ class OutletApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(response.json()["error"]["code"], {"malformed_output", "truncated_output"})
         self.assertFalse(next(iter(self.service.sessions.values())).pages["page"].outlet_cache)
 
+    async def test_malformed_crop_output_is_retried_once_with_safe_diagnostics(self):
+        self.provider.results = [ProviderResult("private"), ProviderResult("\u5bc6" + json.dumps([inlet()]))]
+        with self.assertLogs("roi_app.outlets", level="WARNING") as logs:
+            response = await self.generate()
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["status"], "complete")
+        self.assertEqual(result["run"]["provider_attempts"], 2)
+        self.assertEqual(len(result["annotations"]), 1)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("outlet_output_rejected request_id=outlet-request code=malformed_output category=json_syntax "
+                      "finish=STOP response_chars=7 attempt=1 detail=none", logs.output[0])
+        self.assertNotIn("private", logs.output[0])
+
+    async def test_field_rule_is_logged_for_rejected_outlet_attempts(self):
+        self.provider.result = ProviderResult(json.dumps([inlet(anchor={"x": 600, "y": 500})]))
+        with self.assertLogs("roi_app.outlets", level="WARNING") as logs:
+            response = await self.generate()
+        self.assertEqual(response.json()["error"]["code"], "malformed_output")
+        self.assertEqual(len(logs.output), 2)
+        for attempt, message in enumerate(logs.output, 1):
+            self.assertIn("category=outlet_fields finish=STOP response_chars=", message)
+            self.assertIn(f"attempt={attempt} detail=anchor_outside_symbol", message)
+            self.assertNotIn("gully", message.lower())
+
+    async def test_malformed_crop_output_retry_respects_call_budget(self):
+        self.service.settings = Settings(max_calls_per_session=1)
+        self.provider.result = ProviderResult("not json")
+        response = await self.generate()
+        self.assertEqual(response.json()["error"]["code"], "malformed_output")
+        self.assertEqual(len(self.provider.calls), 1)
+
     async def test_concurrent_duplicate_delete_and_shared_concurrency(self):
         self.service.settings = Settings(max_concurrent_requests=1)
         self.provider.release.clear()
@@ -304,6 +336,43 @@ class OutletCropTests(unittest.TestCase):
                       json.dumps([inlet(diameter=150)])]:
             with self.assertRaises(RoiError):
                 parse_outlets(value, 10000, 1)
+
+    def test_parser_recovers_observed_envelope_noise_and_classifies_failures(self):
+        body = json.dumps([inlet()])
+        for value in ("\u5bc6\u7684" + body, json.dumps([{"think": ""}, {"text": body}])):
+            with self.subTest(value=value):
+                self.assertEqual(len(parse_outlets(value, 10000, 1)), 1)
+        for value, category in (("Outlets: " + body, OutputDiagnostic.JSON_SYNTAX),
+                                ("{}", OutputDiagnostic.JSON_STRUCTURE),
+                                (json.dumps([inlet(subtype="svp")]), OutputDiagnostic.OUTLET_FIELDS)):
+            with self.subTest(category=category), self.assertRaises(RoiError) as raised:
+                parse_outlets(value, 10000, 1)
+            self.assertEqual(raised.exception.diagnostic, category)
+
+    def test_padded_keys_from_live_output_are_trimmed_but_conflicts_rejected(self):
+        members = json.dumps(inlet())[1:-1]
+        # Captured live: a padded " label" followed by the same unpadded member.
+        for value in ("[{" + members.replace('"label"', '" label"') + "}]",
+                      "[{" + members + ', " label": "Rainwater gully"}]'):
+            with self.subTest(value=value):
+                self.assertEqual(parse_outlets(value, 10000, 1)[0].label, "Rainwater gully")
+        for value in ("[{" + members + ', " label": "Other"}]', "[{" + members + ', "label": "Rainwater gully"}]'):
+            with self.subTest(value=value), self.assertRaises(RoiError) as raised:
+                parse_outlets(value, 10000, 1)
+            self.assertEqual(raised.exception.diagnostic, OutputDiagnostic.JSON_SYNTAX)
+
+    def test_field_failures_report_rule_names_without_provider_text(self):
+        evidence_missing = inlet()
+        del evidence_missing["evidence"]
+        cases = ((inlet(anchor={"x": 600, "y": 500}), "anchor_outside_symbol"),
+                 (inlet(private_key="private"), "extra_forbidden"),
+                 (evidence_missing, "evidence:missing"),
+                 (inlet(subtype="private"), "subtype:literal_error"))
+        for item, detail in cases:
+            with self.subTest(detail=detail), self.assertRaises(RoiError) as raised:
+                parse_outlets(json.dumps([item]), 10000, 1)
+            self.assertEqual(raised.exception.diagnostic, OutputDiagnostic.OUTLET_FIELDS)
+            self.assertEqual(raised.exception.detail, detail)
 
 
 class OutletProviderWireTests(unittest.IsolatedAsyncioTestCase):

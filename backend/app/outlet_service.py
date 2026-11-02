@@ -2,26 +2,27 @@
 import asyncio
 from hashlib import sha256
 import json
+import logging
 from pathlib import Path
-import re
 import time
 from uuid import uuid4
 
 from pydantic import ValidationError
 
-from .errors import RoiError
+from .errors import OutputDiagnostic, RoiError, output_category
 from .gemini import OUTLET_SYSTEM_PROMPT
 from .outlet_geometry import (ALGORITHM_VERSION, MAX_CROPS, duplicate_anchor, page_box, plan_crops,
                               scope_in_crop, scope_location, source_anchor, validate_scopes)
 from .outlet_models import CachedOutlets, ModelOutlet, OutletAnnotation, OutletInput, OutletResponse
 from .outline_geometry import prepare_outline_crop
 from .outline_service import bounded_cpu
-from .parsing import reject_constant, unique_object
+from .parsing import decode_model_json, validation_detail
 from .service import Operation, PageRecord, RoiService, Session, digest
 
 
 PROMPT_VERSION = "rainwater-outlet-v1"
 OUTLET_PROMPT = (Path(__file__).parent / "prompts" / f"{PROMPT_VERSION}.txt").read_text(encoding="utf-8")
+logger = logging.getLogger("roi_app.outlets")
 
 
 def model_schema(maximum: int):
@@ -42,17 +43,16 @@ def model_schema(maximum: int):
 def parse_outlets(text: str, maximum_bytes: int, maximum_objects: int):
     if len(text.encode("utf-8")) > maximum_bytes:
         raise RoiError("response_too_large", 502)
-    payload = text.strip()
-    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", payload, re.IGNORECASE | re.DOTALL)
-    if fence:
-        payload = fence.group(1)
+    raw = decode_model_json(text)
+    if not isinstance(raw, list) or len(raw) > maximum_objects:
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.JSON_STRUCTURE)
     try:
-        raw = json.loads(payload, object_pairs_hook=unique_object, parse_constant=reject_constant)
-        if not isinstance(raw, list) or len(raw) > maximum_objects:
-            raise ValueError("invalid_outlet_list")
         return [ModelOutlet.model_validate(item) for item in raw]
-    except (ValueError, TypeError, RecursionError, ValidationError):
-        raise RoiError("malformed_output", 502) from None
+    except ValidationError as error:
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLET_FIELDS,
+                       detail=validation_detail(error)) from None
+    except (ValueError, TypeError, RecursionError):
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLET_FIELDS) from None
 
 
 class OutletService:
@@ -148,7 +148,7 @@ class OutletService:
                               " describe continuation beyond the crop, but return only visible symbols: "
                               + json.dumps(scope_in_crop(scope, crop), separators=(",", ":")))
                     crop_attempts = 0
-                    raw = None
+                    raw = proposals = None
                     while True:
                         if session.calls >= service.settings.max_calls_per_session or service.total_calls >= service.settings.max_total_calls:
                             if completed:
@@ -159,27 +159,36 @@ class OutletService:
                         service.total_calls += 1
                         attempts += 1
                         crop_attempts += 1
+                        finish_reason, response_chars = "unavailable", None
                         try:
                             with_context = getattr(service.provider, "generate_outlets_with_context", None)
                             if callable(with_context):
                                 raw = await with_context(prepared.png, prompt, model_schema(service.settings.max_annotations), page.image.png)
                             else:
                                 raw = await service.provider.generate(prepared.png, prompt, model_schema(service.settings.max_annotations))
+                            finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
+                            response_chars = len(raw.text)
+                            if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:
+                                raise RoiError("provider_refusal", 502)
+                            try:
+                                proposals = parse_outlets(raw.text, service.settings.max_response_bytes, service.settings.max_annotations)
+                            except RoiError as error:
+                                if raw.finish_reason == "MAX_TOKENS" and error.code == "malformed_output":
+                                    raise RoiError("truncated_output", 502, diagnostic=error.diagnostic,
+                                                   detail=error.detail) from None
+                                raise
                             break
                         except RoiError as error:
-                            if not error.retryable or crop_attempts >= service.settings.max_attempts:
+                            if error.code in {"malformed_output", "truncated_output"}:
+                                logger.warning("outlet_output_rejected request_id=%s code=%s category=%s finish=%s "
+                                               "response_chars=%s attempt=%s detail=%s", request.request_id, error.code,
+                                               output_category(error), finish_reason, response_chars, crop_attempts,
+                                               error.detail or "none")
+                            if not service.retry_allowed(session, error, crop_attempts):
                                 raise
                             await asyncio.sleep(.1 * crop_attempts)
-                    if raw is None:
+                    if proposals is None:
                         break
-                    if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:
-                        raise RoiError("provider_refusal", 502)
-                    try:
-                        proposals = parse_outlets(raw.text, service.settings.max_response_bytes, service.settings.max_annotations)
-                    except RoiError as error:
-                        if raw.finish_reason == "MAX_TOKENS" and error.code == "malformed_output":
-                            raise RoiError("truncated_output", 502) from None
-                        raise
                     completed += 1
                     crop_records.append({"roi_id": scope.roi_id, "outline_id": scope.outline_id, **crop})
                     if raw.finish_reason == "MAX_TOKENS" or len(proposals) == service.settings.max_annotations:

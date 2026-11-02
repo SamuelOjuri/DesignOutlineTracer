@@ -11,7 +11,7 @@ from google.genai import types
 from PIL import Image
 
 from backend.app.config import Settings
-from backend.app.errors import RoiError
+from backend.app.errors import OutputDiagnostic, RoiError
 from backend.app.gemini import GeminiProvider, OUTLINE_SYSTEM_PROMPT, ProviderResult
 from backend.app.main import PREFIX, create_app
 from backend.app.outline_service import model_schema, parse_model_outline
@@ -151,8 +151,31 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 502)
             self.assertNotIn("private", response.text + " ".join(logs.output))
             self.assertIn(response.json()["error"]["code"], {"malformed_output", "truncated_output"})
-        self.assertEqual(len(self.provider.calls), len(cases))
+        # Each malformed response is retried once; the MAX_TOKENS case is terminal immediately.
+        self.assertEqual(len(self.provider.calls), 2 * len(cases) - 1)
         self.assertFalse(next(iter(self.service.sessions.values())).pages["page"].outline_cache)
+
+    async def test_malformed_output_is_retried_once_with_safe_diagnostics(self):
+        body = json.dumps(POLYGON)
+        self.provider.results = [ProviderResult("\u5bc6private " + body), ProviderResult("\u5bc6\u7684" + body)]
+        with self.assertLogs("roi_app.outlines", level="WARNING") as logs:
+            response = await self.generate()
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertIn(result["status"], {"complete", "needs_review"})
+        self.assertEqual(result["run"]["provider_attempts"], 2)
+        self.assertEqual(len(result["proposals"]), 1)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("outline_output_rejected request_id=outline-request code=malformed_output category=json_syntax "
+                      f"finish=STOP response_chars={len(body) + 9} attempt=1 detail=none", logs.output[0])
+        self.assertNotIn("private", logs.output[0])
+
+    async def test_malformed_output_retry_respects_call_budget(self):
+        self.service.settings = Settings(max_calls_per_session=1)
+        self.provider.result = ProviderResult("not json")
+        response = await self.generate()
+        self.assertEqual(response.json()["error"]["code"], "malformed_output")
+        self.assertEqual(len(self.provider.calls), 1)
 
     async def test_shared_concurrency_and_budgets_with_annotation_service(self):
         self.service.settings = Settings(max_concurrent_requests=1, max_calls_per_session=1, max_total_calls=1)
@@ -291,3 +314,22 @@ class OutlineParsingTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case), self.assertRaises(RoiError):
                 parse_model_outline(json.dumps(case), 10000)
+
+    def test_observed_envelope_noise_is_recovered_and_failures_classified(self):
+        body = json.dumps(POLYGON)
+        for text in ("\u5bc6\u7684" + body, "\u9cbb" + body, json.dumps([{"think": ""}, {"text": body}])):
+            with self.subTest(text=text):
+                self.assertEqual(len(parse_model_outline(text, 10000).polygons), 1)
+        cases = (("Here is the outline: " + body, OutputDiagnostic.JSON_SYNTAX, None),
+                 ("[]", OutputDiagnostic.JSON_STRUCTURE, None),
+                 (json.dumps({**POLYGON, "roi_too_tight": "false"}), OutputDiagnostic.OUTLINE_FIELDS,
+                  "roi_too_tight:not_bool"),
+                 (json.dumps({"roi_too_tight": False}), OutputDiagnostic.OUTLINE_FIELDS, "polygons:missing"),
+                 (json.dumps({**POLYGON, "roi_too_tight": True}), OutputDiagnostic.OUTLINE_STATUS, None))
+        for text, category, detail in cases:
+            with self.subTest(category=category), self.assertRaises(RoiError) as raised:
+                parse_model_outline(text, 10000)
+            self.assertEqual(raised.exception.diagnostic, category)
+            self.assertEqual(raised.exception.detail, detail)
+        padded = body.replace('"roi_too_tight"', '" roi_too_tight"')
+        self.assertEqual(len(parse_model_outline(padded, 10000).polygons), 1)

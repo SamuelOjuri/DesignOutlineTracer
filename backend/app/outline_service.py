@@ -4,17 +4,16 @@ from hashlib import sha256
 import json
 import logging
 from pathlib import Path
-import re
 import time
 from uuid import uuid4
 
 from pydantic import ValidationError
 
-from .errors import RoiError
+from .errors import OutputDiagnostic, RoiError, output_category
 from .gemini import OUTLINE_SYSTEM_PROMPT
 from .outline_geometry import ALGORITHM_VERSION, prepare_outline_crop, refine_outline_polygons
 from .outline_models import CachedOutline, ModelOutline, OutlineInput, OutlineResponse, OutlineRun
-from .parsing import reject_constant, unique_object
+from .parsing import decode_model_json, validation_detail
 from .service import Operation, PageRecord, RoiService, Session, digest
 
 
@@ -45,21 +44,23 @@ def model_schema() -> dict:
 def parse_model_outline(text: str, maximum: int) -> ModelOutline:
     if len(text.encode("utf-8")) > maximum:
         raise RoiError("response_too_large", 502)
-    payload = text.strip()
-    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", payload, re.IGNORECASE | re.DOTALL)
-    if fence:
-        payload = fence.group(1)
+    raw = decode_model_json(text)
+    if not isinstance(raw, dict):
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.JSON_STRUCTURE)
+    # Pydantic's default bool coercion is inappropriate for provider output.
+    if type(raw.get("roi_too_tight")) is not bool:
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLINE_FIELDS,
+                       detail="roi_too_tight:not_bool")
     try:
-        raw = json.loads(payload, object_pairs_hook=unique_object, parse_constant=reject_constant)
-        # Pydantic's default bool coercion is inappropriate for provider output.
-        if not isinstance(raw, dict) or type(raw.get("roi_too_tight")) is not bool:
-            raise ValueError("invalid_outline_object")
         result = ModelOutline.model_validate(raw)
-        if result.roi_too_tight and result.polygons:
-            raise ValueError("inconsistent_outline_status")
-        return result
-    except (ValueError, TypeError, RecursionError, ValidationError):
-        raise RoiError("malformed_output", 502) from None
+    except ValidationError as error:
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLINE_FIELDS,
+                       detail=validation_detail(error)) from None
+    except (ValueError, TypeError, RecursionError):
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLINE_FIELDS) from None
+    if result.roi_too_tight and result.polygons:
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLINE_STATUS)
+    return result
 
 
 async def bounded_cpu(function, *args):
@@ -177,23 +178,31 @@ class OutlineService:
                     session.calls += 1
                     service.total_calls += 1
                     attempts += 1
+                    finish_reason, response_chars = "unavailable", None
                     try:
                         with_context = getattr(service.provider, "generate_with_context", None)
                         if callable(with_context):
                             raw = await with_context(prepared.png, prompt, model_schema(), page.image.png)
                         else:
                             raw = await service.provider.generate(prepared.png, prompt, model_schema())
+                        finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
+                        response_chars = len(raw.text)
+                        if raw.finish_reason == "MAX_TOKENS":
+                            # An incomplete perimeter must never be offered as a usable ring.
+                            raise RoiError("truncated_output", 502)
+                        if raw.finish_reason != "STOP":
+                            raise RoiError("provider_refusal", 502)
+                        model_result = parse_model_outline(raw.text, service.settings.max_response_bytes)
                         break
                     except RoiError as error:
-                        if not error.retryable or attempts >= service.settings.max_attempts:
+                        if error.code in {"malformed_output", "truncated_output"}:
+                            logger.warning("outline_output_rejected request_id=%s code=%s category=%s finish=%s "
+                                           "response_chars=%s attempt=%s detail=%s", request.request_id, error.code,
+                                           output_category(error), finish_reason, response_chars, attempts,
+                                           error.detail or "none")
+                        if not service.retry_allowed(session, error, attempts):
                             raise
                         await asyncio.sleep(0.1 * attempts)
-                if raw.finish_reason == "MAX_TOKENS":
-                    # An incomplete perimeter must never be offered as a usable ring.
-                    raise RoiError("truncated_output", 502)
-                if raw.finish_reason != "STOP":
-                    raise RoiError("provider_refusal", 502)
-                model_result = parse_model_outline(raw.text, service.settings.max_response_bytes)
                 if model_result.roi_too_tight:
                     result = {"status": "roi_too_tight", "proposals": [], "warnings": ["roi_too_tight"]}
                 else:
@@ -222,7 +231,7 @@ class OutlineService:
         except TimeoutError:
             raise RoiError("provider_timeout", 504) from None
         except RoiError as error:
-            if error.code in {"malformed_output", "truncated_output", "invalid_outline_geometry"}:
+            if error.code == "invalid_outline_geometry":
                 logger.warning("outline_output_rejected request_id=%s code=%s", request.request_id, error.code)
             raise
         except Exception:

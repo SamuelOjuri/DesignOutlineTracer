@@ -88,7 +88,9 @@ Never put provider credentials in frontend environment variables.
 validation; it is not a successful empty detection. No new regions are added,
 accepted work is retained, and manual roof definition remains available.
 `truncated_output` means `MAX_TOKENS` was reported and the response could not be
-parsed into valid annotations. Neither failure is automatically retried.
+parsed into valid annotations. Malformed output is retried once within
+`ROI_MAX_ATTEMPTS` and the remaining call budgets; truncated output is not
+retried.
 
 Offline regressions reproduced a compatibility issue: otherwise valid JSON in
 a single Markdown fence was rejected with CRLF line endings, an uppercase
@@ -98,17 +100,41 @@ duplicate keys, invalid coordinates, and invalid child associations. Fractional
 coordinates are preserved. The original failed live response was not captured,
 so this does not establish that fencing caused that particular failure.
 
+Live outline runs on 2026-11-01 (`gemini-4-argon`, free-form JSON) captured
+3 malformed envelopes in 11 calls with otherwise valid geometry: stray tokens
+before the JSON (`密的{...}`) and a leaked `[{"think": ""}, {"text": "{...}"}]`
+part list. The shared parser now removes up to eight leading non-ASCII,
+non-whitespace characters directly before the JSON and unwraps that exact
+part list. This applies to ROI, outline and outlet responses.
+
+A live outlet run on the same drawing returned the key `" label"` (leading
+space), followed by the same `"label"` member. Outlets reject unknown fields,
+so the whole response was rejected as `outlet_fields` even though the inlet was
+correct. Model-output keys are now trimmed. A repeated member is tolerated only
+when one copy was padded and both values are identical. Exact duplicate keys and
+conflicting values are still rejected, and request bodies are not affected.
+
 Backend warnings now identify the failure stage without model text, labels,
-filenames, source hashes, images, prompts, credentials or authorization headers:
+filenames, source hashes, images, prompts, credentials or authorization headers.
+Each rejected attempt is logged; outline and outlet requests use
+`outline_output_rejected` and `outlet_output_rejected` with the same fields
+plus `detail`:
 
 ```text
-roi_output_rejected request_id=diagnostic-example task=roof_roi code=malformed_output category=json_syntax finish=STOP response_chars=14
+roi_output_rejected request_id=diagnostic-example task=roof_roi code=malformed_output category=json_syntax finish=STOP response_chars=14 attempt=1
+outlet_output_rejected request_id=diagnostic-example code=malformed_output category=outlet_fields finish=STOP response_chars=305 attempt=1 detail=anchor_outside_symbol
 ```
+
+`detail` names only the failed rule and schema field, for example
+`extra_forbidden`, `evidence:missing`, `subtype:literal_error`,
+`anchor_outside_symbol` or `roi_too_tight:not_bool`. It never includes
+provider-supplied keys or values, and is `none` when no field rule applies.
 
 Categories distinguish `stream_candidate_count`, `stream_missing_finish`,
 `stream_unexpected_finish`, `empty_text`, `json_syntax`, `json_structure`,
-`annotation_fields`, `annotation_geometry`, `annotation_label`, and
-`annotation_association`. `unspecified` is reserved for an uncategorized provider
+`annotation_fields`, `annotation_geometry`, `annotation_label`,
+`annotation_association`, `outline_fields`, `outline_status` and
+`outlet_fields`. `unspecified` is reserved for an uncategorized provider
 error. `finish=unavailable response_chars=None` means the provider adapter did
 not return a completed result; raw stream content is not logged. The public
 error response remains `{error: {code, retryable}}`.
@@ -179,6 +205,30 @@ detection response's `prompt_version` is `roof-roi-v2`. Reruns preserve existing
 annotations: reject or delete the earlier broad proposal when comparing the new
 suggestions. The assistant did not restart the server, modify budgets, execute
 the notebook or make a live Gemini request for this comparison.
+
+### `roof-roi-v3`: whole connected scopes
+
+On `251004 WD03 C7.pdf`, v2 sometimes boxed only the third-floor terrace
+(grids 1-3). That box left out the connected ASHP area (grids 3-5), so outline
+generation could not trace it. This was model variation, not a parser change:
+replaying the same responses through the previous and current parsers gave
+identical boxes. v3 keeps all v2 text and adds one paragraph. Each box must
+enclose a whole connected scope at the same level, including L-shaped, stepped
+or plant/ASHP extensions. Separate, pitched, existing or different-level roofs
+stay out.
+
+Live comparison on 2026-11-01 (`gemini-4-argon`, medium thinking, same page
+image and settings):
+
+| Drawing | v2 | v3 |
+| --- | --- | --- |
+| `251004 WD03 C7.pdf`, third-floor box includes ASHP area | 5/8 runs | 8/8 runs |
+| `251004 WD03 C7.pdf`, roof-plan box (grids 3-8) | unchanged | unchanged |
+| `TP17202_25.01_input.pdf`, two separate small roofs | reference | 3/3 runs |
+| `TP17221_25.01_input.pdf`, one stepped roof, not the existing roof above | reference | 3/3 runs |
+
+This is a small sample, not an accuracy benchmark. Cache identity includes the
+prompt version, so v2 results are not reused after restarting the API.
 
 ## Verification
 

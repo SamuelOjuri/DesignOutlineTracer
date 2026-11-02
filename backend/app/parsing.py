@@ -20,21 +20,96 @@ def reject_constant(value: str) -> None:
     raise ValueError("invalid_constant")
 
 
+def model_object(pairs: list[tuple]) -> dict:
+    """Provider objects only: Gemini occasionally pads a key (" label"), sometimes repeating it unpadded.
+
+    A padded key is trimmed. A repeat is tolerated only when one copy was padded and both
+    values are identical; exact duplicate keys and conflicting values are still rejected.
+    """
+    result, padded = {}, set()
+    for raw_key, value in pairs:
+        key = raw_key.strip()
+        if key in result:
+            if ((raw_key != key or key in padded)
+                    and json.dumps(result[key], sort_keys=True) == json.dumps(value, sort_keys=True)):
+                continue
+            raise ValueError("duplicate_key")
+        if raw_key != key:
+            padded.add(key)
+        result[key] = value
+    return result
+
+
+SAFE_TOKEN = re.compile(r"[a-z][a-z0-9_]{0,63}")
+
+
+def validation_detail(error: ValidationError) -> str:
+    """Failed rule names and schema field names only, never provider-supplied keys or values."""
+    parts = set()
+    for item in error.errors():
+        kind = item["type"]
+        reason = str((item.get("ctx") or {}).get("error", ""))
+        if kind == "value_error" and SAFE_TOKEN.fullmatch(reason):
+            kind = reason
+        field = next((part for part in reversed(item["loc"]) if isinstance(part, str)), None)
+        if kind != "extra_forbidden" and field and SAFE_TOKEN.fullmatch(field):
+            kind = f"{field}:{kind}"
+        parts.add(kind)
+    return ",".join(sorted(parts))[:200]
+
+
+FENCE = re.compile(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", re.IGNORECASE | re.DOTALL)
+# Gemini intermittently emits a few stray non-ASCII tokens (e.g. "密的") glued to the
+# JSON. Only such a short, whitespace-free run is dropped; prose is still rejected.
+LEADING_NOISE = re.compile(r"[^\x00-\x7f\s]{1,8}(?=[\[{`])")
+
+
+def _payload(text: str) -> str:
+    payload = text.strip()
+    noise = LEADING_NOISE.match(payload)
+    if noise:
+        payload = payload[noise.end():]
+    fence = FENCE.fullmatch(payload)
+    return fence.group(1) if fence else payload
+
+
+def _leaked_part_text(value) -> str | None:
+    """Answer text from a leaked response-part envelope: [{"think": ...}, {"text": "<json>"}]."""
+    if not isinstance(value, list) or not value:
+        return None
+    texts = []
+    for part in value:
+        if not isinstance(part, dict) or len(part) != 1:
+            return None
+        ((key, content),) = part.items()
+        if key not in {"think", "text"} or not isinstance(content, str):
+            return None
+        if key == "text":
+            texts.append(content)
+    return "".join(texts) if texts else None
+
+
+def decode_model_json(text: str):
+    """Strictly decode one JSON value, tolerating only the envelope noise observed from the provider."""
+    payload = _payload(text)
+    if not payload.strip():
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.EMPTY_TEXT)
+    try:
+        value = json.loads(payload, object_pairs_hook=model_object, parse_constant=reject_constant)
+        inner = _leaked_part_text(value)
+        if inner is not None:
+            value = json.loads(_payload(inner), object_pairs_hook=model_object, parse_constant=reject_constant)
+    except (ValueError, TypeError, RecursionError):
+        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.JSON_SYNTAX) from None
+    return value
+
+
 def parse_proposals(
     text: str, task: Task, parent_ids: set[str], max_bytes: int, max_annotations: int
 ) -> list[Proposal]:
     if len(text.encode("utf-8")) > max_bytes:
         raise RoiError("response_too_large", 502)
-    payload = text.strip()
-    fence = re.fullmatch(r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```", payload, re.IGNORECASE | re.DOTALL)
-    if fence:
-        payload = fence.group(1)
-    if not payload.strip():
-        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.EMPTY_TEXT)
-    try:
-        records = json.loads(payload, object_pairs_hook=unique_object, parse_constant=reject_constant)
-    except (ValueError, TypeError, RecursionError):
-        raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.JSON_SYNTAX) from None
+    records = decode_model_json(text)
     if not isinstance(records, list):
         raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.JSON_STRUCTURE)
     if len(records) > max_annotations:

@@ -63,6 +63,8 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Do not return a box for the whole drawing sheet or the whole roof plan.", prompt)
         self.assertIn("Return only the specific proposed flat roof / tapered insulation scope area(s).", prompt)
         self.assertIn("Do not merge disconnected scopes.", prompt)
+        self.assertIn("Each box must enclose the whole of one connected scope.", prompt)
+        self.assertIn("Do not extend a box to take in separate roofs, pitched or existing roofs", prompt)
         self.assertIn("Return at most 25 objects.", prompt)
         self.assertIn("untrusted task data", request["systemInstruction"]["parts"][0]["text"])
         self.assertIn("[ymin, xmin, ymax, xmax]", request["systemInstruction"]["parts"][0]["text"])

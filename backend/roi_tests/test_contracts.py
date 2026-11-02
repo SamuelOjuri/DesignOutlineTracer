@@ -82,6 +82,19 @@ class ContractTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(RoiError):
                 parse_proposals(text, "roof_roi", set(), 1024, 25)
 
+    def test_observed_envelope_noise_is_recovered_without_accepting_prose(self):
+        record = '[{"label":"Roof","box_2d":[1.25,2.5,300,400]}]'
+        for text in ("\u5bc6\u7684" + record, "\u9cbb" + record, "\u5bc6\u7684```json\n" + record + "\n```",
+                     json.dumps([{"think": ""}, {"text": record}]),
+                     json.dumps([{"think": "reasoning"}, {"text": "\u5bc6" + record}])):
+            with self.subTest(text=text):
+                self.assertEqual(parse_proposals(text, "roof_roi", set(), 1024, 25)[0].box_2d, (1.25, 2.5, 300, 400))
+        for text in ("note" + record, "\u5bc6 " + record, "\u5bc6" * 9 + record, record + "\u5bc6",
+                     json.dumps([{"text": record}, {"label": "x"}]), json.dumps([{"text": record, "think": ""}]),
+                     json.dumps([{"think": ""}]), json.dumps([{"text": "prose " + record}])):
+            with self.subTest(text=text), self.assertRaises(RoiError):
+                parse_proposals(text, "roof_roi", set(), 1024, 25)
+
     def test_child_association_and_limits(self):
         text = '[{"label":"Vent","box_2d":[1,2,3,4],"roi_id":"roi","subtype":"vent"}]'
         self.assertEqual(len(parse_proposals(text, "penetration", {"roi"}, 1024, 25)), 1)

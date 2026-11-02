@@ -9,7 +9,7 @@ from typing import Callable
 from uuid import uuid4
 
 from .config import Settings
-from .errors import OutputDiagnostic, RoiError
+from .errors import RoiError, output_category
 from .gemini import PROMPT_VERSIONS, SYSTEM_PROMPT, Provider, make_prompt, response_schema
 from .images import PREPARATION_VERSION, PreparedImage
 from .models import Annotation, DetectionInput, DetectionResponse, DetectionRun, PageContext
@@ -216,13 +216,21 @@ class RoiService:
                 raise RoiError("page_not_found", 404) from None
             raise
 
+    def retry_allowed(self, session: Session, error: RoiError, attempts: int) -> bool:
+        """Transient provider errors and malformed model output each allow one more bounded attempt."""
+        if attempts >= self.settings.max_attempts:
+            return False
+        if error.retryable:
+            return True
+        # Malformed output is usually a sampling glitch; never trade it for a budget error.
+        return (error.code == "malformed_output" and session.calls < self.settings.max_calls_per_session
+                and self.total_calls < self.settings.max_total_calls)
+
     async def execute(self, session: Session, page: PageRecord, request: DetectionInput, key: str,
                       prompt: str, settings: dict, cached: CachedProposals | None) -> DetectionResponse:
         started = time.monotonic()
         started_at = datetime.now(timezone.utc).isoformat()
         attempts = 0
-        finish_reason = "unavailable"
-        response_chars = None
         try:
             result = cached
             if result is None:
@@ -234,26 +242,31 @@ class RoiService:
                         session.calls += 1
                         self.total_calls += 1
                         attempts += 1
+                        finish_reason, response_chars = "unavailable", None
                         try:
                             raw = await self.provider.generate(page.image.png, prompt, response_schema(
                                 request.task, request.accepted_rois, self.settings.max_annotations))
                             finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
                             response_chars = len(raw.text)
+                            if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:
+                                raise RoiError("provider_refusal", 502)
+                            try:
+                                proposals = parse_proposals(raw.text, request.task,
+                                                            {parent.id for parent in request.accepted_rois},
+                                                            self.settings.max_response_bytes, self.settings.max_annotations)
+                            except RoiError as error:
+                                if raw.finish_reason == "MAX_TOKENS" and error.code == "malformed_output":
+                                    raise RoiError("truncated_output", 502, diagnostic=error.diagnostic) from None
+                                raise
                             break
                         except RoiError as error:
-                            if not error.retryable or attempts >= self.settings.max_attempts:
+                            if error.code in {"malformed_output", "truncated_output"}:
+                                logger.warning("roi_output_rejected request_id=%s task=%s code=%s category=%s finish=%s "
+                                               "response_chars=%s attempt=%s", request.request_id, request.task,
+                                               error.code, output_category(error), finish_reason, response_chars, attempts)
+                            if not self.retry_allowed(session, error, attempts):
                                 raise
                             await asyncio.sleep(0.1 * attempts)
-                    if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:
-                        raise RoiError("provider_refusal", 502)
-                    try:
-                        proposals = parse_proposals(raw.text, request.task,
-                                                    {parent.id for parent in request.accepted_rois},
-                                                    self.settings.max_response_bytes, self.settings.max_annotations)
-                    except RoiError as error:
-                        if raw.finish_reason == "MAX_TOKENS" and error.code == "malformed_output":
-                            raise RoiError("truncated_output", 502, diagnostic=error.diagnostic) from None
-                        raise
                     warnings = []
                     if raw.finish_reason == "MAX_TOKENS" or len(proposals) == self.settings.max_annotations:
                         warnings.append("possible_truncation")
@@ -282,11 +295,7 @@ class RoiService:
                                      annotations=[annotation.model_copy(deep=True) for annotation in result.annotations], run=run)
         except TimeoutError:
             raise RoiError("provider_timeout", 504) from None
-        except RoiError as error:
-            if error.code in {"malformed_output", "truncated_output"}:
-                category = error.diagnostic.value if isinstance(error.diagnostic, OutputDiagnostic) else "unspecified"
-                logger.warning("roi_output_rejected request_id=%s task=%s code=%s category=%s finish=%s response_chars=%s",
-                               request.request_id, request.task, error.code, category, finish_reason, response_chars)
+        except RoiError:
             raise
         except Exception:
             raise RoiError("provider_unavailable", 502) from None

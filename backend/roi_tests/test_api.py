@@ -25,6 +25,7 @@ class FakeProvider:
 
     def __init__(self):
         self.result = ProviderResult(ROOF)
+        self.results = []
         self.errors = []
         self.calls = []
         self.started = asyncio.Event()
@@ -43,7 +44,7 @@ class FakeProvider:
             raise
         if self.errors:
             raise self.errors.pop(0)
-        return self.result
+        return self.results.pop(0) if self.results else self.result
 
     async def close(self):
         self.closed = True
@@ -223,8 +224,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
         self.assertEqual(result["status"], "complete")
-        self.assertEqual(result["prompt_version"], "roof-roi-v2")
-        self.assertEqual(result["run"]["prompt_version"], "roof-roi-v2")
+        self.assertEqual(result["prompt_version"], "roof-roi-v3")
+        self.assertEqual(result["run"]["prompt_version"], "roof-roi-v3")
         self.assertEqual([annotation["box_2d"] for annotation in result["annotations"]], boxes)
         self.assertEqual([annotation["proposed_box_2d"] for annotation in result["annotations"]], boxes)
         self.assertEqual(len({annotation["id"] for annotation in result["annotations"]}), 2)
@@ -261,43 +262,72 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json()["run"]["provider_attempts"], 2)
         await self.detect()
         self.assertEqual(len(self.provider.calls), 2)
-        for index, code in enumerate(("authentication_failed", "model_unavailable", "provider_refusal", "malformed_output")):
+        for index, code in enumerate(("authentication_failed", "model_unavailable", "provider_refusal")):
             self.provider.errors = [RoiError(code, 502)]
             before = len(self.provider.calls)
             result = await self.detect(request_id=code, geometry_revision=index + 1)
             self.assertEqual(result.json()["error"]["code"], code)
             await self.detect(request_id=code, geometry_revision=index + 1)
             self.assertEqual(len(self.provider.calls), before + 1)
+        self.provider.errors = [RoiError("malformed_output", 502), RoiError("malformed_output", 502)]
+        before = len(self.provider.calls)
+        result = await self.detect(request_id="malformed_output", geometry_revision=4)
+        self.assertEqual(result.json(), {"error": {"code": "malformed_output", "retryable": False}})
+        await self.detect(request_id="malformed_output", geometry_revision=4)
+        self.assertEqual(len(self.provider.calls), before + 2)
+
+    async def test_malformed_output_is_retried_once_then_accepted(self):
+        await self.upload()
+        self.provider.results = [ProviderResult('[{"label":"private"}]'), ProviderResult(ROOF)]
+        with self.assertLogs("roi_app.detections", level="WARNING") as captured:
+            response = await self.detect()
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["run"]["provider_attempts"], 2)
+        self.assertEqual(response.json()["annotations"][0]["box_2d"], [10.5, 20, 300, 400])
+        self.assertEqual(len(self.provider.calls), 2)
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("category=annotation_fields finish=STOP response_chars=21 attempt=1", captured.output[0])
+        self.assertNotIn("private", captured.output[0])
+
+    async def test_malformed_output_retry_never_exceeds_call_budget(self):
+        self.service.settings = Settings(max_calls_per_session=1)
+        await self.upload()
+        self.provider.result = ProviderResult("not json")
+        response = await self.detect()
+        self.assertEqual(response.json()["error"]["code"], "malformed_output")
+        self.assertEqual(len(self.provider.calls), 1)
 
     async def test_output_diagnostics_are_safe_terminal_and_not_cached_as_success(self):
         await self.upload()
+        stream_error = RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.STREAM_MISSING_FINISH)
+        # Malformed output gets one retry; truncation is terminal on the first attempt.
         cases = (
-            (ProviderResult("private output"), None, "malformed_output", "json_syntax", "STOP"),
-            (ProviderResult("private output", "MAX_TOKENS"), None, "truncated_output", "json_syntax", "MAX_TOKENS"),
-            (ProviderResult(""), None, "malformed_output", "empty_text", "STOP"),
-            (ProviderResult(ROOF), RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.STREAM_MISSING_FINISH),
-             "malformed_output", "stream_missing_finish", "unavailable"),
+            (ProviderResult("private output"), [], "malformed_output", "json_syntax", "STOP", 2),
+            (ProviderResult("private output", "MAX_TOKENS"), [], "truncated_output", "json_syntax", "MAX_TOKENS", 1),
+            (ProviderResult(""), [], "malformed_output", "empty_text", "STOP", 2),
+            (ProviderResult(ROOF), [stream_error, stream_error], "malformed_output", "stream_missing_finish", "unavailable", 2),
         )
-        for index, (output, error, code, category, finish) in enumerate(cases):
+        for index, (output, errors, code, category, finish, attempts) in enumerate(cases):
             self.provider.result = output
-            self.provider.errors = [error] if error else []
+            self.provider.errors = list(errors)
             request_id = f"diagnostic-{index}"
             before = len(self.provider.calls)
             with self.assertLogs("roi_app.detections", level="WARNING") as captured:
                 response = await self.detect(request_id=request_id)
             self.assertEqual(response.json(), {"error": {"code": code, "retryable": False}})
-            self.assertEqual(len(captured.output), 1)
-            message = captured.output[0]
-            for expected in (f"request_id={request_id}", f"category={category}", f"finish={finish}"):
-                self.assertIn(expected, message)
-            for private in ("private", "Flat roof", self.context["source_image_hash"], TOKEN["Authorization"]):
-                self.assertNotIn(private, message)
-            self.assertEqual(len(self.provider.calls), before + 1)
+            self.assertEqual(len(captured.output), attempts)
+            for attempt, message in enumerate(captured.output, 1):
+                for expected in (f"request_id={request_id}", f"category={category}", f"finish={finish}",
+                                 f"attempt={attempt}"):
+                    self.assertIn(expected, message)
+                for private in ("private", "Flat roof", self.context["source_image_hash"], TOKEN["Authorization"]):
+                    self.assertNotIn(private, message)
+            self.assertEqual(len(self.provider.calls), before + attempts)
             self.assertFalse(self.service.sessions[next(iter(self.service.sessions))].pages["page"].cache)
             with self.assertNoLogs("roi_app.detections", level="WARNING"):
                 duplicate = await self.detect(request_id=request_id)
             self.assertEqual(duplicate.json(), response.json())
-            self.assertEqual(len(self.provider.calls), before + 1)
+            self.assertEqual(len(self.provider.calls), before + attempts)
 
     async def test_crlf_fenced_output_returns_valid_suggested_annotations(self):
         await self.upload()

@@ -80,6 +80,30 @@ class OutlineGeometryTests(unittest.TestCase):
         self.assert_points(result["proposals"][0]["points"], ring)
         self.assertTrue(all(edge["source"] == "raster" for edge in result["proposals"][0]["edges"]))
 
+    def test_sub_tolerance_corner_jog_and_chamfer_become_a_clean_corner(self):
+        # Tolerance here is twice the 4 px snapping radius of a 400x300 page.
+        rectangle = [(350, 50), (350, 250), (50, 250), (50, 50)]
+        for proposed in ([(56, 50), (350, 50), (350, 250), (50, 250), (50, 56), (56, 56)],
+                         [(55, 50), (350, 50), (350, 250), (50, 250), (50, 55)]):
+            with self.subTest(points=len(proposed)):
+                result = self.refine([proposed], image=drawing(rings=[rectangle]), segments=vectors(rectangle))
+                proposal = result["proposals"][0]
+                self.assert_points(proposal["points"], rectangle)
+                self.assert_points(proposal["proposed_points"], proposed)
+                self.assertEqual(len(proposal["edges"]), 4)
+                self.assertIn("corner_steps_straightened", proposal["warnings"])
+                self.assertEqual(result["status"], "needs_review")
+
+    def test_returns_above_tolerance_and_offsets_along_an_edge_are_preserved(self):
+        notch = [(70, 50), (350, 50), (350, 250), (50, 250), (50, 70), (70, 70)]
+        offset = [(50, 50), (200, 50), (200, 54), (350, 54), (350, 250), (50, 250)]
+        for ring in (notch, offset):
+            with self.subTest(points=ring):
+                result = self.refine([ring], image=drawing(rings=[ring]), segments=vectors(ring))
+                proposal = result["proposals"][0]
+                self.assert_points(proposal["points"], ring)
+                self.assertNotIn("corner_steps_straightened", proposal["warnings"])
+
     def test_diagonal_rotated_roof_retains_its_directions(self):
         angle = math.radians(23)
         ring = [(180 + x * math.cos(angle) - y * math.sin(angle),

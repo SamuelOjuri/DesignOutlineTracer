@@ -21,6 +21,7 @@ const issueMessages: Record<string, string> = {
   ambiguous_parallel_edges: "Several nearby lines could define the boundary. Review the orange dashed edges against the selected boundary convention.",
   unsupported_boundary_segments: "Some edges have little supporting linework. Review the orange dashed edges.",
   fitting_rejected: "The initial shape was retained where fitting would change the geometry too much. Check the perimeter before using it.",
+  corner_steps_straightened: "A small step traced at a corner was squared off. Check that corner against the drawing.",
   component_conflict: "Fitting would join separate roof components. Their initial shapes were retained for review.",
   roi_boundary_contact: "The perimeter touches the roof-region border. Check that the whole insulation scope is included.",
   scope_outside_roi: "The proposed roof extends outside the accepted region. Review the region before generating again.",

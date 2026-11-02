@@ -19,7 +19,12 @@ New Build/Refurbishment editors and the email payload are unchanged.
   original JPEG availability, and domain-reviewed accuracy gates remain open.
   Penetration/outlet prompts are explicitly draft policy, not verified detectors.
 - `ROI_STRUCTURED_OUTPUT=false` is the compatibility default. Exact JSON or a
-  single JSON code fence is strictly parsed and Pydantic-validated. Enable the
+  single JSON code fence is strictly parsed and Pydantic-validated. The only
+  tolerated envelope noise is what Gemini was observed to emit: up to eight
+  stray non-ASCII, non-whitespace characters glued to the start of the JSON,
+  and a leaked `[{"think": ...}, {"text": "<json>"}]` part list. Prose is still
+  rejected. `gemini-4-argon` returned HTTP 400 when the JSON schema option was
+  enabled (2026-11-01). Enable the
   SDK JSON schema option only after an authorized Phase 1 compatibility run.
   SDK mock transport tests prove serialization, not model support. Thinking
   settings are not sent; automatic function calling is disabled and no tools
@@ -143,8 +148,11 @@ before production. Cleanup runs periodically and on API access; shutdown clears
 storage. Expired/deleted pages cannot be resurrected by an in-flight result.
 
 Only transient rate limits, selected 5xx responses, and transport failures get
-one bounded backoff/retry. Refusals, auth/model/input/schema errors and timeouts
-are not retried. Each attempt consumes the budgets. Deleting pages does not
+one bounded backoff/retry. `malformed_output` (from the stream or the response
+parser) also gets one retry, but only within `MAX_ATTEMPTS` and remaining call
+budgets; it is never converted into `call_budget_exceeded`. Refusals,
+auth/model/input errors, truncated output and timeouts are not retried. Each
+attempt consumes the budgets. Deleting pages does not
 reset session/process call counts. Tokens and process restarts can reset local
 budgets, another reason this is not a public service.
 

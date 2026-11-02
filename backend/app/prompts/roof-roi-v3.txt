@@ -1,0 +1,7 @@
+Annotate the proposed flat roof / tapered insulation scope area(s) in the roof plan.
+
+Do not return a box for the whole drawing sheet or the whole roof plan. Return only the specific proposed flat roof / tapered insulation scope area(s).
+
+Return independent boxes for the specific scope areas, not a box around unrelated drawing-sheet content. Do not merge disconnected scopes. Rooflights are not separate roof ROI detections. A scope may legitimately occupy most of the page; use drawing evidence rather than box size alone. Boxes indicate working areas, not exact roof geometry.
+
+Each box must enclose the whole of one connected scope. Flat-roof scopes are often L-shaped, stepped or wrapped around a core: include every part that continues at the same level, such as plant, ASHP or equipment zones, walkways and recesses that open onto a terrace or roof, even when the enclosing box then also covers some adjacent building. Do not extend a box to take in separate roofs, pitched or existing roofs, or areas at a different level. The exact edge is traced later only inside each box, so any part of the scope left outside the box is lost.

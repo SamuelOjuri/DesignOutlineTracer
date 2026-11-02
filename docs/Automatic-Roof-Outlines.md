@@ -56,6 +56,16 @@ New Build screen; this feature does not add persistence.
 - Crop coordinates are mapped back to the source page. Invalid, intersecting,
   touching or nested components are rejected. Scope beyond the accepted ROI
   returns `roi_too_tight`, rather than silently clipping the roof.
+- Before fitting, a chamfer or Z-jog of one or two short edges at a corner is
+  replaced by the meeting point of the two long edges either side. "Short" means
+  under twice the snapping radius, which is 24 px at most. The model sometimes
+  traces wall nibs or line offsets at corners this way. On `251004 WD03 C7.pdf`
+  this produced a 14 x 16 px jog at the terrace's upper-left corner, and its
+  short leg snapped onto a nearby nib line. The collapse is skipped for steps
+  along a straight edge, larger returns, crossings under 30 degrees, corners
+  outside the ROI and invalid results. It adds the
+  `corner_steps_straightened` warning, and `proposed_points` keep the model's
+  original vertices.
 - Vector segments supply candidate supporting lines; high-resolution raster
   contrast is the fallback. Collinear fragments contribute joint edge support.
   Small movements and consistent rotated directions are allowed. Equally
@@ -87,7 +97,9 @@ be applied. `no_outline` and `roi_too_tight` preserve the manual workflow.
 
 Ownership, local-origin checks, request IDs, session/page lifetimes, provider
 concurrency, retry deadlines and global/session call budgets are shared with
-the ROI service. Outline requests are bounded to 512 KiB. Cache identity includes
+the ROI service. Malformed model output is retried once within those budgets,
+and rejected attempts are logged as `outline_output_rejected` with a failure
+category (see `Phase-4-ROI-Review.md`). Outline requests are bounded to 512 KiB. Cache identity includes
 the source, ROI/revisions, boundary notes, vector data, prompt, algorithm and
 model settings. Source and review revisions are checked again before applying.
 Cancellation prevents browser application; a provider call already sent can
