@@ -96,3 +96,11 @@ it("explains a straightened boundary and highlights unresolved continuity for re
   expect(container.querySelectorAll('[data-uncertain="true"]')).toHaveLength(3);
   expect(screen.getByRole("button", { name: "Use outline" })).toBeEnabled();
 });
+
+it("explains recovered boundaries while keeping the proposal subject to review", () => {
+  const reviewed: OutlineResponse = { ...result, warnings: ["boundary_edges_recovered", "local_fitting_limited"] };
+  render(<OutlineGenerationPanel {...props({ result: reviewed })} />);
+  expect(screen.getByText(/An unsupported edge was aligned to a continuous drawn boundary/)).toBeInTheDocument();
+  expect(screen.getByText(/Some edges at a corner were retained/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Use outline" })).toBeEnabled();
+});

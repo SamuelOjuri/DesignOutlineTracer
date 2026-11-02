@@ -1,4 +1,4 @@
-"""Bounded detail crops and geometric checks; never adjust an inlet anchor."""
+"""Bounded detail crops, coordinate transforms and strict scope checks."""
 import math
 
 from .errors import RoiError
@@ -9,7 +9,7 @@ from .outline_geometry import _inside, _intersects, _valid_ring
 MAX_CROPS = 8
 TILE_SIDE = 2048
 TILE_OVERLAP = 192
-ALGORITHM_VERSION = "outlet-crops-v1"
+ALGORITHM_VERSION = "outlet-symbol-centres-v2"
 
 
 def ring_points(ring):

@@ -3,6 +3,7 @@ import type { Point } from "@/types/roof";
 
 export const OUTLET_COLOUR = "#0077CC";
 export const OUTLET_SCREEN_RADIUS = 12;
+export const OUTLET_MIN_SCREEN_RADIUS = 6;
 export const OUTLET_HIT_RADIUS = 16;
 const BOUNDARY_EPSILON = 1e-6;
 
@@ -83,13 +84,46 @@ export function outletMarkerGeometry(outlet: MarkerOutlet, outlines: Point[][], 
   }
   const preferred = OUTLET_SCREEN_RADIUS / scale;
   const margin = 1 / scale + boundaryStrokeWidth / 2;
-  // A true perimeter anchor is deliberately allowed to overlap, without moving or clipping.
-  const outerRadius = status === "interior" ? Math.max(0, Math.min(preferred, clearance - margin)) : preferred;
+  // Symbols are annotations, not physical footprints. Prefer containment, but
+  // allow overlap rather than making a valid near-edge inlet invisible. Keep
+  // the actual anchor and its scope classification independent of display size.
+  const outerRadius = status === "interior"
+    ? Math.max(OUTLET_MIN_SCREEN_RADIUS / scale, Math.min(preferred, clearance - margin)) : preferred;
   const ratio = outerRadius / preferred;
   const haloWidth = 4 * ratio / scale;
   return { outerRadius, circleRadius: Math.max(0, outerRadius - haloWidth / 2),
     crosshairRadius: 5 * ratio / scale, strokeWidth: 2 * ratio / scale, haloWidth,
     hitRadius: OUTLET_HIT_RADIUS / scale, status, clearance };
+}
+
+/** Reviewed outlets on the same roof share a size, bounded by the visible minimum.
+ * Pending/invalid suggestions cannot resize accepted markers. Keep the source
+ * anchors, physical diameters and screen-sized hit targets independent of ink.
+ */
+export function outletMarkerGeometries(outlets: readonly MarkerOutlet[], outlines: Point[][], holes: Point[][],
+  displayScale: number, outlineIds: string[] = [], boundaryStrokeWidth = 3): OutletMarkerGeometry[] {
+  const geometries = outlets.map(outlet => outletMarkerGeometry(outlet, outlines, holes,
+    displayScale, outlineIds, boundaryStrokeWidth));
+  const groups = outlets.map((outlet, index) => {
+    const geometry = geometries[index];
+    if ((outlet.review_status && outlet.review_status !== "accepted") || outlet.validity === "needs_review"
+      || geometry.status === "outside") return -1;
+    return outlet.outline_id ? outlineIds.indexOf(outlet.outline_id)
+      : outlines.findIndex(ring => ring.length >= 3 && (inRing(outlet, ring)
+        || ringDistance(outlet, ring) <= BOUNDARY_EPSILON));
+  });
+  const radii = new Map<number, number>();
+  groups.forEach((group, index) => {
+    if (group >= 0) radii.set(group, Math.min(radii.get(group) ?? Infinity, geometries[index].outerRadius));
+  });
+  return geometries.map((geometry, index) => {
+    const radius = radii.get(groups[index]);
+    if (radius === undefined) return geometry;
+    const ratio = radius / geometry.outerRadius;
+    return { ...geometry, outerRadius: radius, circleRadius: geometry.circleRadius * ratio,
+      crosshairRadius: geometry.crosshairRadius * ratio, strokeWidth: geometry.strokeWidth * ratio,
+      haloWidth: geometry.haloWidth * ratio };
+  });
 }
 
 /** Transparent glyph: white under-stroke, blue circle and crosshair, optional inner selection ring. */

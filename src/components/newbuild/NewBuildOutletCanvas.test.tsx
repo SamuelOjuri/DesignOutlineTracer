@@ -30,8 +30,22 @@ it("redraws a hole-only update without resizing the canvas or resetting zoom", (
 
   expect(context.moveTo).toHaveBeenCalledWith(150, 160);
   expect(context.fill).toHaveBeenCalledWith("evenodd");
+  expect(context.setLineDash.mock.calls.every(([dash]) => (dash as number[]).length === 0)).toBe(true);
   expect(canvas.width).toBe(800);
   expect(Number.parseFloat(canvas.style.width)).toBeCloseTo(920);
+});
+
+it("draws accepted outlets at the same radius despite different boundary clearances", () => {
+  const context = mockCanvasContext();
+  const props = createProps();
+  const roof = [{ x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 400 }, { x: 100, y: 400 }];
+  const outlets = [{ id: "edge", x: 100.1, y: 150, diameter: 0.15, review_status: "accepted" as const },
+    { id: "middle", x: 300, y: 200, diameter: 0.3, review_status: "accepted" as const }];
+  render(<NewBuildOutletCanvas {...props} roofOutlines={[roof]} outlets={outlets} />);
+  const radii = outlets.map(outlet => context.arc.mock.calls.find(([x, y]) => x === outlet.x && y === outlet.y)![2]);
+  expect(radii[0]).toBeCloseTo(radii[1] as number);
+  expect(radii[0]).toBeGreaterThanOrEqual(5);
+  expect(props.onMoveOutlet).not.toHaveBeenCalled();
 });
 
 it("resizes and redraws when only the source page changes", () => {

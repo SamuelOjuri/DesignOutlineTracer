@@ -49,4 +49,20 @@ describe("outlet contract", () => {
     await expect(disabled.generateOutlets(request)).rejects.toMatchObject({ code: "feature_disabled" });
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
+
+  it("accepts bounded source-symbol fitting while preserving the raw model geometry", () => {
+    const request = outletRequest(), response = outletResponse(request);
+    response.run = { algorithm_version: "outlet-symbol-centres-v2" };
+    Object.assign(response.annotations[0], { subtype: "parapet_outlet", proposed_anchor: { x: 215, y: 120 },
+      proposed_box_2d: [190, 260, 210, 290] });
+    const result = validateOutletResponse(request, response);
+    expect(result.annotations[0]).toMatchObject({ anchor: { x: 225, y: 120 }, proposed_anchor: { x: 215, y: 120 },
+      box_2d: [190, 270, 210, 290], proposed_box_2d: [190, 260, 210, 290] });
+    expect(() => validateOutletResponse(request, { ...response, run: undefined })).toThrow(/invalid_response/);
+    response.annotations[0].subtype = "internal_outlet";
+    expect(() => validateOutletResponse(request, response)).toThrow(/invalid_response/);
+    response.annotations[0].subtype = "parapet_outlet";
+    response.annotations[0].proposed_anchor = { x: 190, y: 120 };
+    expect(() => validateOutletResponse(request, response)).toThrow(/invalid_response/);
+  });
 });

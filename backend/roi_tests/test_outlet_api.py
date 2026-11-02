@@ -9,7 +9,7 @@ import unittest
 import httpx
 from google import genai
 from google.genai import types
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from backend.app.config import Settings
 from backend.app.errors import OutputDiagnostic, RoiError
@@ -112,6 +112,34 @@ class OutletApiTests(unittest.IsolatedAsyncioTestCase):
         self.provider.result = ProviderResult(json.dumps([at(600, 400)]))
         response = await self.generate(request_id="notch", scopes=[scope])
         self.assertEqual(response.json()["annotations"][0]["warnings"], ["outlet_outside_scope"])
+
+    async def test_source_supported_inlet_centre_is_validated_and_original_is_preserved(self):
+        from backend.app.outline_geometry import prepare_outline_crop
+        image = Image.new("RGB", (1200, 800), "white")
+        ink = ImageDraw.Draw(image)
+        ink.line([(500, 639), (500, 611), (556, 611), (556, 639)], fill="#00bfff")
+        ink.line((240, 640, 960, 640), fill="black")
+        stream = BytesIO()
+        image.save(stream, "PNG")
+        self.image = stream.getvalue()
+        self.context["source_image_hash"] = sha256(self.image).hexdigest()
+        await self.client.delete(PREFIX + "/pages/page")
+        response = await self.client.post(PREFIX + "/pages", data={"context": json.dumps(self.context)},
+            files={"image": ("plan.png", self.image, "image/png")})
+        self.assertEqual(response.status_code, 200)
+        crop = prepare_outline_crop(self.image, [200, 200, 800, 800]).crop
+        x = lambda value: (value - crop["x"]) / crop["width"] * 1000
+        y = lambda value: (value - crop["y"]) / crop["height"] * 1000
+        self.provider.result = ProviderResult(json.dumps([inlet(x(528), y(641), subtype="parapet_outlet",
+            box_2d=[y(610), x(499), y(643), x(557)])]))
+        response = await self.generate()
+        self.assertEqual(response.status_code, 200, response.text)
+        item = response.json()["annotations"][0]
+        self.assertEqual(item["anchor"], {"x": 528.5, "y": 625.5})
+        self.assertAlmostEqual(item["proposed_anchor"]["y"], 641)
+        self.assertEqual(item["validity"], "current")
+        self.assertEqual(item["warnings"], [])
+        self.assertEqual(item["review_status"], "suggested")
 
     async def test_scope_snapshot_and_actual_geometry_both_invalidate_cache(self):
         first = await self.generate()

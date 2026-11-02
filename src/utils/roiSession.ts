@@ -150,7 +150,7 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
       const proposal: RoiAnnotation = { ...cloneAnnotation(candidate), review_status: "suggested", origin: "gemini",
         editor_object_id: `outlet:${candidate.id}`, scope_signature: action.scope_signature,
         diameter: 0.15, diameter_confirmed: false, revision: page.revision + 1, edits: [], deleted: false,
-        proposed_anchor: { ...candidate.anchor } };
+        proposed_anchor: { ...(candidate.proposed_anchor ?? candidate.anchor) } };
       const association = outletAssociation(page, proposal);
       if (association.error || association.warnings.length) proposal.validity = "needs_review";
       proposal.warnings = [...new Set([...proposal.warnings, ...association.warnings])];

@@ -16,6 +16,9 @@ and drainage-edge tools remain available.
    accepts current, geometrically valid suggestions without warnings. Other
    candidates can be corrected and accepted individually.
 5. Drag a point or enter its original-page coordinates to correct the inlet.
+   **Correct position, type or size > Use symbol centre** is available when the
+   detected box centre is a different, valid position. Check that the box encloses
+   the roof-side inlet before accepting; the external RWP dot is the downpipe.
    Reject/delete unwanted suggestions, or use **Add manually** for missed points.
    **Undo outlet edit** restores reviewed detection state without discarding
    subsequent manual placements.
@@ -35,10 +38,17 @@ implemented and do not influence the marker.
   original-page pixels, independent of zoom and the physical diameter.
 - For an interior inlet, reduce the entire painted footprint to the clearance
   from its assigned effective scope, including angled edges, concave returns and
-  holes. Reserve room for the outline stroke and antialiasing; a minimum display
-  size must not force overflow.
-- For an inlet exactly on an exterior perimeter, preserve the full preferred
-  circle and allow it to overlap that perimeter. Never shift or clip the symbol.
+  holes where possible. Keep a minimum complete footprint of 12 CSS pixels across
+  (including the halo), even when this overlaps a boundary. A display symbol must
+  never disappear because its inlet is close to an edge. This applies to suggested,
+  accepted and manual outlets without moving their anchors or relaxing validation.
+- Accepted and manual outlets on the same roof share the largest footprint that
+  fits their interior anchors, subject to that visible minimum. This keeps circles, crosshairs and strokes
+  uniform in the outlet editor, Project Details, saved-area previews and drawing
+  PNG exports. Other roofs and pending/stale/outside suggestions do not reduce
+  that size. Near-edge anchors participate in the shared size and remain visible.
+- For an inlet exactly on an exterior perimeter, allow the circle to overlap
+  that perimeter, using the same size as its accepted peers. Never shift or clip the symbol.
   Numerical boundary tolerance is fixed in source coordinates, not screen pixels.
 - Opening edges remain excluded. Invalid/outside suggestions are visible for
   correction but cannot be accepted until their association is valid.
@@ -48,6 +58,13 @@ implemented and do not influence the marker.
   available for small markers.
 - The final illustration shares the same marker renderer. Explicit outline
   ownership keeps a boundary outlet with its roof when the illustration moves.
+- Confirmed opening boundaries use continuous strokes in review, the outlet
+  editor, Project Details and PNG/SVG exports. Pending penetration suggestions
+  retain dashed review boxes. CAD geometry and physical outlet diameters are
+  independent of these display styles.
+- In penetration review, the geometry layer draws confirmed openings once with
+  the same screen-space stroke as the insulation boundary. Editing overlays keep
+  labels and resize handles without adding a second border or selection outline.
 
 ## Detection contract
 
@@ -68,6 +85,25 @@ Responses contain source-pixel inlet anchors, original anchors, normalized
 page symbol boxes, subtype, roof/outline ownership, evidence and review warnings.
 Deterministic validation checks actual scope geometry after inference. Exterior
 boundary points are allowed; excluded openings and outside points need correction.
+
+For blue/cyan rectangular parapet inlets, a bounded source-image pass refines the
+model anchor to the visible inlet box centre before scope validation. It requires
+one nearby box with at least three supported sides, corner evidence and an empty
+interior. Dashed U-shaped boxes are supported. The pass does not snap to the roof
+perimeter, infer a fixed inset, or substitute an external downpipe. Original
+anchors and boxes are retained for reconciliation. Clipped/ambiguous boxes,
+circles, arrows, unsupported colours and opening conflicts keep their model
+positions for review. This uses the original upload and no additional model calls.
+The algorithm version and prompt hash invalidate previous detection caches.
+
+TP17221 illustrates why symbol positioning and marker size must be separate:
+each roof-side cyan inlet box is paired with an external RWP dot. The validation
+drawing likewise shows inlet/downpipe pairs; some inlet circles touch the outline.
+Use the inlet centre as the stored/exported position. A screen-sized review marker
+can still touch the boundary at low zoom, and changing diameter does not correct
+an erroneous anchor. Existing reviewed suggestions are preserved on reruns; use
+the correction controls for those points rather than expecting re-detection to
+overwrite them.
 
 Page ownership, source identity, provider concurrency, global/session call
 budgets, timeouts, page expiry and cache lifetime use the existing ROI service.
@@ -104,6 +140,13 @@ Review state remains in memory. This feature does not introduce save/reload
 persistence or an automatic engineering design approval.
 
 ## Verification
+
+Source-symbol correction verified offline on 2026-11-02: all five TP17221 inlet
+boxes were localised from the original PDF with deliberately seeded perimeter
+anchors. These are simulated coordinate errors, not a captured live model run.
+The fitted anchors remained in scope. Tests cover ambiguous boxes, opening
+exclusion, unsupported colours, circles/arrows, transparency, API transforms,
+original-proposal preservation and the explicit symbol-centre correction.
 
 Verified on 2026-10-29: 227 frontend unit/component tests, 88 backend tests and
 12 browser regressions pass. Type checking, lint and the production build pass;

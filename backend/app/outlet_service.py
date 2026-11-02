@@ -14,6 +14,7 @@ from .gemini import OUTLET_SYSTEM_PROMPT
 from .outlet_geometry import (ALGORITHM_VERSION, MAX_CROPS, duplicate_anchor, page_box, plan_crops,
                               scope_in_crop, scope_location, source_anchor, validate_scopes)
 from .outlet_models import CachedOutlets, ModelOutlet, OutletAnnotation, OutletInput, OutletResponse
+from .outlet_symbols import refine_outlet_symbols
 from .outline_geometry import prepare_outline_crop
 from .outline_service import bounded_cpu
 from .parsing import decode_model_json, validation_detail
@@ -194,6 +195,7 @@ class OutletService:
                     crop_records.append({"roi_id": scope.roi_id, "outline_id": scope.outline_id, **crop})
                     if raw.finish_reason == "MAX_TOKENS" or len(proposals) == service.settings.max_annotations:
                         warnings.append("possible_truncation")
+                    candidates = []
                     for proposal in proposals:
                         anchor = source_anchor(proposal.anchor, crop)
                         box = page_box(proposal.box_2d, crop, page.image.width, page.image.height)
@@ -203,6 +205,9 @@ class OutletService:
                                                      anchor=anchor, proposed_anchor=anchor,
                                                      roi_id=scope.roi_id, outline_id=scope.outline_id,
                                                      evidence=proposal.evidence)
+                        candidates.append(candidate)
+                    candidates = await bounded_cpu(refine_outlet_symbols, page.image.original, candidates, scope)
+                    for candidate in candidates:
                         location = scope_location(candidate.anchor, scope)
                         if location != "inside":
                             candidate.validity = "needs_review"

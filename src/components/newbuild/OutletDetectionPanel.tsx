@@ -5,6 +5,7 @@ import type { PageSession, RoiAnnotation } from "@/types/roi";
 import { outletSubtypes } from "@/types/outlet";
 import type { RoiSessionAction } from "@/utils/roiSession";
 import { activePageOutlets, outletAssociation, outletScopes } from "@/utils/outletScope";
+import { boxToSource } from "@/utils/roiCoordinates";
 import type { useOutletDetection } from "@/hooks/useOutletDetection";
 
 const messages: Record<string, string> = {
@@ -32,7 +33,10 @@ const messages: Record<string, string> = {
   possible_duplicate: "A nearby outlet may already represent this inlet. Review before accepting.",
   ambiguous_outlet: "The inlet interpretation is uncertain. Check the source symbol before accepting.",
 };
-const describe = (message: string) => messages[message] ?? message.replace(/_/g, " ");
+const outsideMessage = "The inlet centre is outside its insulation scope. Move it to the roof-side inlet symbol or correct the assigned outline.";
+const describe = (message: string) => ["candidate_outside_scope", "outlet_outside_scope",
+  "The inlet is outside its insulation scope. Correct its position or association."].includes(message)
+  ? outsideMessage : messages[message] ?? message.replace(/_/g, " ");
 const subtypeLabels: Record<string, string> = {
   internal_outlet: "Internal outlet", parapet_outlet: "Parapet outlet", scupper: "Scupper",
 };
@@ -56,6 +60,10 @@ function OutletCorrections({ page, annotation, dispatch }: {
   const review = (patch: Extract<RoiSessionAction, { type: "outlet-review" }>["patch"]) =>
     dispatch({ type: "outlet-review", page_id: page.source.page_id, id: annotation.id, patch });
   const scopes = outletScopes(page);
+  const box = boxToSource(annotation.box_2d, { width: page.source.source_width, height: page.source.source_height });
+  const symbolCentre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const canCentre = annotation.anchor && Math.hypot(symbolCentre.x - annotation.anchor.x, symbolCentre.y - annotation.anchor.y) > 0.5
+    && !outletAssociation(page, { ...annotation, anchor: symbolCentre }).error;
   return <details className="rounded-md border border-border p-2 text-sm">
     <summary className="cursor-pointer">Correct position, type or size</summary>
     <div className="mt-3 space-y-3">
@@ -81,6 +89,14 @@ function OutletCorrections({ page, annotation, dispatch }: {
         </select>
       </label>
       <p className="text-xs text-muted-foreground">Position uses original page pixels. Drag the marker or enter its inlet centre.</p>
+      {(annotation.subtype === "parapet_outlet" || annotation.subtype === "scupper") && <p className="text-xs text-muted-foreground">
+        Use the roof-side inlet box. The external RWP dot marks the downpipe.
+      </p>}
+      {canCentre && <div className="space-y-1">
+        <Button variant="outline" size="sm" onClick={() => dispatch({ type: "outlet-move", page_id: page.source.page_id,
+          id: annotation.id, anchor: symbolCentre })}>Use symbol centre</Button>
+        <p className="text-xs text-muted-foreground">Uses the detected symbol box. Check its position on the drawing before accepting.</p>
+      </div>}
       <div className="grid grid-cols-2 gap-2">
         <label>X position<input aria-label="Outlet X position" type="number" min="0" max={page.source.source_width}
           step="any" value={x} onChange={event => setX(event.target.value)} className="mt-1 w-full rounded-md border border-input p-2" /></label>
@@ -126,7 +142,9 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
     && annotation.validity === "current" && annotation.warnings.length === 0
     && !outletAssociation(page, annotation).error && outletAssociation(page, annotation).warnings.length === 0);
   const association = selected ? outletAssociation(page, selected) : null;
-  const warnings = [...new Set([...(selected?.warnings ?? []), ...(association?.warnings ?? [])])];
+  const associationError = association?.error ? describe(association.error) : null;
+  const warnings = [...new Set([...(selected?.warnings ?? []), ...(association?.warnings ?? [])].map(describe))]
+    .filter(warning => warning !== associationError);
   const feedback = detection.feedback;
   const accepted = activePageOutlets(page).filter(outlet => outlet.annotation_id).length;
 
@@ -164,9 +182,9 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
     {selected && <div className="space-y-2 rounded-md border border-border p-3">
       <p className="text-sm font-medium">{selected.label}</p>
       {selected.evidence && <p className="text-xs text-muted-foreground">{selected.evidence}</p>}
-      {association?.error && <p role="alert" className="text-sm text-destructive">{describe(association.error)}</p>}
+      {associationError && <p role="alert" className="text-sm text-destructive">{associationError}</p>}
       {warnings.length > 0 && <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
-        {warnings.map(warning => <li key={warning}>{describe(warning)}</li>)}
+        {warnings.map(warning => <li key={warning}>{warning}</li>)}
       </ul>}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" disabled={Boolean(association?.error) || detection.busy}

@@ -57,14 +57,22 @@ export function validateOutletResponse(request: OutletRequest, payload: unknown)
     throw new RoiApiError("response_identity_mismatch");
   }
   const scopes = new Set(request.scopes.map(scope => `${scope.roi_id}:${scope.outline_id}`));
+  // The source-symbol fitter retains raw proposals. Older algorithms must still
+  // return identical originals; v2 only permits a bounded parapet/scupper fit.
+  const validOriginal = (annotation: typeof result.annotations[number]) => {
+    if (JSON.stringify(annotation.box_2d) === JSON.stringify(annotation.proposed_box_2d)
+      && annotation.anchor.x === annotation.proposed_anchor.x && annotation.anchor.y === annotation.proposed_anchor.y) return true;
+    return result.run?.algorithm_version === "outlet-symbol-centres-v2"
+      && ["parapet_outlet", "scupper"].includes(annotation.subtype)
+      && Math.hypot(annotation.anchor.x - annotation.proposed_anchor.x, annotation.anchor.y - annotation.proposed_anchor.y) <= 24;
+  };
   if (new Set(result.annotations.map(annotation => annotation.id)).size !== result.annotations.length
     || (result.status === "no_detections" && result.annotations.length !== 0)
     || (result.status === "complete" && result.annotations.length === 0)
     || (result.status === "partial" && result.warnings.length === 0)
     || result.annotations.some(annotation => annotation.page_id !== request.page_id
       || !scopes.has(`${annotation.roi_id}:${annotation.outline_id}`)
-      || JSON.stringify(annotation.box_2d) !== JSON.stringify(annotation.proposed_box_2d)
-      || annotation.anchor.x !== annotation.proposed_anchor.x || annotation.anchor.y !== annotation.proposed_anchor.y)) {
+      || !validOriginal(annotation))) {
     throw new RoiApiError("invalid_response");
   }
   return {

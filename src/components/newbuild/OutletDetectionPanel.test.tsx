@@ -52,6 +52,34 @@ describe("outlet review controls", () => {
     expect(callbacks.onModeChange).toHaveBeenCalledWith("add-outlets");
   });
 
+  it("offers an explicit symbol-centre correction without accepting or snapping to the perimeter", async () => {
+    const user = userEvent.setup();
+    const callbacks = props();
+    Object.assign(callbacks.page.annotations[1], { subtype: "parapet_outlet", anchor: { x: 199, y: 120 },
+      box_2d: [180, 250, 220, 280], warnings: ["outlet_outside_scope",
+        "The inlet is outside its insulation scope. Correct its position or association."] });
+    render(<OutletDetectionPanel {...callbacks} />);
+    expect(screen.getAllByText(/The inlet centre is outside/)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Accept outlet" })).toBeDisabled();
+    await user.click(screen.getByText("Correct position, type or size"));
+    await user.click(screen.getByRole("button", { name: "Use symbol centre" }));
+    expect(callbacks.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "outlet-move", page_id: "page-1",
+      id: "outlet-annotation-1", anchor: { x: 212, y: 120 } });
+  });
+
+  it("does not offer symbol centring into an excluded opening or outside the roof", () => {
+    const callbacks = props();
+    callbacks.page.annotations[1].box_2d = [20, 20, 40, 40];
+    const { rerender } = render(<OutletDetectionPanel {...callbacks} />);
+    expect(screen.queryByRole("button", { name: "Use symbol centre", hidden: true })).not.toBeInTheDocument();
+    callbacks.page.annotations[1].box_2d = [180, 250, 220, 280];
+    callbacks.page.drawing.holes.push({ id: "hole", page_id: "page-1", roi_id: "roi-1", points: [
+      { x: 205, y: 110 }, { x: 220, y: 110 }, { x: 220, y: 130 }, { x: 205, y: 130 },
+    ] });
+    rerender(<OutletDetectionPanel {...callbacks} />);
+    expect(screen.queryByRole("button", { name: "Use symbol centre", hidden: true })).not.toBeInTheDocument();
+  });
+
   it("excludes stale accepted geometry from the project summary", () => {
     const page = outletPage();
     page.annotations.push({ ...outletResponse().annotations[0], review_status: "accepted", scope_signature: "stale-scope" });

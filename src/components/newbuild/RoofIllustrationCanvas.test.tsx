@@ -24,6 +24,7 @@ it("redraws holes and drainage legend changes without resetting zoom", () => {
     drainageEdges={[{ outlineIndex: 0, edgeIndex: 0 }]} />);
 
   expect(context.moveTo).toHaveBeenCalledWith(110, 120);
+  expect(context.setLineDash.mock.calls.every(([dash]) => (dash as number[]).length === 0)).toBe(true);
   expect(context.fillText).toHaveBeenCalledWith("Drainage Edge", expect.any(Number), expect.any(Number));
   expect(canvas.style.width).toBe(zoomedWidth);
   context.moveTo.mockClear();

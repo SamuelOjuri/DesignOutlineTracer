@@ -132,7 +132,7 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.generate(request_id=policy, **options)
             self.assertEqual(response.status_code, 200, response.text)
             result = response.json()
-            self.assertEqual(result["run"]["algorithm_version"], "source-supported-outline-v3")
+            self.assertEqual(result["run"]["algorithm_version"], "source-supported-outline-v6")
             proposal = result["proposals"][0]
             if right is None:
                 self.assertEqual(len(proposal["points"]), 6)
@@ -146,6 +146,40 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(cached["run"]["cached"])
             self.assertEqual(cached["proposals"], result["proposals"])
         self.assertEqual(len(self.provider.calls), 3)
+
+    async def test_recovered_edge_preserves_original_evidence_warning_and_cache(self):
+        await self.client.delete(PREFIX + "/pages/page")
+        roof = [(100, 100), (1100, 100), (1100, 700), (100, 700)]
+        model = [(100, 100), (1100, 100), (1100, 682), (100, 682)]
+        image = Image.new("RGB", (1200, 800), "white")
+        ImageDraw.Draw(image).line(roof + roof[:1], fill="black", width=1)
+        buffer = BytesIO()
+        image.save(buffer, format="PNG")
+        self.image = buffer.getvalue()
+        self.context["source_image_hash"] = sha256(self.image).hexdigest()
+        self.assertEqual((await self.upload()).status_code, 200)
+        self.provider.result = ProviderResult(json.dumps({"polygons": [{"points": [
+            {"x": x * 1000 / 1200, "y": y * 1000 / 800} for x, y in model]}], "roi_too_tight": False}))
+        options = dict(roi={"id": "roof", "revision": 2, "box_2d": [0, 0, 1000, 1000]},
+                       vector_segments=[{"start": {"x": a[0], "y": a[1]}, "end": {"x": b[0], "y": b[1]}}
+                                        for a, b in zip(roof, roof[1:] + roof[:1])])
+        response = await self.generate(**options)
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        proposal = result["proposals"][0]
+        self.assertEqual(result["status"], "needs_review")
+        self.assertEqual(result["warnings"], ["boundary_edges_recovered"])
+        for key, expected in (("points", roof), ("proposed_points", model)):
+            self.assertEqual(len(proposal[key]), len(expected))
+            for point, (x, y) in zip(proposal[key], expected):
+                self.assertAlmostEqual(point["x"], x)
+                self.assertAlmostEqual(point["y"], y)
+        self.assertEqual(proposal["edges"][2], {"index": 2, "support": 1., "source": "vector", "ambiguous": False})
+        cached = (await self.generate(request_id="recovered-cached", **options)).json()
+        self.assertTrue(cached["run"]["cached"])
+        self.assertEqual(cached["proposals"], result["proposals"])
+        self.assertEqual(cached["warnings"], result["warnings"])
+        self.assertEqual(len(self.provider.calls), 1)
 
     async def test_owner_hash_path_and_vector_bounds_before_provider_call(self):
         other = {"Authorization": "Bearer " + "b" * 64}

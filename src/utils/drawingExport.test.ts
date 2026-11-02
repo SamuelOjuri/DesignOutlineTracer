@@ -42,6 +42,11 @@ describe("roof drawing export", () => {
     expect(model.openings.map(opening => opening.kind)).toEqual(["cutout", "penetration"]);
     expect(model.totals).toMatchObject({ penetrations: 1, cutouts: 1 });
     expect(roofExportDxf(model)).toContain("PENETRATIONS");
+    const svg = new DOMParser().parseFromString(roofExportSvg(model), "image/svg+xml");
+    const openings = svg.querySelector('#openings')!;
+    expect(openings.hasAttribute("stroke-dasharray")).toBe(false);
+    expect(openings.querySelectorAll('[stroke-dasharray]')).toHaveLength(0);
+    expect(openings.querySelectorAll('[data-kind="penetration"]')).toHaveLength(1);
   });
 
   it("returns nothing when no roof outline exists", () => {

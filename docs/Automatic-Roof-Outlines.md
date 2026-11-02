@@ -65,17 +65,28 @@ New Build screen; this feature does not add persistence.
   rejected and changed nothing on the rest
   ([outline-benchmark.md](roi-evaluation/outline-benchmark.md)).
   `proposed_points` are then the cleaned rings.
-- Before fitting, a chamfer or Z-jog of one or two short edges at a corner is
-  replaced by the meeting point of the two long edges either side. "Short" means
-  under twice the snapping radius, which is 24 px at most. The model sometimes
-  traces wall nibs or line offsets at corners this way. On `251004 WD03 C7.pdf`
-  this produced a 14 x 16 px jog at the terrace's upper-left corner, and its
-  short leg snapped onto a nearby nib line. The collapse is skipped for steps
-  along a straight edge, larger returns, crossings under 30 degrees, corners
-  outside the ROI and invalid results. It adds the
-  `corner_steps_straightened` warning, and `proposed_points` keep the model's
-  original vertices.
-- Algorithm `source-supported-outline-v3` then checks for a short transverse
+- Before fitting, algorithm `source-supported-outline-v6` converts small traced
+  curves, chamfers and corner jogs into a single CAD polygon vertex at the
+  intersection of the adjoining long sides. Nearly collinear tracing bends
+  (within 6 degrees and the snapping radius) immediately adjoining a short
+  transition are removed first so extra model samples do not hide those sides.
+  Shallow bends elsewhere are preserved. A corner run can contain any number of points;
+  each leg must be shorter than twice the snapping radius (at most 24 source
+  pixels), the total run at most six radii, and every removed point within three
+  radii of the intersection. Both flanking sides must be at least four radii long.
+  Actual side directions determine the angle, including rotated and oblique
+  roofs. Straight offsets, larger returns, crossings under 30 degrees, corners
+  outside the ROI and invalid results are preserved. Normalization, fitting and
+  wider recovery share the original ring's 4% area and displacement allowances;
+  separate roof components must remain separate. Successful corner normalization
+  does not add a review warning, and `proposed_points` keep the pre-normalization
+  vertices. Weak or ambiguous source-line evidence can still require review.
+  The supplied `TP17221_25.01_outline.pdf` confirms a 12-edge exterior with one
+  sharp corner at the hip-roof junction. Regression tests use that perimeter and
+  rotated, reversed, oblique and densely sampled variants. No project-specific
+  coordinates or page orientation are used by the implementation.
+  See [TP17221 CAD corner validation](roi-evaluation/tp17221-cad-corners.md).
+- The continuity pass checks for a short transverse
   step between long, nearly parallel runs. It joins them only when PDF vectors
   support at least 90% of each run, the combined span and a window across the
   junction, and connect to drawn edges at both adjoining corners. Supported real
@@ -97,6 +108,38 @@ New Build screen; this feature does not add persistence.
   plausible parallel faces retain the initial edge and produce a review warning.
   Adjacent fitted lines determine corners. The complete ring is checked again
   for topology, area change, displacement and containment before fitting is used.
+- Algorithm `source-supported-outline-v4` adds recovery for an unsupported edge
+  that has no candidates within the ordinary search radius. It searches twice
+  that radius (at most 24 source pixels), only for edges at least four times the
+  wider radius in length. Both adjoining sides must already have unambiguous
+  vector support. A candidate must have at least 98% vector coverage, no gaps
+  over one pixel, and finite strokes reaching both adjoining corners. Raster-only
+  evidence, competing faces, supported edges and rejected ordinary fits do not
+  qualify. This applies to all edge orientations and boundary conventions.
+  All recoveries use the same pre-recovery ring, share the existing 4% area-change
+  allowance with fitting/continuity repair, and must preserve valid topology, ROI
+  containment and separate components. Evidence is recalculated for the moved
+  edge and its adjoining sides; the original proposal remains available. The
+  `boundary_edges_recovered` warning keeps the result subject to review. The
+  algorithm-version change invalidates cached results from the older fitter.
+- Algorithm `source-supported-outline-v5` limits a rejected corner fit locally.
+  If intersecting the candidate lines would move a corner beyond the ordinary
+  displacement limit or outside the ROI, both incident lines revert to their
+  proposed positions. All unsafe corners are handled together and the bounded
+  retry can only retain additional lines, never enlarge the search radius.
+  Retained lines have their evidence recalculated, are marked for review and
+  produce `local_fitting_limited`; they cannot anchor wider edge recovery.
+  Safe fits and recoveries elsewhere can proceed. The complete ring still passes
+  the existing topology, winding, 4% area, displacement, ROI and component checks;
+  failures of those checks still reject the complete fit.
+  An offline replay of 22 parsed captures across four cases changed only the
+  previously rejected TP17221 response: its bottom moved from y=2600.09726 to the
+  continuously supported inner boundary at y=2618.96 in source-page coordinates.
+  The other 21 responses were identical. These coordinates are evaluation
+  evidence only; the implementation contains no drawing-specific positions.
+  This fallback remains for corners that cannot be normalized safely; v6 handles
+  the small sampled TP17221 corner before fitting, removing the need for this
+  fallback or a corner-review warning there.
 - No mask dilation, convex hull, blanket orthogonalisation or inferred rooflight
   holes are applied. Evidence scores measure line support, not calibrated model
   confidence or construction accuracy.

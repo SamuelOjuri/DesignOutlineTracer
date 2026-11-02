@@ -1,0 +1,62 @@
+[
+  {
+    "label": "rwp.1",
+    "before": {
+      "x": 814,
+      "y": 2200.4
+    },
+    "after": {
+      "x": 826.0,
+      "y": 2200.5
+    },
+    "refined": true
+  },
+  {
+    "label": "rwp.2",
+    "before": {
+      "x": 1137.84,
+      "y": 2620
+    },
+    "after": {
+      "x": 1138.5,
+      "y": 2610.0
+    },
+    "refined": true
+  },
+  {
+    "label": "rwp.3",
+    "before": {
+      "x": 1765.92,
+      "y": 2620
+    },
+    "after": {
+      "x": 1766.0,
+      "y": 2610.0
+    },
+    "refined": true
+  },
+  {
+    "label": "rwp.4",
+    "before": {
+      "x": 2077.2,
+      "y": 2351.6
+    },
+    "after": {
+      "x": 2077.0,
+      "y": 2342.0
+    },
+    "refined": true
+  },
+  {
+    "label": "rwp.5",
+    "before": {
+      "x": 3217.68,
+      "y": 2351.6
+    },
+    "after": {
+      "x": 3217.5,
+      "y": 2342.0
+    },
+    "refined": true
+  }
+]

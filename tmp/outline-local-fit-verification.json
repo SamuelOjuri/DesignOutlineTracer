@@ -1,0 +1,29 @@
+{
+  "cases": 4,
+  "parsed": 22,
+  "unchanged": 21,
+  "changed": [
+    {
+      "case": "tp17221-roof",
+      "at": "2026-11-02T00:50:06.707208+00:00",
+      "before_warnings": [
+        "ambiguous_parallel_edges",
+        "fitting_rejected",
+        "outline_repaired",
+        "unsupported_boundary_segments"
+      ],
+      "after_warnings": [
+        "ambiguous_parallel_edges",
+        "boundary_edges_recovered",
+        "local_fitting_limited",
+        "outline_repaired",
+        "unsupported_boundary_segments"
+      ],
+      "before_iou": 0.9571666983108084,
+      "after_iou": 0.9831762592431608,
+      "before_boundary_distance": 9.234847292264327,
+      "after_boundary_distance": 3.613416086710785
+    }
+  ],
+  "failures": []
+}

@@ -199,7 +199,20 @@ test("Penetrations: conditioned boxes, nonrectangular exclusions, corrections, r
   await list.getByRole("button", { name: /Penetration 1 / }).click();
   await page.getByRole("button", { name: "Add opening", exact: true }).click();
   await expect(page.getByTestId("opening-mask-penetration:child-2-1:0")).toBeAttached();
+  const assertSingleBoundary = async () => {
+    // The editing box must not add ink to the SVG opening, even when selected.
+    await expect(first).toHaveCSS("border-top-width", "0px");
+    await expect(first).toHaveCSS("outline-style", "none");
+    await expect(first).toHaveCSS("box-shadow", "none");
+    const boundaries = await page.getByLabel("Manual roof geometry").locator("polygon[stroke]").evaluateAll(elements =>
+      elements.map(element => ({ width: getComputedStyle(element).strokeWidth, effect: getComputedStyle(element).vectorEffect })));
+    expect(boundaries.length).toBeGreaterThan(2);
+    expect(boundaries.every(boundary => boundary.width === "2px" && boundary.effect === "non-scaling-stroke")).toBe(true);
+  };
+  await assertSingleBoundary();
+  await expect(page.getByRole("button", { name: "Resize Penetration 1 se", exact: true })).toBeVisible();
   await list.getByRole("button", { name: /Penetration 2 / }).click();
+  await assertSingleBoundary();
   await page.getByRole("button", { name: "Add opening", exact: true }).click();
   await list.getByRole("button", { name: /Penetration 3 / }).click();
   await expect(page.getByText("Outside the assigned roof area; verify scope or reassign.", { exact: true })).toBeVisible();
@@ -215,6 +228,7 @@ test("Penetrations: conditioned boxes, nonrectangular exclusions, corrections, r
   await expect(page.getByRole("button", { name: "Opening added", exact: true })).toBeDisabled();
   const corrected = (await first.getAttribute("data-box"))!;
   await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await assertSingleBoundary();
   await assertAlignment(page, first);
   await page.getByTestId("roi-viewport").evaluate((element) => { element.scrollLeft = 65; element.scrollTop = 30; });
   await assertAlignment(page, first);

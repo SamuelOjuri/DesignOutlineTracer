@@ -3,7 +3,7 @@ import { Point, Outlet, DrainageEdge } from "@/types/roof";
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
 import { insulationPolygons } from "@/utils/penetrationOpenings";
-import { drawOutletMarker, outletMarkerGeometry, OUTLET_HIT_RADIUS } from "@/utils/outletMarker";
+import { drawOutletMarker, outletMarkerGeometry, outletMarkerGeometries, OUTLET_HIT_RADIUS } from "@/utils/outletMarker";
 import { OUTLINE_APPEARANCE } from "@/utils/outlineAppearance";
 
 interface NewBuildOutletCanvasProps {
@@ -187,7 +187,7 @@ export const NewBuildOutletCanvas = ({
       ctx.fillStyle = "hsla(0, 0%, 50%, 0.15)";
       ctx.strokeStyle = OUTLINE_APPEARANCE.stroke;
       ctx.lineWidth = OUTLINE_APPEARANCE.strokeWidth / displayScale;
-      ctx.setLineDash([6 / displayScale, 4 / displayScale]);
+      ctx.setLineDash([]);
       ctx.beginPath();
       ctx.moveTo(hole[0].x, hole[0].y);
       for (let i = 1; i < hole.length; i++) ctx.lineTo(hole[i].x, hole[i].y);
@@ -198,10 +198,10 @@ export const NewBuildOutletCanvas = ({
     }
 
     // Draw outlets
-    outlets.forEach((outlet) => {
-      const preview = dragPreview?.id === outlet.id ? { ...outlet, ...dragPreview } : outlet;
-      drawOutletMarker(ctx, preview, outletMarkerGeometry(preview, roofOutlines, interiorHoles,
-        displayScale, outlineIds, 5), selectedOutlet?.id === outlet.id);
+    const previews = outlets.map(outlet => dragPreview?.id === outlet.id ? { ...outlet, ...dragPreview } : outlet);
+    const markers = outletMarkerGeometries(previews, roofOutlines, interiorHoles, displayScale, outlineIds, 5);
+    previews.forEach((outlet, index) => {
+      drawOutletMarker(ctx, outlet, markers[index], selectedOutlet?.id === outlet.id);
     });
   }, [pdfCanvas, roofOutlines, outlineIds, interiorHoles, outlets, selectedOutlet, drainageEdges, hoveredEdge, outletMode, displayScale, dragPreview]);
 

@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { NewBuildStep, Outlet, Point, DrainageEdge } from "@/types/roof";
 import { PaintBucket, MousePointerClick, Trash2, Droplets, Scissors, Move, Layers } from "lucide-react";
-import { drawOutletMarker, outletMarkerGeometry } from "@/utils/outletMarker";
+import { drawOutletMarker, outletMarkerGeometries } from "@/utils/outletMarker";
 
 interface NewBuildSidebarProps {
   currentStep: NewBuildStep;
@@ -66,8 +66,8 @@ const SavedAreasPreview = ({ outlines, outlets, holes, outlineIds }: {
     ctx.translate(offX, offY);
     ctx.scale(scale, scale);
     const cssScale = (canvas.getBoundingClientRect().width || canvas.width) / canvas.width;
-    for (const outlet of outlets) drawOutletMarker(ctx, outlet,
-      outletMarkerGeometry(outlet, outlines, holes, scale * cssScale, outlineIds, 2 / scale));
+    const markers = outletMarkerGeometries(outlets, outlines, holes, scale * cssScale, outlineIds, 2 / scale);
+    outlets.forEach((outlet, index) => drawOutletMarker(ctx, outlet, markers[index]));
     ctx.restore();
   }, [outlines, outlets, holes, outlineIds]);
 

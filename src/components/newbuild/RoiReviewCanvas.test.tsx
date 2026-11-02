@@ -72,7 +72,18 @@ describe("penetration opening gestures", () => {
   it("previews and commits move/resize at zoom with Undo, and cancels unfinished drags", async () => {
     const { frame, pointer, opening, box, user } = setup();
     expect(opening()).not.toBeInTheDocument();
+    expect(screen.getByTestId("annotation-box-rooflight")).toHaveClass("border-dashed");
     await user.click(screen.getByRole("button", { name: "Add opening" }));
+    expect(screen.getByTestId("annotation-box-rooflight")).not.toHaveClass("border-dashed");
+    expect(screen.getByTestId("annotation-box-rooflight")).toHaveClass("border-0");
+    expect(screen.getByTestId("annotation-box-rooflight")).not.toHaveClass("border-2", "outline", "ring-2");
+    expect(screen.getByLabelText("Manual roof geometry").querySelectorAll('[stroke-dasharray]')).toHaveLength(0);
+    const boundaries = screen.getByLabelText("Manual roof geometry").querySelectorAll('polygon[stroke]');
+    expect(boundaries).toHaveLength(3); // Scope, manual cutout and accepted penetration, each drawn once.
+    for (const boundary of boundaries) {
+      expect(boundary).toHaveAttribute("stroke-width", "2");
+      expect(boundary).toHaveAttribute("vector-effect", "non-scaling-stroke");
+    }
     const original = opening()!.getAttribute("points");
     await user.click(screen.getByRole("button", { name: "Zoom in" }));
     fireEvent.pointerDown(screen.getByRole("button", { name: "Penetration 1: accepted" }), pointer(400, 325));

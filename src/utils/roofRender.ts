@@ -1,6 +1,6 @@
 import type { DrainageEdge, Outlet, Point } from "@/types/roof";
 import type { PageSession } from "@/types/roi";
-import { drawOutletMarker, outletMarkerGeometry, OUTLET_COLOUR } from "./outletMarker";
+import { drawOutletMarker, outletMarkerGeometries, OUTLET_COLOUR } from "./outletMarker";
 import { penetrationOpenings } from "./penetrationOpenings";
 import { activePageOutlets } from "./outletScope";
 import { editorDrainage } from "./roiDrawing";
@@ -193,7 +193,7 @@ export function drawRoofIllustration(ctx: CanvasRenderingContext2D, data: Illust
     ctx.fillStyle = "hsl(0, 0%, 100%)";
     ctx.strokeStyle = "hsl(0, 0%, 40%)";
     ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
+    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(hole[0].x + offset.x, hole[0].y + offset.y);
     for (let i = 1; i < hole.length; i++) {
@@ -205,9 +205,9 @@ export function drawRoofIllustration(ctx: CanvasRenderingContext2D, data: Illust
     ctx.setLineDash([]);
   }
 
-  outlets.forEach(outlet => {
-    drawOutletMarker(ctx, outlet, outletMarkerGeometry(outlet, roofOutlines, interiorHoles,
-      displayScale, outlineIds, 4), false, offset);
+  const markers = outletMarkerGeometries(outlets, roofOutlines, interiorHoles, displayScale, outlineIds, 4);
+  outlets.forEach((outlet, index) => {
+    drawOutletMarker(ctx, outlet, markers[index], false, offset);
   });
 
   drawLegend(ctx, width, drainageEdges.length > 0, outlets.length > 0);
@@ -307,7 +307,7 @@ export async function renderMarkedUpPagePng(page: PageSession): Promise<Blob> {
   for (const outline of outlines) {
     ctx.beginPath(); tracePath(ctx, outline); ctx.fill(); ctx.stroke();
   }
-  ctx.setLineDash([line * 3, line * 2]);
+  ctx.setLineDash([]);
   ctx.lineWidth = line * 0.75;
   for (const hole of holes) {
     ctx.beginPath(); tracePath(ctx, hole); ctx.stroke();

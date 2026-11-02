@@ -68,6 +68,15 @@ describe("outlet effective scope", () => {
 });
 
 describe("outlet review lifecycle", () => {
+  it("keeps the raw proposal after source fitting and reconciles it on reruns", () => {
+    const { page, receive, candidate, accept } = setup();
+    receive([candidate({ anchor: { x: 110, y: 120 }, proposed_anchor: { x: 99, y: 120 } })]);
+    expect(page().annotations.find(annotation => annotation.id === "outlet-1")?.proposed_anchor).toEqual({ x: 99, y: 120 });
+    accept();
+    receive([candidate({ id: "rerun", anchor: { x: 99, y: 120 }, proposed_anchor: { x: 99, y: 120 } })]);
+    expect(reviewPageOutlets(page())).toHaveLength(1);
+    expect(activePageOutlets(page())[0].x).toBe(110);
+  });
   it("derives one accepted object, retains corrected anchors on rerun, and rejects/deletes/undoes without orphans", () => {
     const { page, dispatch, candidate, receive, accept } = setup();
     receive();

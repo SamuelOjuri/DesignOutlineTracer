@@ -48,13 +48,15 @@ test("detects, reviews and preserves outlet anchors with contained and boundary-
       contract_version: "outlet-1", page_id: payload.page_id, request_id: payload.request_id,
       source_image_hash: payload.source_image_hash, scope_signature: payload.scope_signature,
       status: "complete", model: "synthetic", prompt_version: "rainwater-outlet-v1", warnings: [],
+      run: { algorithm_version: "outlet-symbol-centres-v2" },
       annotations: [{ x: 90, y: 150, label: "Interior inlet" }, { x: 60, y: 220, label: "Boundary inlet" },
         { x: 200, y: 270, label: "Outside notch" }].map((point, index) => {
         const box: Box2D = [(point.y - 3) / context.source_height * 1000, (point.x - 3) / context.source_width * 1000,
-          (point.y + 3) / context.source_height * 1000, (point.x + 3) / context.source_width * 1000];
+          (point.y + 3) / context.source_height * 1000, (point.x + (index === 1 ? 11 : 3)) / context.source_width * 1000];
         return { id: `inlet-${requests.length}-${index}`, page_id: payload.page_id, kind: "rainwater_outlet",
-          label: point.label, subtype: index === 1 ? "parapet_outlet" : "internal_outlet",
-          box_2d: box, proposed_box_2d: box, anchor: { x: point.x, y: point.y }, proposed_anchor: { x: point.x, y: point.y },
+          label: point.label, subtype: index < 2 ? "parapet_outlet" : "internal_outlet",
+          box_2d: box, proposed_box_2d: box, anchor: { x: point.x, y: point.y },
+          proposed_anchor: { x: index === 0 ? point.x - 10 : point.x, y: point.y },
           roi_id: scope.roi_id, outline_id: scope.outline_id, origin: "gemini", review_status: "suggested",
           validity: index === 2 ? "needs_review" : "current", revision: 1, edits: [],
           warnings: index === 2 ? ["outlet_outside_scope"] : [], evidence: "Synthetic source inlet symbol", };
@@ -112,6 +114,11 @@ test("detects, reviews and preserves outlet anchors with contained and boundary-
   await page.getByRole("button", { name: /Outside notch/ }).click();
   await expect(page.getByRole("button", { name: "Accept outlet", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Reject", exact: true }).click();
+  await page.getByRole("button", { name: /Boundary inlet.*accepted/ }).click();
+  await page.getByText("Correct position, type or size", { exact: true }).click();
+  await page.getByRole("button", { name: "Use symbol centre", exact: true }).click();
+  await page.getByText("Correct position, type or size", { exact: true }).click();
+  await expect(page.getByLabel("Outlet X position", { exact: true })).toHaveValue("64");
   await page.getByRole("button", { name: /Interior inlet.*accepted/ }).click();
   await page.getByText("Correct position, type or size", { exact: true }).click();
   await page.getByLabel("Outlet X position", { exact: true }).fill("95");

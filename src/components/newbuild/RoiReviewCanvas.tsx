@@ -49,6 +49,12 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
   const previewPage = page && draft ? { ...page, annotations: page.annotations.map(annotation => annotation.id === draft.id
     ? { ...annotation, box_2d: draft.box } : annotation) } : page;
   const displayedDrawing = previewPage ? drawingWithPenetrations(previewPage) : drawing;
+  // An opening is already stroked below. Drawing its editable rectangle as well
+  // thickens the line and can show an unclipped box outside the insulation scope.
+  const openingIds = new Set(displayedDrawing?.holes.map(hole => hole.id));
+  const boundaryRenderedIds = new Set(annotations.filter(annotation => annotation.kind === "penetration"
+    && annotation.review_status === "accepted" && annotation.validity === "current"
+    && openingIds.has(`penetration:${annotation.id}:0`)).map(annotation => annotation.id));
 
   useEffect(() => {
     canvas.current?.getContext("2d")?.drawImage(pdfCanvas, 0, 0);
@@ -168,11 +174,11 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
             {displayedDrawing.outlines.map((outline) => <polygon key={outline.id} points={outline.points.map((point) => `${point.x},${point.y}`).join(" ")}
               fill="none" stroke={OUTLINE_APPEARANCE.stroke} strokeWidth={OUTLINE_APPEARANCE.strokeWidth} vectorEffect="non-scaling-stroke" />)}
             {displayedDrawing.holes.map((hole) => <polygon key={hole.id} points={hole.points.map((point) => `${point.x},${point.y}`).join(" ")}
-              fill="none" stroke={OUTLINE_APPEARANCE.stroke} strokeWidth={OUTLINE_APPEARANCE.strokeWidth} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />)}
+              fill="none" stroke={OUTLINE_APPEARANCE.stroke} strokeWidth={OUTLINE_APPEARANCE.strokeWidth} vectorEffect="non-scaling-stroke" />)}
           </svg>}
           {contextAnnotations.length > 0 && <AnnotationOverlay annotations={contextAnnotations} labels={contextLabels} labelsAbove />}
           <AnnotationOverlay annotations={annotations} selectedId={selectedId} draft={draft} draftKind={kind} interactive={!adding && !panning}
-            onSelect={onSelect} onEdit={onEdit} />
+            boundaryRenderedIds={boundaryRenderedIds} onSelect={onSelect} onEdit={onEdit} />
         </div>
       </div>
     </section>

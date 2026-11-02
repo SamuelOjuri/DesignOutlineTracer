@@ -92,8 +92,8 @@ class OutlineGeometryTests(unittest.TestCase):
                 self.assert_points(proposal["points"], rectangle)
                 self.assert_points(proposal["proposed_points"], proposed)
                 self.assertEqual(len(proposal["edges"]), 4)
-                self.assertIn("corner_steps_straightened", proposal["warnings"])
-                self.assertEqual(result["status"], "needs_review")
+                self.assertNotIn("corner_steps_straightened", proposal["warnings"])
+                self.assertEqual(result["status"], "complete")
 
     def test_returns_above_tolerance_and_offsets_along_an_edge_are_preserved(self):
         notch = [(70, 50), (350, 50), (350, 250), (50, 250), (50, 70), (70, 70)]

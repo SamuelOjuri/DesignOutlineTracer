@@ -317,7 +317,7 @@ export function roofExportSvg(model: RoofExportModel): string {
     `<g id="roof-areas" fill="#f2f2f2" stroke="#3d4452" stroke-width="${stroke}" stroke-linejoin="round">`,
     ...model.roof_areas.map(area => `  <path data-id="${xml(area.id)}" data-label="${xml(area.label)}" d="${path(area.outline)}"/>`),
     "</g>",
-    `<g id="openings" fill="#ffffff" stroke="#666666" stroke-width="${stroke * 0.8}" stroke-dasharray="${stroke * 2.4} ${stroke * 1.6}">`,
+    `<g id="openings" fill="#ffffff" stroke="#666666" stroke-width="${stroke * 0.8}">`,
     ...model.openings.map(opening => `  <path data-id="${xml(opening.id)}" data-kind="${opening.kind}" data-label="${xml(opening.label)}" d="${path(opening.outline)}"/>`),
     "</g>",
     `<g id="drainage-edges" stroke="#1a80e6" stroke-width="${stroke * 1.6}" stroke-linecap="round">`,
