@@ -6,6 +6,7 @@ import { OutlineControls } from "./OutlineControls";
 import { OutletControls } from "./OutletControls";
 import { PenetrationControls } from "./PenetrationControls";
 import { ProjectDetailsForm } from "./ProjectDetailsForm";
+import { emptyProjectDetails } from "@/lib/projectDetailsFields";
 import {
   RoofOutline,
   Outlet,
@@ -23,22 +24,7 @@ export const RoofDrawingApp = () => {
   });
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [penetrations, setPenetrations] = useState<Penetration[]>([]);
-  const [projectDetails, setProjectDetails] = useState<ProjectDetails>({
-    name: '',
-    company: '',
-    email: '',
-    projectName: '',
-    projectAddress: '',
-    targetUValue: '',
-    productType: '',
-    deckType: '',
-    additionalNotes: '',
-    maxInsulationHeight: '',
-    account: '',
-    fallType: '',
-    waterproofingType: '',
-    buildMethod: '',
-  });
+  const [projectDetails, setProjectDetails] = useState<ProjectDetails>(emptyProjectDetails);
   const [selectedOutlet, setSelectedOutlet] = useState<Outlet | null>(null);
   const [selectedPenetration, setSelectedPenetration] = useState<Penetration | null>(null);
   const [outletMode, setOutletMode] = useState<'none' | 'add-outlets' | 'drainage-edge'>('none');

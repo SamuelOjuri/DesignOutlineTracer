@@ -2,7 +2,8 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import { Point, Outlet, DrainageEdge } from "@/types/roof";
 import { Button } from "@/components/ui/button";
 import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
-import { drawOutletMarker, outletMarkerGeometry, OUTLET_COLOUR } from "@/utils/outletMarker";
+import { outletMarkerGeometry } from "@/utils/outletMarker";
+import { drawRoofIllustration, illustrationBounds, ILLUSTRATION_PADDING as PADDING } from "@/utils/roofRender";
 
 interface RoofIllustrationCanvasProps {
   roofOutlines: Point[][];
@@ -44,27 +45,8 @@ export const RoofIllustrationCanvas = ({
   const ZOOM_STEP = 0.15;
   const MIN_ZOOM = 0.3;
   const MAX_ZOOM = 3;
-  const PADDING = 60;
 
-  const getBounds = useCallback(() => {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const outline of roofOutlines) {
-      for (const p of outline) {
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-      }
-    }
-    for (const o of outlets) {
-      minX = Math.min(minX, o.x - 20);
-      minY = Math.min(minY, o.y - 20);
-      maxX = Math.max(maxX, o.x + 20);
-      maxY = Math.max(maxY, o.y + 20);
-    }
-    if (!isFinite(minX)) return { minX: 0, minY: 0, maxX: 400, maxY: 300, w: 400, h: 300 };
-    return { minX, minY, maxX, maxY, w: maxX - minX, h: maxY - minY };
-  }, [roofOutlines, outlets]);
+  const getBounds = useCallback(() => illustrationBounds(roofOutlines, outlets), [roofOutlines, outlets]);
 
   const getOffset = useCallback(() => {
     const bounds = getBounds();
@@ -150,174 +132,9 @@ export const RoofIllustrationCanvas = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d")!;
-    const offset = getOffset();
-    const isDrainageEdge = (outlineIndex: number, edgeIndex: number) =>
-      drainageEdges.some((edge) => edge.outlineIndex === outlineIndex && edge.edgeIndex === edgeIndex);
-
-    // Clear with white
-    ctx.fillStyle = "hsl(0, 0%, 100%)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Subtle grid
-    ctx.strokeStyle = "hsl(0, 0%, 93%)";
-    ctx.lineWidth = 0.5;
-    const gridSize = 40;
-    for (let x = 0; x < canvas.width; x += gridSize) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-    }
-    for (let y = 0; y < canvas.height; y += gridSize) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
-    }
-
-    // Draw roof outlines
-    for (let oi = 0; oi < roofOutlines.length; oi++) {
-      const outline = roofOutlines[oi];
-      if (outline.length < 3) continue;
-      const isHovered = hoveredOutline === oi;
-
-      // Fill
-      ctx.fillStyle = isHovered ? "hsla(210, 80%, 90%, 0.6)" : "hsla(0, 0%, 95%, 0.8)";
-      ctx.beginPath();
-      ctx.moveTo(outline[0].x + offset.x, outline[0].y + offset.y);
-      for (let i = 1; i < outline.length; i++) {
-        ctx.lineTo(outline[i].x + offset.x, outline[i].y + offset.y);
-      }
-      ctx.closePath();
-      ctx.fill();
-
-      // Hovered outline border
-      if (isHovered) {
-        ctx.strokeStyle = "hsl(210, 85%, 55%)";
-        ctx.lineWidth = 3;
-        ctx.setLineDash([6, 3]);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
-
-      // Draw each edge
-      for (let ei = 0; ei < outline.length; ei++) {
-        const p1 = outline[ei];
-        const p2 = outline[(ei + 1) % outline.length];
-        const drainage = isDrainageEdge(oi, ei);
-
-        if (drainage) {
-          ctx.strokeStyle = "hsl(210, 85%, 50%)";
-          ctx.lineWidth = 4;
-        } else {
-          ctx.strokeStyle = "hsl(220, 15%, 30%)";
-          ctx.lineWidth = 2.5;
-        }
-
-        ctx.beginPath();
-        ctx.moveTo(p1.x + offset.x, p1.y + offset.y);
-        ctx.lineTo(p2.x + offset.x, p2.y + offset.y);
-        ctx.stroke();
-
-        if (drainage) {
-          drawDrainageArrows(ctx, { x: p1.x + offset.x, y: p1.y + offset.y }, { x: p2.x + offset.x, y: p2.y + offset.y });
-        }
-
-        ctx.fillStyle = "hsl(220, 15%, 30%)";
-        ctx.beginPath();
-        ctx.arc(p1.x + offset.x, p1.y + offset.y, 3, 0, 2 * Math.PI);
-        ctx.fill();
-      }
-    }
-
-    // Draw interior holes (penetrations)
-    for (const hole of interiorHoles) {
-      if (hole.length < 3) continue;
-      ctx.fillStyle = "hsl(0, 0%, 100%)";
-      ctx.strokeStyle = "hsl(0, 0%, 40%)";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.beginPath();
-      ctx.moveTo(hole[0].x + offset.x, hole[0].y + offset.y);
-      for (let i = 1; i < hole.length; i++) {
-        ctx.lineTo(hole[i].x + offset.x, hole[i].y + offset.y);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Draw outlets
-    outlets.forEach(outlet => {
-      drawOutletMarker(ctx, outlet, outletMarkerGeometry(outlet, roofOutlines, interiorHoles,
-        displayScale, outlineIds, 4), false, offset);
-    });
-
-    // Legend
-    drawLegend(ctx, canvas.width, drainageEdges.length > 0, outlets.length > 0);
+    drawRoofIllustration(ctx, { roofOutlines, outlineIds, interiorHoles, outlets, drainageEdges },
+      { offset: getOffset(), width: canvas.width, height: canvas.height, displayScale, hoveredOutline });
   }, [roofOutlines, outlineIds, outlets, drainageEdges, getOffset, hoveredOutline, interiorHoles, displayScale]);
-
-  const drawDrainageArrows = (ctx: CanvasRenderingContext2D, p1: Point, p2: Point) => {
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const len = Math.sqrt(dx * dx + dy * dy);
-    if (len === 0) return;
-
-    const nx = dx / len;
-    const ny = dy / len;
-    const px = ny;
-    const py = -nx;
-
-    const spacing = 30;
-    const count = Math.max(1, Math.floor(len / spacing));
-
-    ctx.strokeStyle = "hsl(210, 85%, 50%)";
-    ctx.lineWidth = 1.5;
-
-    for (let i = 0; i < count; i++) {
-      const t = (i + 0.5) / count;
-      const ax = p1.x + dx * t;
-      const ay = p1.y + dy * t;
-      const aLen = 10;
-      const ex = ax + px * aLen;
-      const ey = ay + py * aLen;
-
-      ctx.beginPath();
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(ex, ey);
-      ctx.stroke();
-
-      const hl = 3.5;
-      const angle = Math.atan2(py, px);
-      const ha = Math.PI / 6;
-      ctx.beginPath();
-      ctx.moveTo(ex, ey);
-      ctx.lineTo(ex - hl * Math.cos(angle - ha), ey - hl * Math.sin(angle - ha));
-      ctx.moveTo(ex, ey);
-      ctx.lineTo(ex - hl * Math.cos(angle + ha), ey - hl * Math.sin(angle + ha));
-      ctx.stroke();
-    }
-  };
-
-  const drawLegend = (ctx: CanvasRenderingContext2D, canvasWidth: number, hasDrainage: boolean, hasOutlets: boolean) => {
-    const items: { color: string; label: string }[] = [
-      { color: "hsl(220, 15%, 30%)", label: "Roof Edge" },
-    ];
-    if (hasDrainage) {
-      items.push({ color: "hsl(210, 85%, 50%)", label: "Drainage Edge" });
-    }
-    if (hasOutlets) {
-      items.push({ color: OUTLET_COLOUR, label: "Outlet" });
-    }
-
-    const x = canvasWidth - 14;
-    let y = 20;
-    ctx.textAlign = "right";
-    ctx.font = "11px system-ui, sans-serif";
-
-    for (const item of items) {
-      ctx.fillStyle = item.color;
-      ctx.fillRect(x - ctx.measureText(item.label).width - 18, y - 6, 12, 12);
-      ctx.fillStyle = "hsl(220, 15%, 25%)";
-      ctx.fillText(item.label, x, y + 4);
-      y += 20;
-    }
-  };
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!onOutlinesChange || e.button !== 0) return;

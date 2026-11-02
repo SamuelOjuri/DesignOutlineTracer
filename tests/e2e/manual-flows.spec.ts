@@ -1,6 +1,9 @@
 import type { Locator, Page, TestInfo } from "@playwright/test";
+import { Buffer } from "node:buffer";
+import { readFile } from "node:fs/promises";
+import { strFromU8, unzipSync } from "fflate";
 import { test, expect } from "./fixtures";
-import { createRoofPlanPdf } from "../fixtures/roofPlan";
+import { createRoofPlanPdf, createSpecificationPdf } from "../fixtures/roofPlan";
 
 async function clickCanvas(canvas: Locator, horizontal: number, vertical: number) {
   const size = await canvas.boundingBox();
@@ -41,10 +44,9 @@ async function fillDetails(page: Page) {
   await page.getByLabel("Email Address *", { exact: true }).fill("regression@example.invalid");
   await page.getByLabel("Project Name *", { exact: true }).fill("Phase 0 synthetic roof");
   await page.getByLabel("Project Address (Including Postcode) *", { exact: true }).fill("Synthetic test address");
-  await page.getByLabel("Target U-Value *", { exact: true }).fill("0.18");
 }
 
-test("New Build: PDF pages, manual fill/undo, zoom, outlet and mocked submission", async ({ page, networkGuard }, testInfo) => {
+test("New Build: PDF pages, manual fill/undo, zoom, outlet and package download", async ({ page, networkGuard }, testInfo) => {
   test.setTimeout(120_000);
   await page.goto("/new-build");
   const next = page.getByRole("button", { name: "Next", exact: true });
@@ -133,16 +135,52 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and mocked submission
   await next.click();
   await expect(page.getByLabel("Project Name *", { exact: true })).toHaveValue("Phase 0 synthetic roof");
   await capture(page, testInfo, "new-build-project-details");
+  const send = page.getByRole("button", { name: "Send to TaperedPlus", exact: true });
+  await expect(send).toBeDisabled();
+  await expect(page.getByText("Sending to TaperedPlus is coming soon.", { exact: true })).toBeVisible();
+
+  const specification = await createSpecificationPdf();
+  await page.getByLabel("Performance specification PDF", { exact: true }).setInputFiles(specification);
+  await expect(page.getByTestId("spec-document-name")).toHaveText(specification.name);
+  await expect(page.getByText(/Target U-Value|Product Type|Deck Type|Waterproofing Type/)).toHaveCount(0);
+  const downloadButton = page.getByRole("button", { name: "Download package (.zip)", exact: true });
+  await expect(downloadButton).toBeEnabled();
+  await capture(page, testInfo, "new-build-package-ready");
+  const downloadEvent = page.waitForEvent("download");
+  await downloadButton.click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toMatch(/^TPID_Phase_0_synthetic_roof_\d{8}-\d{4}\.zip$/);
+  const files = unzipSync(new Uint8Array(await readFile(await download.path())));
+  expect(Object.keys(files).sort()).toEqual([
+    `1_spec/${specification.name}`,
+    "2_details/project_details.csv",
+    "3_roof_plan/synthetic-two-page-roof.pdf",
+    "4_drawing/roof_drawing.png",
+    "4_drawing/roof_mask.png",
+    "4_drawing/roof_metadata.json",
+    "4_drawing/roof_outline.dxf",
+    "4_drawing/roof_outline.geojson",
+    "4_drawing/roof_outline.svg",
+    "4_drawing/roof_plan_marked_up_p2.png",
+    "5_prompt/TRICS_design_prompt.md",
+    "manifest.json",
+  ]);
+  expect(Buffer.from(files[`1_spec/${specification.name}`]).equals(specification.buffer)).toBe(true);
+  expect(Buffer.from(files["3_roof_plan/synthetic-two-page-roof.pdf"]).equals((await createRoofPlanPdf()).buffer)).toBe(true);
+  for (const png of ["roof_drawing.png", "roof_mask.png", "roof_plan_marked_up_p2.png"]) {
+    expect([...files[`4_drawing/${png}`].slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+  }
+  const csv = strFromU8(files["2_details/project_details.csv"]);
+  expect(csv).toContain("projectName,Project Name,Phase 0 synthetic roof\r\n");
+  expect(csv).toContain("projectAddress,Project Address (Including Postcode),Synthetic test address\r\n");
+  expect(csv).not.toContain("targetUValue");
+  expect(strFromU8(files["4_drawing/roof_outline.dxf"])).toContain("AC1009");
+  const metadata = JSON.parse(strFromU8(files["4_drawing/roof_metadata.json"]));
+  expect(metadata).toMatchObject({ units: "mm", totals: { roof_areas: 1, outlets: 1 } });
+  expect(metadata.totals.net_area_m2).toBeGreaterThan(0);
+  expect(strFromU8(files["5_prompt/TRICS_design_prompt.md"])).toContain(`\`1_spec/${specification.name}\``);
+  expect(JSON.parse(strFromU8(files["manifest.json"]))).toMatchObject({ performance_specification_supplied: true });
   expect(networkGuard.submissions).toHaveLength(0);
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Send to TaperedPlus", exact: true }).click();
-  await expect.poll(() => networkGuard.submissions.length).toBe(1);
-  expect(networkGuard.submissions[0]).toMatchObject({
-    outline: [expect.objectContaining({ polygonPoints: expect.any(Array) })],
-    outlets: [expect.objectContaining({ x: expect.any(Number), y: expect.any(Number), diameter: 0.15 })],
-    penetrations: [],
-    projectDetails: { projectName: "Phase 0 synthetic roof" },
-  });
 });
 
 test("New Build: selection sensitivity preserves geometry and fits desktop and mobile", async ({ page }, testInfo) => {

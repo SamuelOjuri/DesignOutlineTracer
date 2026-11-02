@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { PDFDocument, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 
 export async function createRoofPlanPdf() {
   const document = await PDFDocument.create();
@@ -51,4 +51,21 @@ export async function createOpenRoofPlanPdf() {
     page.drawRectangle({ x: 140, y: 90, width: 20, height: 20, borderWidth: 1, borderColor: rgb(0, 0, 0) });
   }
   return { name: "synthetic-open-roof.pdf", mimeType: "application/pdf", buffer: Buffer.from(await document.save()) };
+}
+
+/** Synthetic stand-in for the CRM "Project Performance Specification Details" export (label: value lines). */
+export async function createSpecificationPdf() {
+  const document = await PDFDocument.create();
+  const fixtureDate = new Date("2026-10-30T00:00:00Z");
+  document.setCreationDate(fixtureDate);
+  document.setModificationDate(fixtureDate);
+  document.setTitle("Synthetic performance specification fixture");
+  const page = document.addPage([595, 842]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText("Project Performance Specification Details", { x: 50, y: 780, size: 16, font });
+  ["Scale: 1:100", "Page Size: ISO A1", "Drawing Title: Synthetic Terrace", "Target U Value: 0.25",
+    "Target Min U Value: 0.35", "Membrane: Not Provided", "Decking: Timber (18mm)"]
+    .forEach((line, index) => page.drawText(line, { x: 50, y: 740 - index * 24, size: 11, font }));
+  return { name: "Project_Performance_Specification_Details_synthetic.pdf", mimeType: "application/pdf",
+    buffer: Buffer.from(await document.save()) };
 }

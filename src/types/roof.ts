@@ -51,12 +51,8 @@ export interface Point {
     account: string;
     projectName: string;
     projectAddress: string;
-    targetUValue: string;
     maxInsulationHeight: string;
-    productType: string;
-    deckType: string;
     fallType: string;
-    waterproofingType: string;
     buildMethod: string;
     additionalNotes: string;
   }

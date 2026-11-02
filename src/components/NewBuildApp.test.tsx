@@ -17,7 +17,7 @@ const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x
 const hole = [{ x: 150, y: 150 }, { x: 180, y: 150 }, { x: 180, y: 180 }];
 
 vi.mock("./newbuild/PdfUpload", () => ({
-  PdfUpload: ({ onPdfRendered, onPageRendered, onPageSelectionStart, drawingScale, onDrawingScaleChange }: ComponentProps<typeof PdfUpload>) => (
+  PdfUpload: ({ onPdfRendered, onPageRendered, onPageSelectionStart, onDocumentLoaded, drawingScale, onDrawingScaleChange }: ComponentProps<typeof PdfUpload>) => (
     <>
       <output data-testid="upload-scale">{drawingScale.scaleRatio}</output>
       <button onClick={() => onDrawingScaleChange({ ...drawingScale, scaleRatio: 50 })}>Change upload scale</button>
@@ -26,8 +26,10 @@ vi.mock("./newbuild/PdfUpload", () => ({
           const canvas = document.createElement("canvas");
           canvas.width = 800 * factor;
           canvas.height = 600 * factor;
+          const page = syntheticPage(`page-${factor}`, factor);
           onPageSelectionStart?.();
-          onPageRendered?.(syntheticPage(`page-${factor}`, factor), canvas);
+          onDocumentLoaded?.(page.document_id, new File(["%PDF-1.4"], page.file_name, { type: "application/pdf" }));
+          onPageRendered?.(page, canvas);
           onPdfRendered(canvas);
         }}>Render PDF {factor}</button>
       ))}
@@ -82,11 +84,12 @@ vi.mock("./newbuild/RoofIllustrationCanvas", () => ({
 }));
 
 vi.mock("./ProjectDetailsForm", () => ({
-  ProjectDetailsForm: ({ projectDetails, onProjectDetailsChange, penetrations }: ComponentProps<typeof ProjectDetailsForm>) => (
+  ProjectDetailsForm: ({ projectDetails, onProjectDetailsChange, penetrations, actions }: ComponentProps<typeof ProjectDetailsForm>) => (
     <>
       <h2>Project details form</h2>
       <label>Project name<input value={projectDetails.projectName} onChange={(event) => onProjectDetailsChange({ ...projectDetails, projectName: event.target.value })} /></label>
       <output data-testid="penetrations">{JSON.stringify(penetrations)}</output>
+      {actions}
     </>
   ),
 }));
@@ -241,6 +244,9 @@ describe("manual New Build state", () => {
     await user.click(next());
     expect(screen.getByRole("textbox", { name: "Project name" })).toHaveValue("Manual baseline");
     expect(screen.getByRole("button", { name: "Complete" })).toBeDisabled();
+    expect(screen.getByLabelText("Performance specification PDF")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Package contents" })).toHaveTextContent("page-1.pdf");
+    expect(screen.getByRole("button", { name: "Download package (.zip)" })).toBeEnabled();
   });
 
   it("rescales and offsets an additional PDF once, preserving holes, outlets and drainage indices", async () => {

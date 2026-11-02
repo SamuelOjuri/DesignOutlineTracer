@@ -107,6 +107,7 @@ If either port changes, update the corresponding setting. `localhost` and
 | `VITE_ROI_ENABLED` | Frontend | Set to `true` to show ROI/penetration review and enable ROI requests. |
 | `VITE_ROI_API_BASE_URL` | Frontend | Loopback API origin, such as `http://127.0.0.1:8080`, without the `/api/roi/v1` suffix. |
 | `VITE_ROI_DETECTION_TIMEOUT_MS` | Frontend | Detection deadline in milliseconds; defaults to `930000` (15 minutes plus 30 seconds). Health, upload and delete retain their 70-second deadlines. |
+| `VITE_ENABLE_SEND_TO_TAPEREDPLUS` | Frontend | Set to `true` to re-enable **Send to TaperedPlus** on Project Details; off by default. |
 | `ROI_MODEL` | Backend | `gemini-4-argon` (default) or `gemini-3.7-flash`. |
 | `ROI_THINKING_LEVEL` | Backend | Argon reasoning level: `low`, `medium` (default), or `high`. Not sent to Flash. |
 | `ROI_TEMPERATURE` | Backend | Flash sampling temperature, from `0` to `2`; defaults to `0.5`. Omitted for Argon. |
@@ -162,7 +163,8 @@ contracts, request limits, and lifecycle details.
 
 - `/`: project-type selection.
 - `/new-build`: PDF upload and page selection, manual roof-area selection,
-  cutouts and outline adjustment, outlet/drainage editing, and project details.
+  cutouts and outline adjustment, outlet/drainage editing, and project details
+  with a downloadable TRICS package.
 - `/refurbishment`: the original dimension-based roof drawing interface.
 
 ### Roof Boundary Editing
@@ -245,10 +247,20 @@ summary. Changing the base roof scope requires confirming the openings again. Se
 [Phase 5 record](docs/Phase-5-Penetration-Review.md) for commands, verification and
 the remaining live-evaluation/category-policy gates.
 
-The original project-details form still submits to an external Supabase email
-function. It is not required for editing, and no Supabase server code was
-restored. Live email delivery was not tested; submitting real data invokes that
-existing external service.
+Phase 6 adds a **Download package (.zip)** action to Project Details. Optionally
+attach the CRM performance specification PDF; it is packaged exactly as provided
+and never copied into the form. The form no longer asks for target U-value,
+product, deck or waterproofing type, because the specification covers them. The
+zip also contains the form entries as CSV,
+the original roof plan PDF(s), the roof drawing (DXF, SVG, GeoJSON, PNG, mask and
+metadata, in millimetres), marked-up plan pages and a TRICS design prompt. See the
+[Phase 6 record](docs/Phase-6-Project-Package.md) for the package, CSV and geometry
+contracts.
+
+**Send to TaperedPlus** is inactive unless `VITE_ENABLE_SEND_TO_TAPEREDPLUS=true`.
+When enabled, the form submits to an external Supabase email function. It is not
+required for editing, and no Supabase server code was restored. Live email
+delivery was not tested; submitting real data invokes that existing external service.
 
 ## Recovery Provenance
 
@@ -336,8 +348,9 @@ npm run test:e2e
 ```
 
 All browser tests use a network guard that blocks unexpected external/backend
-requests and mocks the existing email endpoint. The New Build test submits
-synthetic data only to that mock; no real project email is sent. Keep browser
+requests and mocks the existing email endpoint. Send to TaperedPlus is inactive,
+so the New Build test checks the disabled button and that nothing is submitted,
+then downloads and inspects the project package instead. Keep browser
 tests importing `test` from [tests/e2e/fixtures.ts](tests/e2e/fixtures.ts), so
 the guard stays active. Run test servers locally, not on a public interface.
 

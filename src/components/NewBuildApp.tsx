@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { NewBuildStepHeader } from "./newbuild/NewBuildStepHeader";
 import { PdfUpload } from "./newbuild/PdfUpload";
@@ -7,6 +7,9 @@ import { NewBuildOutletCanvas } from "./newbuild/NewBuildOutletCanvas";
 import { NewBuildSidebar } from "./newbuild/NewBuildSidebar";
 import { RoofIllustrationCanvas } from "./newbuild/RoofIllustrationCanvas";
 import { ProjectDetailsForm } from "./ProjectDetailsForm";
+import { SpecDocumentUpload } from "./newbuild/SpecDocumentUpload";
+import { PackageDownload } from "./newbuild/PackageDownload";
+import { emptyProjectDetails } from "@/lib/projectDetailsFields";
 import {
   NewBuildStep,
   Outlet,
@@ -93,22 +96,14 @@ export const NewBuildApp = () => {
     }
   }, [currentStep, outletMode, activePage, selectedOutletAnnotationId, selectedOutletRecord]);
   const [showAdditionalUpload, setShowAdditionalUpload] = useState(false);
-  const [projectDetails, setProjectDetails] = useState<ProjectDetails>({
-    name: "",
-    company: "",
-    email: "",
-    projectName: "",
-    projectAddress: "",
-    targetUValue: "",
-    productType: "",
-    deckType: "",
-    additionalNotes: "",
-    maxInsulationHeight: "",
-    account: "",
-    fallType: "",
-    waterproofingType: "",
-    buildMethod: "",
-  });
+  const [projectDetails, setProjectDetails] = useState<ProjectDetails>(emptyProjectDetails);
+  // Kept apart from projectDetails: the specification is packaged as provided, never merged into the form.
+  const [specDocument, setSpecDocument] = useState<File | null>(null);
+  const [roofPlanFiles, setRoofPlanFiles] = useState<Record<string, File>>({});
+  const pageList = useMemo(() => Object.values(state.pages), [state.pages]);
+
+  const handleDocumentLoaded = (documentId: string, file: File) =>
+    setRoofPlanFiles((previous) => previous[documentId] ? previous : { ...previous, [documentId]: file });
 
   const handlePageRendered = (source: RenderedPdfPage, canvas: HTMLCanvasElement) => {
     canvases.current.set(source.page_id, canvas);
@@ -323,6 +318,7 @@ export const NewBuildApp = () => {
                   onPdfRendered={ignoreRenderedCanvas}
                   onPageRendered={handlePageRendered}
                   onPageSelectionStart={handlePageSelectionStart}
+                  onDocumentLoaded={handleDocumentLoaded}
                   drawingScale={drawingScale}
                   onDrawingScaleChange={handleDrawingScaleChange}
                 />
@@ -371,14 +367,15 @@ export const NewBuildApp = () => {
         onSelect={setSelectedRoiId} onAddingChange={setAddingRoi} dispatch={dispatch} detection={detection} />;
     }
     if (currentStep === "upload") {
-      return <PdfUpload onPdfRendered={ignoreRenderedCanvas} onPageRendered={handlePageRendered}
+      return <PdfUpload onPdfRendered={ignoreRenderedCanvas} onPageRendered={handlePageRendered} onDocumentLoaded={handleDocumentLoaded}
         onPageSelectionStart={handlePageSelectionStart} drawingScale={drawingScale} onDrawingScaleChange={handleDrawingScaleChange} />;
     }
     if (currentStep === "details") {
       return (
         <>
-        {roiClient.enabled && <PenetrationSummary pages={Object.values(state.pages)} />}
-        {roiClient.enabled && <OutletSummary pages={Object.values(state.pages)} />}
+        {roiClient.enabled && <PenetrationSummary pages={pageList} />}
+        {roiClient.enabled && <OutletSummary pages={pageList} />}
+        <SpecDocumentUpload file={specDocument} onChange={setSpecDocument} />
         <ProjectDetailsForm
           projectDetails={projectDetails}
           onProjectDetailsChange={setProjectDetails}
@@ -386,6 +383,8 @@ export const NewBuildApp = () => {
           outline={buildOutlines()}
           outlets={combined.outlets}
           penetrations={combined.penetrations}
+          actions={<PackageDownload projectDetails={projectDetails} specDocument={specDocument}
+            roofPlanFiles={roofPlanFiles} pages={pageList} illustrationOffsets={illustrationOffsets} />}
         />
         </>
       );

@@ -5,8 +5,14 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ProjectDetails, RoofOutline, Outlet, Penetration } from "@/types/roof";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useToast } from "@/hooks/use-toast";
+import {
+  ACCOUNT_OPTIONS, BUILD_METHOD_OPTIONS, FALL_TYPE_OPTIONS, type FieldOption,
+} from "@/lib/projectDetailsFields";
+
+/** Sending is paused until the TaperedPlus intake is ready; set the flag to "true" to restore it. */
+export const SEND_TO_TAPEREDPLUS_ENABLED = import.meta.env.VITE_ENABLE_SEND_TO_TAPEREDPLUS === "true";
 
 interface ProjectDetailsFormProps {
   projectDetails: ProjectDetails;
@@ -15,7 +21,14 @@ interface ProjectDetailsFormProps {
   outline: RoofOutline | RoofOutline[];
   outlets: Outlet[];
   penetrations: Penetration[];
+  /** Extra actions rendered above the send button; they must not submit the form. */
+  actions?: ReactNode;
+  sendEnabled?: boolean;
 }
+
+const optionItems = (options: FieldOption[]) => options.map(option => (
+  <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+));
 
 export const ProjectDetailsForm = ({
   projectDetails,
@@ -24,6 +37,8 @@ export const ProjectDetailsForm = ({
   outline,
   outlets,
   penetrations,
+  actions,
+  sendEnabled = SEND_TO_TAPEREDPLUS_ENABLED,
 }: ProjectDetailsFormProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
@@ -37,6 +52,8 @@ export const ProjectDetailsForm = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Enter in a text field still triggers implicit submission.
+    if (!sendEnabled) return;
     
     if (!projectDetails.projectName || !projectDetails.name || !projectDetails.email || !projectDetails.projectAddress) {
       toast({
@@ -154,10 +171,7 @@ export const ProjectDetailsForm = ({
             <SelectTrigger>
               <SelectValue placeholder="Select account" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="axter-limited">Axter Limited</SelectItem>
-              <SelectItem value="taperedplus-limited">TaperedPlus Limited</SelectItem>
-            </SelectContent>
+            <SelectContent>{optionItems(ACCOUNT_OPTIONS)}</SelectContent>
           </Select>
         </div>
 
@@ -184,18 +198,6 @@ export const ProjectDetailsForm = ({
         </div>
 
         <div>
-          <Label htmlFor="targetUValue">Target U-Value *</Label>
-          <Input
-            id="targetUValue"
-            type="text"
-            value={projectDetails.targetUValue}
-            onChange={(e) => handleFieldChange('targetUValue', e.target.value)}
-            placeholder="e.g., 0.18 W/m²K"
-            required
-          />
-        </div>
-
-        <div>
           <Label htmlFor="maxInsulationHeight">Max Insulation Height Allowable</Label>
           <Input
             id="maxInsulationHeight"
@@ -207,50 +209,6 @@ export const ProjectDetailsForm = ({
         </div>
 
         <div>
-          <Label htmlFor="productType">Product Type *</Label>
-          <Select
-            value={projectDetails.productType}
-            onValueChange={(value) => handleFieldChange('productType', value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select product type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="tissuefaced-pir" title="Polyisocyanurate with glass fibre facers suitable for use below single ply fully adhered roof membranes, single ply waterproofing systems and partially bonded built-up felt.">
-                TissueFaced PIR (TR/MG)
-              </SelectItem>
-              <SelectItem value="torchon-pir" title="Polyisocyanurate roof insulation with a polypropylene fleece finished bitumen/ glass fibre working surface and a mineral glass facing to the under side. (These boards are not reversible). They are suitable for use below most bitumen based partially bonded built up roofing systems.">
-                Torch On (TR/BGM)
-              </SelectItem>
-              <SelectItem value="foilfaced-pir" title="Polyisocyanurate Roof Insulation with vapour-tight aluminium foil facings suitable for use with single ply membranes in mechanically fixed systems.">
-                FoilFaced PIR (TR/ALU)
-              </SelectItem>
-              <SelectItem value="rockwool-hardrock-multifix" title="ROCKWOOL HardRock MultiFix - stone wool insulation board for flat roof applications.">
-                ROCKWOOL HardRock MultiFix
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div>
-          <Label htmlFor="deckType">Deck Type *</Label>
-          <Select
-            value={projectDetails.deckType}
-            onValueChange={(value) => handleFieldChange('deckType', value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select deck type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="concrete">Concrete</SelectItem>
-              <SelectItem value="metal">Metal</SelectItem>
-              <SelectItem value="timber">Timber</SelectItem>
-              <SelectItem value="composite">Composite</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div>
           <Label htmlFor="fallType">Fall Type *</Label>
           <Select
             value={projectDetails.fallType}
@@ -259,28 +217,7 @@ export const ProjectDetailsForm = ({
             <SelectTrigger>
               <SelectValue placeholder="Select fall type" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="1:80">1:80</SelectItem>
-              <SelectItem value="1:60">1:60</SelectItem>
-              <SelectItem value="1:40">1:40</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div>
-          <Label htmlFor="waterproofingType">Waterproofing Type *</Label>
-          <Select
-            value={projectDetails.waterproofingType}
-            onValueChange={(value) => handleFieldChange('waterproofingType', value)}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select waterproofing type" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="single-ply">Single Ply</SelectItem>
-              <SelectItem value="built-up-felt">Built Up Felt</SelectItem>
-              <SelectItem value="liquid-waterproofing">Liquid Waterproofing</SelectItem>
-            </SelectContent>
+            <SelectContent>{optionItems(FALL_TYPE_OPTIONS)}</SelectContent>
           </Select>
         </div>
 
@@ -293,10 +230,7 @@ export const ProjectDetailsForm = ({
             <SelectTrigger>
               <SelectValue placeholder="Select build method" />
             </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="multilayer">MultiLayer</SelectItem>
-              <SelectItem value="prebonded">Prebonded</SelectItem>
-            </SelectContent>
+            <SelectContent>{optionItems(BUILD_METHOD_OPTIONS)}</SelectContent>
           </Select>
         </div>
 
@@ -311,11 +245,14 @@ export const ProjectDetailsForm = ({
           />
         </div>
 
-        <div className="pt-4 border-t">
+        <div className="pt-4 border-t space-y-3">
+          {actions}
           <Button
             type="submit"
             className="w-full"
-            disabled={isSubmitting}
+            variant={sendEnabled ? "default" : "outline"}
+            disabled={!sendEnabled || isSubmitting}
+            aria-describedby="send-to-taperedplus-help"
           >
             {isSubmitting ? "Sending to TaperedPlus..." : "Send to TaperedPlus"}
           </Button>
@@ -323,8 +260,10 @@ export const ProjectDetailsForm = ({
       </form>
 
       <div className="mt-4 p-3 bg-muted rounded-lg">
-        <p className="text-sm text-muted-foreground">
-          Complete all project details and click "Send to TaperedPlus" to submit your roof design for processing.
+        <p id="send-to-taperedplus-help" className="text-sm text-muted-foreground">
+          {sendEnabled
+            ? 'Complete all project details and click "Send to TaperedPlus" to submit your roof design for processing.'
+            : "Sending to TaperedPlus is coming soon."}
         </p>
       </div>
     </Card>

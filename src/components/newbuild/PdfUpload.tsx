@@ -34,11 +34,13 @@ interface PdfUploadProps {
   onPdfRendered: (imageData: HTMLCanvasElement) => void;
   onPageRendered?: (page: RenderedPdfPage, canvas: HTMLCanvasElement) => void;
   onPageSelectionStart?: () => void;
+  /** Receives the original file once PDF.js has opened it, keyed by the same document_id as its pages. */
+  onDocumentLoaded?: (documentId: string, file: File) => void;
   drawingScale: DrawingScale;
   onDrawingScaleChange: (scale: DrawingScale) => void;
 }
 
-export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart, drawingScale, onDrawingScaleChange }: PdfUploadProps) => {
+export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart, onDocumentLoaded, drawingScale, onDrawingScaleChange }: PdfUploadProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [pageCount, setPageCount] = useState(0);
@@ -49,11 +51,11 @@ export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart,
   const generation = useRef(0);
   const renderTask = useRef<pdfjsLib.RenderTask | null>(null);
   const loadingTask = useRef<ReturnType<typeof pdfjsLib.getDocument> | null>(null);
-  const callbacks = useRef({ onPageRendered, onPdfRendered });
+  const callbacks = useRef({ onPageRendered, onPdfRendered, onDocumentLoaded });
 
   useEffect(() => {
-    callbacks.current = { onPageRendered, onPdfRendered };
-  }, [onPageRendered, onPdfRendered]);
+    callbacks.current = { onPageRendered, onPdfRendered, onDocumentLoaded };
+  }, [onPageRendered, onPdfRendered, onDocumentLoaded]);
 
   useEffect(() => () => {
     generation.current += 1;
@@ -89,6 +91,8 @@ export const PdfUpload = ({ onPdfRendered, onPageRendered, onPageSelectionStart,
       loadingTask.current = task;
       const pdf = await task.promise;
       if (selection !== generation.current) return;
+      // Keep the File, not arrayBuffer: PDF.js may take ownership of the bytes it was given.
+      callbacks.current.onDocumentLoaded?.(documentId, file);
       const document = { pdf, documentId, fileName: file.name };
       setPdfDoc(document);
       setPageCount(pdf.numPages);

@@ -23,7 +23,7 @@ export function editorDrainage(page: PageSession): DrainageEdge[] {
 
 const PAPER_SIZES_MM: Record<string, number> = { A0: 1189, A1: 841, A2: 594, A3: 420, A4: 297 };
 
-function mmPerPixel(page: PageSession): number {
+export function mmPerPixel(page: PageSession): number {
   return (PAPER_SIZES_MM[page.drawing.drawing_scale.paperSize] ?? 841)
     / Math.max(page.source.source_width, page.source.source_height) * page.drawing.drawing_scale.scaleRatio;
 }
@@ -38,14 +38,17 @@ export interface CombinedDrawing {
   outlineRefs: DrawingObjectRef[];
   holeRefs: DrawingObjectRef[];
   outletRefs: DrawingObjectRef[];
+  /** Real-world millimetres per combined-drawing unit (the first populated page's pixels); 0 when empty. */
+  mmPerPixel: number;
 }
 
 export function combinePageDrawings(pages: PageSession[], offsets: Record<string, Point> = {}): CombinedDrawing {
   const result: CombinedDrawing = { roofOutlines: [], interiorHoles: [], outlets: [], penetrations: [], drainageEdges: [],
-    outlineRefs: [], holeRefs: [], outletRefs: [] };
+    outlineRefs: [], holeRefs: [], outletRefs: [], mmPerPixel: 0 };
   const populated = pages.filter((page) => page.drawing.outlines.some((outline) => outline.points.length > 0));
   const base = populated[0];
   if (!base) return result;
+  result.mmPerPixel = mmPerPixel(base);
   let right = -Infinity;
   for (const page of populated) {
     const factor = mmPerPixel(page) / mmPerPixel(base);
