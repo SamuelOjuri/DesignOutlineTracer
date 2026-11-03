@@ -152,14 +152,19 @@ class UnsupportedEdgeRecoveryTests(unittest.TestCase):
                 self.assert_ring(proposal, MODEL)
                 self.assertNotIn("boundary_edges_recovered", proposal["warnings"])
 
-    def test_two_continuous_anchored_parallel_faces_remain_ambiguous_for_all_policies(self):
+    def test_joint_verification_resolves_paired_faces_only_for_an_explicit_policy(self):
         segments = lines(ROOF) + [((200, 996), (1000, 996))]
         for policy in ("inner_parapet", "outer_roof", "roof_deck"):
             with self.subTest(policy=policy):
                 proposal = refine([MODEL], segments, policy=policy)["proposals"][0]
-                self.assert_ring(proposal, MODEL)
-                self.assertTrue(proposal["edges"][2]["ambiguous"])
-                self.assertIn("ambiguous_parallel_edges", proposal["warnings"])
+                if policy == 'roof_deck':
+                    self.assert_ring(proposal, MODEL)
+                    self.assertTrue(proposal["edges"][2]["ambiguous"])
+                    self.assertIn("ambiguous_parallel_edges", proposal["warnings"])
+                else:
+                    y = 996 if policy == 'inner_parapet' else 1000
+                    self.assert_ring(proposal, [ROOF[0], ROOF[1], (1000,y), (200,y)])
+                    self.assertIn('boundary_alignment_corrected',proposal['warnings'])
                 self.assertNotIn("boundary_edges_recovered", proposal["warnings"])
 
     def test_supported_or_locally_ambiguous_edges_never_search_farther(self):
@@ -181,8 +186,8 @@ class UnsupportedEdgeRecoveryTests(unittest.TestCase):
 
     def test_radius_length_and_area_limits_reject_large_corrections(self):
         cases = [
-            # Beyond twice the ordinary radius.
-            ([(200, 200), (1000, 200), (1000, 975), (200, 975)], ROOF),
+            # Beyond the new joint verifier's five-radius limit.
+            ([(200, 200), (1000, 200), (1000, 935), (200, 935)], ROOF),
             # An 18 px correction exceeds 4% of this shallow roof's area.
             ([(200, 700), (1000, 700), (1000, 982), (200, 982)],
              [(200, 700), (1000, 700), (1000, 1000), (200, 1000)]),

@@ -132,7 +132,7 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
             response = await self.generate(request_id=policy, **options)
             self.assertEqual(response.status_code, 200, response.text)
             result = response.json()
-            self.assertEqual(result["run"]["algorithm_version"], "source-supported-outline-v6")
+            self.assertEqual(result["run"]["algorithm_version"], "source-supported-outline-v8")
             proposal = result["proposals"][0]
             if right is None:
                 self.assertEqual(len(proposal["points"]), 6)
@@ -148,9 +148,15 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.provider.calls), 3)
 
     async def test_recovered_edge_preserves_original_evidence_warning_and_cache(self):
+        await self.assert_edge_correction_cached(18, "boundary_edges_recovered")
+
+    async def test_joint_verification_preserves_original_evidence_warning_and_cache(self):
+        await self.assert_edge_correction_cached(25, "boundary_alignment_corrected")
+
+    async def assert_edge_correction_cached(self, offset, warning):
         await self.client.delete(PREFIX + "/pages/page")
-        roof = [(100, 100), (1100, 100), (1100, 700), (100, 700)]
-        model = [(100, 100), (1100, 100), (1100, 682), (100, 682)]
+        roof = [(100, 50), (1100, 50), (1100, 750), (100, 750)]
+        model = [(100, 50), (1100, 50), (1100, 750-offset), (100, 750-offset)]
         image = Image.new("RGB", (1200, 800), "white")
         ImageDraw.Draw(image).line(roof + roof[:1], fill="black", width=1)
         buffer = BytesIO()
@@ -168,7 +174,7 @@ class OutlineApiTests(unittest.IsolatedAsyncioTestCase):
         result = response.json()
         proposal = result["proposals"][0]
         self.assertEqual(result["status"], "needs_review")
-        self.assertEqual(result["warnings"], ["boundary_edges_recovered"])
+        self.assertEqual(result["warnings"], [warning])
         for key, expected in (("points", roof), ("proposed_points", model)):
             self.assertEqual(len(proposal[key]), len(expected))
             for point, (x, y) in zip(proposal[key], expected):

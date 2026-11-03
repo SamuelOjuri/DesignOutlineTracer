@@ -15,7 +15,7 @@ from PIL import Image
 from .errors import RoiError
 
 
-ALGORITHM_VERSION = "source-supported-outline-v6"
+ALGORITHM_VERSION = "source-supported-outline-v8"
 MAX_POLYGONS = 8
 MAX_POINTS = 128
 EPS = 1e-7
@@ -460,11 +460,186 @@ def _anchored_corner(corner, neighbour, normal, offset, segments, snap):
     return False
 
 
-def _repair_boundary_steps(points, segments, raster, bounds, policy):
-    """Join a false face switch only with continuous, corner-anchored vector evidence.
+def _boundary_side_chains(points, snap):
+    """Maximal forward runs joined by bounded transverse transitions, including samples.
 
-    Raster-only or semantically ambiguous junctions stay editable and are flagged.
-    The wider search is confined to this pattern; ordinary fitting keeps its radius.
+    Compare every direction with the first run, never with a drifting local axis.
+    Keep only maximal chains so a failed whole side cannot be repaired piecemeal.
+    """
+    size, chains = len(points), []
+    for start in range(size):
+        direction, normal, _ = _line(points[start], points[(start + 1) % size])
+
+        def parallel(index):
+            other, _, _ = _line(points[index % size], points[(index + 1) % size])
+            return sum(x * y for x, y in zip(direction, other)) >= math.cos(math.radians(3))
+
+        cursor, indices, runs, junctions = start, [start], [], []
+        while cursor - start < size - 2:
+            first = cursor
+            while cursor - start < size - 2 and parallel(cursor):
+                cursor += 1
+                indices.append(cursor % size)
+            runs.append((points[first % size], points[cursor % size]))
+            end, distance = cursor, 0.
+            while end - start < size - 2 and not parallel(end):
+                distance += _distance(points[end % size], points[(end + 1) % size])
+                if distance > 2 * snap:
+                    break
+                end += 1
+            b, c = points[cursor % size], points[end % size]
+            along = abs(sum(direction[k] * (c[k] - b[k]) for k in (0, 1)))
+            if (not .5 < distance <= 2 * snap or end - start >= size - 2
+                    or along > max(.5, .15 * distance)):
+                break
+            junctions.append((b, c, distance))
+            indices.extend(i % size for i in range(cursor + 1, end + 1))
+            cursor = end
+        if len(runs) < 2 or len(runs) != len(junctions) + 1:
+            continue
+        step = max(j[2] for j in junctions)
+        offsets = [sum(normal[k] * points[i][k] for k in (0, 1)) for i in indices]
+        if min(_distance(a, b) for a, b in runs) < 4 * step:
+            continue
+        chains.append({"indices": indices, "edges": set(indices[:-1]), "runs": runs,
+                       "junctions": junctions, "step": step, "width": max(offsets) - min(offsets)})
+    maximal = [chain for chain in chains if not any(chain['edges'] < other['edges'] for other in chains)]
+    # Canonical tie-breaking makes ring starts and redundant samples irrelevant.
+    return sorted(maximal, key=lambda chain: (-len(chain['indices']), points[chain['indices'][0]]))
+
+
+def _aligned_segments(normal, offset, segments):
+    return [segment for segment in segments if all(
+        abs(normal[0] * p[0] + normal[1] * p[1] - offset) < .5 for p in segment)]
+
+
+def _line_meeting(first, second):
+    n, c = first
+    m, d = second
+    p, q = (n[0] * c, n[1] * c), (m[0] * d, m[1] * d)
+    return _meet(p, (p[0] + n[1], p[1] - n[0]), q, (q[0] + m[1], q[1] - m[0]))
+
+
+def _reaches(point, segments, tolerance=1.):
+    return any(_distance(a, point) + _distance(point, b) <= _distance(a, b) + 2 * tolerance
+               for a, b in segments)
+
+
+def _side_corner(corner, neighbour, normal, offset, segments, snap):
+    """Anchor to a local adjoining stroke even when a door interrupts the distant side.
+
+    The common boundary must reach the intersection. Only the adjoining stroke's
+    endpoint may have a small (at most 3 source pixel) drafting gap.
+    """
+    direction, _, _ = _line(corner, neighbour)
+    length = min(_distance(corner, neighbour), 4 * snap)
+    end = tuple(corner[k] + length * direction[k] for k in (0, 1))
+    common = _aligned_segments(normal, offset, segments)
+    choices = []
+    for option in _vector_candidates(corner, end, segments, snap * 1.6):
+        if option['support'] < .9:
+            continue
+        meet = _line_meeting((normal, offset), (option['normal'], option['offset']))
+        if meet is None or _distance(meet, corner) > snap * 1.6:
+            continue
+        adjoining = _aligned_segments(option['normal'], option['offset'], segments)
+        if _reaches(meet, common) and _reaches(meet, adjoining, min(3., snap / 4)):
+            choices.append(meet)
+    return min(choices, key=lambda point: (_distance(point, corner), point)) if choices else None
+
+
+def _connected_boundary_turn(first, second, junction, segments, snap):
+    """A real return has two terminating runs and a finite stroke joining them."""
+    b, c, _ = junction
+    connectors = [o for o in _vector_candidates(b, c, segments, snap) if o['support'] >= .65]
+    if not connectors:
+        return False
+    sides = [[o for o in _vector_candidates(a, b, segments, snap) if o['support'] >= .7]
+             for a, b in (first, second)]
+    direction, _, _ = _line(*first)
+    for connector in connectors:
+        stroke = _aligned_segments(connector['normal'], connector['offset'], segments)
+        branches = []
+        for index, options in enumerate(sides):
+            eligible = []
+            for option in options:
+                meet = _line_meeting((option['normal'], option['offset']),
+                                     (connector['normal'], connector['offset']))
+                if meet is None or _distance(meet, (b, c)[index]) > snap * 1.6:
+                    continue
+                aligned = _aligned_segments(option['normal'], option['offset'], segments)
+                sign = -1 if index == 0 else 1
+                on_run = tuple(meet[k] + sign * 2 * snap * direction[k] for k in (0, 1))
+                beyond = tuple(meet[k] - sign * 2 * snap * direction[k] for k in (0, 1))
+                if (_continuous_vector_span(meet, on_run, aligned)
+                        and not _continuous_vector_span(meet, beyond, aligned)):
+                    eligible.append(meet)
+            branches.append(eligible)
+        if any(.5 < _distance(p, q) <= 2 * snap and _continuous_vector_span(p, q, stroke)
+               for p in branches[0] for q in branches[1]):
+            return True
+    return False
+
+
+def _internal_junction(junction, normal, offset, segments, raster, winding, snap):
+    """Ignore connector ink only when vectors establish a T into the roof interior."""
+    b, c, _ = junction
+    connectors = [o for o in _vector_candidates(b, c, segments, snap) if o['support'] >= .65]
+    if not connectors and not _raster_candidates(b, c, raster, min(2., snap), None):
+        return True  # No evidence of a real connector to override.
+    for option in connectors:
+        meet = _line_meeting((normal, offset), (option['normal'], option['offset']))
+        if meet is None or min(_distance(meet, p) for p in (b, c)) > 2 * snap:
+            continue
+        tangent = (option['normal'][1], -option['normal'][0])
+        sign = 1 if winding * sum(tangent[k] * normal[k] for k in (0, 1)) > 0 else -1
+        inward = tuple(meet[k] + sign * 4 * snap * tangent[k] for k in (0, 1))
+        # A nearby stroke or raster speck is insufficient: the detail must meet
+        # this exact common boundary and continue well into the roof.
+        if _continuous_vector_span(meet, inward, segments):
+            return True
+    return False
+
+
+def _choose_side_face(candidates, runs, raster, winding, policy, snap):
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) != 2 or policy == 'roof_deck':
+        return None
+    first, second = candidates
+    if (not 2 < abs(first['offset'] - second['offset']) <= snap
+            or sum(x * y for x, y in zip(first['normal'], second['normal'])) <= .9999):
+        return None
+    sign = 1 if policy == 'inner_parapet' else -1
+    wanted = max(candidates, key=lambda item: sign * winding * item['offset'])
+    other = second if wanted is first else first
+    supported = False
+    for a, b in runs:
+        votes = []
+        # Equal windows prevent one long, heavily hatched surface from deciding
+        # the face for every other run. Unclear windows do not cast a vote.
+        for index in range(5):
+            p, q = [tuple(a[k] + (b[k] - a[k]) * t for k in (0, 1))
+                    for t in ((index + .15) / 5, (index + .85) / 5)]
+            values = [_side_contrast(p, q, item['normal'], item['offset'], raster, winding)
+                      for item in (wanted, other)]
+            if any(value is None for value in values):
+                return None
+            delta = sign * (values[0] - values[1])
+            votes.append(1 if sign * values[0] >= .08 and delta >= .12 else
+                         -1 if sign * values[1] >= .08 and delta <= -.12 else 0)
+        if votes.count(-1) >= 3:
+            return None  # A different run positively contradicts the face choice.
+        supported |= votes.count(1) >= 3
+    return wanted if supported else None
+
+
+def _repair_boundary_steps(points, segments, raster, bounds, policy):
+    """Fit a complete side with continuous, corner-anchored vector evidence.
+
+    All runs and junctions choose one common line together. Genuine connected
+    returns survive; raster-only or semantically ambiguous junctions are flagged.
+    The wider search is confined to these chains; ordinary fitting keeps its radius.
     """
     snap = _max_shift(bounds)
     original_area = _area(points)
@@ -474,75 +649,52 @@ def _repair_boundary_steps(points, segments, raster, bounds, policy):
         uncertain = set()
         changed = False
         size = len(result)
-        for index in range(size):
-            # A--B and C--D are the long runs; B--C is the possible face switch.
-            a, b, c, d = [result[(index + k) % size] for k in range(4)]
-            step = _distance(b, c)
-            if size < 6 or not .5 < step <= 2 * snap or min(_distance(a, b), _distance(c, d)) < 4 * step:
+        for chain in _boundary_side_chains(result, snap):
+            indices, runs, junctions = chain['indices'], chain['runs'], chain['junctions']
+            if not .5 < chain['width'] <= 2 * snap:
                 continue
-            direction, normal, _ = _line(a, b)
-            other, _, _ = _line(c, d)
-            if (sum(x * y for x, y in zip(direction, other)) < math.cos(math.radians(3))
-                    or abs(direction[0] * (c[0] - b[0]) + direction[1] * (c[1] - b[1])) > .15 * step):
+            if any(_connected_boundary_turn(runs[i], runs[i + 1], junction, segments, snap)
+                   for i, junction in enumerate(junctions)):
                 continue
-            # A real connector, even slightly displaced from the model, is not tracing noise.
-            if (any(option["support"] >= .65 for option in _vector_candidates(b, c, segments, snap))
-                    or _raster_candidates(b, c, raster, min(2., snap), None)):
-                continue
-            affected = {index, (index + 1) % size, (index + 2) % size}
-            radius = min(3 * snap, step + snap)
-            before, after = result[index - 1], result[(index + 4) % size]
+            affected = chain['edges']
+            radius = min(3 * snap, chain['width'] + snap)
+            a, d = result[indices[0]], result[indices[-1]]
+            before, after = result[(indices[0] - 1) % size], result[(indices[-1] + 1) % size]
             candidates = []
-            for option in _vector_candidates(a, b, segments, radius):
+            seed = max(runs, key=lambda run: _distance(*run))
+            for option in _vector_candidates(*seed, segments, radius):
                 n, offset = option["normal"], option["offset"]
-                aligned = [segment for segment in segments if all(
-                    abs(n[0] * p[0] + n[1] * p[1] - offset) < .5 for p in segment)]
-                # Check each run separately: a long upper fragment must not hide an unsupported lower run.
-                if option["support"] < .9 or not any(
-                        other["support"] >= .9 for other in _vector_candidates(c, d, aligned, radius)):
+                aligned = _aligned_segments(n, offset, segments)
+                if any(not any(other['support'] >= .9 for other in _vector_candidates(*run, aligned, radius))
+                       for run in runs):
                     continue
                 base = (n[0] * offset, n[1] * offset)
                 end = (base[0] + n[1], base[1] - n[0])
                 start_corner, end_corner = _meet(before, a, base, end), _meet(d, after, base, end)
                 if start_corner is None or end_corner is None:
                     continue
-                if (not _anchored_corner(start_corner, before, n, offset, segments, snap * 1.6)
-                        or not _anchored_corner(end_corner, after, n, offset, segments, snap * 1.6)):
+                start_anchor = _side_corner(start_corner, before, n, offset, segments, snap)
+                end_anchor = _side_corner(end_corner, after, n, offset, segments, snap)
+                if start_anchor is None or end_anchor is None:
                     continue
-                # Keep the source line continuous across the junction, not just on both distant runs.
-                if not any(option["support"] >= .9 for option in
-                           _vector_candidates(start_corner, end_corner, aligned, .5)):
+                # Check finite coverage of the WHOLE side, including every junction.
+                if not _continuous_vector_span(start_anchor, end_anchor, aligned):
                     continue
-                middle = ((b[0] + c[0]) / 2, (b[1] + c[1]) / 2)
-                shift = n[0] * middle[0] + n[1] * middle[1] - offset
-                middle = (middle[0] - n[0] * shift, middle[1] - n[1] * shift)
-                bridge = [(middle[0] + sign * 2 * snap * n[1], middle[1] - sign * 2 * snap * n[0])
-                          for sign in (-1, 1)]
-                if not any(option["support"] >= .9 for option in _vector_candidates(*bridge, aligned, .5)):
+                if not all(_internal_junction(junction, n, offset, segments, raster, winding, snap)
+                           for junction in junctions):
                     continue
-                replacements = {index: start_corner, (index + 3) % size: end_corner}
-                removed = {(index + 1) % size, (index + 2) % size}
+                # Keep intersections with the proposed adjoining lines. Moving
+                # only one of their endpoints to an anchor would tilt that side;
+                # the ordinary fitter will choose its complete supporting line.
+                replacements = {indices[0]: start_corner, indices[-1]: end_corner}
+                removed = set(indices[1:-1])
                 candidate = [replacements.get(i, point) for i, point in enumerate(result) if i not in removed]
                 displacement = max(_distance(a, start_corner), _distance(d, end_corner),
-                                   *(abs(n[0] * p[0] + n[1] * p[1] - offset) for p in (b, c)))
+                                   *(abs(n[0] * result[i][0] + n[1] * result[i][1] - offset) for i in indices))
                 if displacement > radius or not _within_continuity_limits(candidate, points, bounds):
                     continue
-                candidates.append({"points": candidate, "normal": n, "offset": offset,
-                                   "contrast": _side_contrast(start_corner, end_corner, n, offset, raster, winding)})
-            chosen = candidates[0] if len(candidates) == 1 else None
-            if len(candidates) == 2 and policy != "roof_deck":
-                # Only resolve a close pair of faces when the image also establishes the desired side.
-                first, second = candidates
-                separation = abs(first["offset"] - second["offset"])
-                if (2 < separation <= snap and all(item["contrast"] is not None for item in candidates)
-                        and sum(x * y for x, y in zip(first["normal"], second["normal"])) > .9999):
-                    sign = 1 if policy == "inner_parapet" else -1
-                    ranked = sorted(candidates, key=lambda item: sign * item["contrast"], reverse=True)
-                    # The selected face must agree with BOTH geometry and side contrast.
-                    geometric = max(candidates, key=lambda item: sign * winding * item["offset"])
-                    if (ranked[0] is geometric and sign * ranked[0]["contrast"] >= .08
-                            and sign * (ranked[0]["contrast"] - ranked[1]["contrast"]) >= .12):
-                        chosen = ranked[0]
+                candidates.append({"points": candidate, "normal": n, "offset": offset})
+            chosen = _choose_side_face(candidates, runs, raster, winding, policy, snap)
             if chosen is None:
                 uncertain |= affected
                 continue
@@ -898,6 +1050,16 @@ def refine_outline_polygons(original: bytes, box: Sequence[float], crop: dict,
         # Preserve the safe ordinary fit if a wider move would join two roofs.
         for _, _, warnings in fitted:
             warnings[:] = sorted({*warnings, "fitting_rejected", "component_conflict"})
+    from .outline_verification import verify_perimeter
+
+    verified = [verify_perimeter(fit, original, segments, raster, bounds, boundary_policy, fixed)
+                for fit, original, (_, fixed, _) in zip(fitted, rings, continuous)]
+    if _disjoint([item[0] for item in verified]):
+        fitted = verified
+    else:
+        fitted = [(points, [dict(edge, ambiguous=True) for edge in edges],
+                   sorted({*warnings, 'component_conflict', 'boundary_connections_unverified'}))
+                  for points, edges, warnings in fitted]
     for (_, _, warnings), (_, _, continuity_warnings) in zip(fitted, continuous):
         warnings[:] = sorted({*warnings, *continuity_warnings})
         if cleanup_warnings:

@@ -104,3 +104,15 @@ it("explains recovered boundaries while keeping the proposal subject to review",
   expect(screen.getByText(/Some edges at a corner were retained/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Use outline" })).toBeEnabled();
 });
+
+it("explains perimeter corrections and unresolved connections and boundary conventions", () => {
+  const reviewed: OutlineResponse = { ...result,
+    warnings: ["boundary_alignment_corrected", "boundary_connections_unverified", "boundary_policy_unverified"] };
+  const callbacks = props({ result: reviewed });
+  render(<OutlineGenerationPanel {...callbacks} />);
+  expect(screen.getByText(/Boundary edges were aligned using connected drawing lines/)).toBeInTheDocument();
+  expect(screen.getByText(/Some edges or corner connections could not be verified/)).toBeInTheDocument();
+  expect(screen.getByText(/Some drawn edges may follow a different face/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Use outline" })).toBeEnabled();
+  expect(callbacks.apply).not.toHaveBeenCalled();
+});

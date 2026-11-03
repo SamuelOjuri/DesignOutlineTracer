@@ -40,6 +40,116 @@ def refine(rings, segments, *, policy="inner_parapet", raster_segments=None, box
 
 
 class BoundaryContinuityTests(unittest.TestCase):
+    def test_entire_side_with_multiple_switches_and_extra_samples_is_fitted_together(self):
+        model = [(512, 500), (1100, 500), (1100, 1200), (500, 1200), (500.2, 1100),
+                 (500, 1000), (503, 1000), (506, 1000), (506.2, 900), (506, 750), (512, 750)]
+        rectangle = [(500, 500), (1100, 500), (1100, 1200), (500, 1200)]
+        for reverse in (False, True):
+            # Include a ring start inside the side to exercise cyclic grouping.
+            ring = model[6:] + model[:6]
+            if reverse:
+                ring.reverse()
+            with self.subTest(reverse=reverse):
+                proposal = refine([ring], lines(rectangle))['proposals'][0]
+                self.assertEqual(len(proposal['points']), 4)
+                self.assertEqual({round(p['x'], 5) for p in proposal['points']}, {500, 1100})
+                self.assertIn('boundary_steps_straightened', proposal['warnings'])
+                self.assertGreater(len(proposal['proposed_points']), 4)
+
+    def test_internal_terrace_t_junction_does_not_veto_continuous_perimeter(self):
+        model = [(512, 500), (1100, 500), (1100, 1200), (500, 1200), (500, 900), (512, 900)]
+        rectangle = [(500, 500), (1100, 500), (1100, 1200), (500, 1200)]
+        # The horizontal detail continues into the roof; x=500 crosses the junction.
+        detail = [((512, 500), (512, 900)), ((500, 900), (700, 900)), ((700, 900), (900, 900))]
+        for angle in (0, 27):
+            theta = math.radians(angle)
+            transform = lambda p: (1500 + (p[0]-800)*math.cos(theta) - (p[1]-850)*math.sin(theta),
+                                   1500 + (p[0]-800)*math.sin(theta) + (p[1]-850)*math.cos(theta))
+            for reverse in (False, True):
+                ring = [transform(p) for p in model]
+                if reverse:
+                    ring.reverse()
+                segments = [(transform(a), transform(b)) for a, b in lines(rectangle) + detail]
+                with self.subTest(angle=angle, reverse=reverse):
+                    proposal = refine([ring], segments)['proposals'][0]
+                    self.assertEqual(len(proposal['points']), 4)
+                    self.assertIn('boundary_steps_straightened', proposal['warnings'])
+
+    def test_source_left_edge_with_short_fragmented_corner_anchor(self):
+        # Reduced PDF vectors: the top adjoining line is interrupted by architectural details.
+        model = [(1371.12, 1241.84), (1656, 1241.84), (1656, 2448.08), (385.92, 2448.08),
+                 (385.92, 2154.8), (395.76, 2154.8), (395.76, 1719.44), (1371.12, 1719.44)]
+        perimeter = model[:4] + [(385.92, 1719.44), model[-1]]
+        segments = lines(perimeter)
+        segments[4:5] = [((388.8, 1719.44), (452.64, 1719.44)),
+                          ((900, 1719.44), (1371.12, 1719.44))]
+        segments += [((395.76, 1719.44), (395.76, 2154.8)),
+                     ((395.76, 2154.8), (1646.16, 2154.8))]
+        proposal = refine([model], segments, cleanup='shapely')['proposals'][0]
+        self.assertEqual(len(proposal['points']), 6)
+        self.assertIn('boundary_steps_straightened', proposal['warnings'])
+        left = [p for p in proposal['points'] if p['x'] < 450]
+        self.assertEqual(len(left), 2)
+        self.assertTrue(all(abs(p['x'] - 385.92) < .01 for p in left))
+
+    def test_multi_switch_side_is_not_partially_repaired_when_one_turn_is_real(self):
+        model = [(512, 500), (1100, 500), (1100, 1200), (500, 1200),
+                 (500, 1000), (506, 1000), (506, 750), (512, 750)]
+        rectangle = [(500, 500), (1100, 500), (1100, 1200), (500, 1200)]
+        segments = lines(rectangle) + lines(model)
+        proposal = refine([model], segments)['proposals'][0]
+        self.assertEqual(len(proposal['points']), 8)
+        self.assertNotIn('boundary_steps_straightened', proposal['warnings'])
+
+    def test_gap_anywhere_on_the_side_prevents_merging_all_runs(self):
+        model = [(512, 500), (1100, 500), (1100, 1200), (500, 1200),
+                 (500, 1000), (506, 1000), (506, 750), (512, 750)]
+        rectangle = [(500, 500), (1100, 500), (1100, 1200), (500, 1200)]
+        segments = lines(rectangle)
+        # Gap is far from both junctions and hides within >98% total coverage.
+        segments[-1:] = [((500, 1200), (500, 1110)), ((500, 1106), (500, 500))]
+        proposal = refine([model], segments)['proposals'][0]
+        self.assertEqual(len(proposal['points']), 8)
+        self.assertIn('boundary_continuity_ambiguous', proposal['warnings'])
+        self.assertTrue(all(e['ambiguous'] for e in proposal['edges'][3:]))
+
+    def test_clear_short_run_resolves_face_when_long_run_has_no_side_evidence(self):
+        # Only the short upper section gives clear inside/outside ink evidence.
+        model = [(500, 500), (1000, 500), (1000, 800), (1010, 800), (1010, 1500), (500, 1500)]
+        inner = [(500, 500), (1006, 500), (1006, 1500), (500, 1500)]
+        outer = [(494, 494), (1012, 494), (1012, 1506), (494, 1506)]
+        pixels = [((1006, 500), (1006, 800)), ((1012, 500), (1012, 800))]
+        proposal = refine([model], lines(inner) + lines(outer), raster_segments=pixels)['proposals'][0]
+        self.assertEqual(len(proposal['points']), 4)
+        self.assertIn('boundary_steps_straightened', proposal['warnings'])
+        self.assertAlmostEqual(proposal['points'][1]['x'], 1006)
+        self.assertAlmostEqual(proposal['points'][2]['x'], 1006)
+
+    def test_conflicting_face_evidence_across_surfaces_requires_review(self):
+        model = [(500, 500), (1000, 500), (1000, 800), (1010, 800), (1010, 1500), (500, 1500)]
+        inner = [(500, 500), (1006, 500), (1006, 1500), (500, 1500)]
+        outer = [(494, 494), (1012, 494), (1012, 1506), (494, 1506)]
+        pixels = [((1006, 500), (1006, 800)), ((1012, 500), (1012, 800))]
+        pixels += [((x, 810), (x, 1500)) for x in (1000, 1006, 1015, 1016, 1017, 1018, 1019)]
+        proposal = refine([model], lines(inner) + lines(outer), raster_segments=pixels)['proposals'][0]
+        self.assertEqual(len(proposal['points']), 6)
+        self.assertIn('boundary_continuity_ambiguous', proposal['warnings'])
+
+    def test_disconnected_internal_detail_cannot_override_raster_connector(self):
+        model = [(512, 500), (1100, 500), (1100, 1200), (500, 1200), (500, 900), (512, 900)]
+        rectangle = [(500, 500), (1100, 500), (1100, 1200), (500, 1200)]
+        segments = lines(rectangle) + [((500, 900), (514, 900)), ((525, 900), (900, 900))]
+        proposal = refine([model], segments)['proposals'][0]
+        self.assertEqual(len(proposal['points']), 6)
+        self.assertNotIn('boundary_steps_straightened', proposal['warnings'])
+
+    def test_anchoring_a_side_does_not_tilt_its_adjoining_edge(self):
+        model = [(500, 498), (1000, 498), (1000, 800), (1010, 800), (1010, 1200), (500, 1200)]
+        source = [(500, 500), (1006, 500), (1006, 1200), (500, 1200)]
+        proposal = refine([model], lines(source))['proposals'][0]
+        self.assertEqual(len(proposal['points']), 4)
+        self.assertAlmostEqual(proposal['points'][0]['y'], proposal['points'][1]['y'])
+
     def test_captured_face_switch_is_repaired_with_original_and_evidence_preserved(self):
         segments = lines(INNER) + lines(OUTER) + [((1640.4, 1251.92), (1640.4, 2149.04)),
                                                  ((1646.16, 1246.16), (1646.16, 2154.8))]

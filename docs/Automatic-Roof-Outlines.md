@@ -86,22 +86,35 @@ New Build screen; this feature does not add persistence.
   rotated, reversed, oblique and densely sampled variants. No project-specific
   coordinates or page orientation are used by the implementation.
   See [TP17221 CAD corner validation](roi-evaluation/tp17221-cad-corners.md).
-- The continuity pass checks for a short transverse
-  step between long, nearly parallel runs. It joins them only when PDF vectors
-  support at least 90% of each run, the combined span and a window across the
-  junction, and connect to drawn edges at both adjoining corners. Supported real
-  connectors are preserved. The extra search is local to this pattern (at most
-  36 source pixels); the ordinary fitter still uses at most 12 px.
-  A close pair of faces requires agreement between the selected inner/outer
-  boundary convention and raster ink on each side. `roof_deck` keeps ambiguous
-  pairs for review. Missing vectors, ambiguous faces, ROI violations and
-  component conflicts do not trigger automatic straightening.
+- Algorithm `source-supported-outline-v7` extends continuity fitting to a complete
+  side, including multiple small face switches and extra tracing samples. It
+  groups maximal forward runs within 3 degrees, separated by transverse paths
+  no longer than two snapping radii. Each run must be at least four times the
+  longest transition; the whole side's transverse spread must stay within two
+  radii. Failed whole sides are not retried as smaller subchains.
+  PDF vectors must support at least 90% of every run and 98% of the span between
+  drawn corner anchors, with no uncovered interval over one source pixel.
+  The extra search remains local (at most 36 source pixels); ordinary fitting
+  still uses at most 12 px. Both corners require local adjoining stroke support
+  over up to four radii, allowing an adjoining endpoint gap of at most 3 source
+  pixels. This accommodates architectural interruptions further along that side.
+  Anchor positions are evidence only: reconstruction intersects the proposed
+  adjoining lines so moving one corner cannot introduce a tilted neighbouring edge.
+  A finite connector joining two terminating source runs protects a real return.
+  Other connector ink can be disregarded only when vectors show a T junction
+  continuing at least four radii into the roof from the common boundary.
+  Raster-only connectors remain protected. For a close pair of complete faces,
+  policy selection needs agreement in at least three of five raster windows on
+  one run and no contradictory majority on another run. Each surface gets its
+  own vote, so a long unclear or hatched surface cannot overwhelm a clear one.
+  `roof_deck`, more than two candidates, and conflicting evidence require review.
   Repairs preserve the original proposal and add `boundary_steps_straightened`.
-  Unresolved junctions add `boundary_continuity_ambiguous` and mark their three
-  edges for review. Fitting preserves these continuity decisions, and the
-  combined repair/fitting change remains subject to topology, area and
-  displacement checks. The algorithm version invalidates previous cache entries.
-  See the [251004 regression](roi-evaluation/251004-right-boundary-diagnosis.md).
+  Unresolved chains add `boundary_continuity_ambiguous` and mark every affected
+  edge for review. Fitting preserves these decisions; the original topology,
+  winding, ROI, component, 4% area and displacement limits still apply jointly.
+  The algorithm version invalidates previous cache entries.
+  See the [whole-side regression](roi-evaluation/251004-left-boundary-continuity.md)
+  and [earlier right-side diagnosis](roi-evaluation/251004-right-boundary-diagnosis.md).
 - Vector segments supply candidate supporting lines; high-resolution raster
   contrast is the fallback. Collinear fragments contribute joint edge support.
   Small movements and consistent rotated directions are allowed. Equally
@@ -140,6 +153,32 @@ New Build screen; this feature does not add persistence.
   This fallback remains for corners that cannot be normalized safely; v6 handles
   the small sampled TP17221 corner before fitting, removing the need for this
   fallback or a corner-review warning there.
+- Algorithm `source-supported-outline-v8` adds verification of every edge of
+  every exterior ring after local fitting and recovery. Each edge needs a
+  continuous finite vector span or strong raster support in short windows,
+  including its endpoints. Nearby paired faces are also checked for evidence
+  contrary to the selected boundary convention. These checks flag uncertainty;
+  they do not establish the construction meaning of a line.
+  An unverified edge can be corrected by jointly comparing its line and both
+  adjoining lines. The wider search is bounded by five snapping radii (at most
+  60 source pixels) and one fifth of the edge length; adjoining faces stay within
+  the ordinary radius. Candidate sides need source support at both ends, so a
+  nearby dimension line cannot win solely on its length or proximity. Already
+  verified adjoining lines and resolved continuity decisions are preserved.
+  Paired closures require consistent inner/outer geometry and raster side
+  evidence for the selected convention. Roof-deck policy needs a unique closure.
+  Dense, disconnected, contradictory or conflicting alternatives remain for
+  review. Corrections are considered together, without depending on ring start
+  or page orientation, and preserve the ring's vertex order and side count.
+  Shapely checks the complete result against the original cleaned ring: changed
+  scope (symmetric difference) and net area are each bounded to 4%, in addition
+  to displacement, validity, winding, ROI and component separation checks.
+  `boundary_alignment_corrected` identifies applied corrections;
+  `boundary_connections_unverified` and `boundary_policy_unverified` explain
+  unresolved orange dashed edges. Proposals still require **Use outline**.
+  The algorithm version changes cache identity. See
+  [251004 perimeter verification](roi-evaluation/251004-perimeter-verification.md)
+  for offline replay evidence and remaining limitations.
 - No mask dilation, convex hull, blanket orthogonalisation or inferred rooflight
   holes are applied. Evidence scores measure line support, not calibrated model
   confidence or construction accuracy.
