@@ -33,6 +33,8 @@ describe("outlet review controls", () => {
     callbacks.detection.feedback = { status: "partial", warnings: ["outlet_crop_limit_reached", "outlet_call_budget_reached", "outlet_annotation_limit_reached"] };
     render(<OutletDetectionPanel {...callbacks} />);
     expect(screen.getByRole("button", { name: "Accept outlet" })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Making the marker smaller will not resolve this warning.");
+    expect(screen.getByText(/Its display size is independent of the outlet diameter/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Accept eligible/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Only part of the scope was checked/)).toBeInTheDocument();
     expect(screen.getByText(/Detection stopped at the configured call limit/)).toBeInTheDocument();

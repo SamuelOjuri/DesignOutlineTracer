@@ -69,12 +69,41 @@ it("redraws constant-screen markers on zoom while retaining source coordinates",
   const props = createProps();
   const outlet = { id: "o1", x: 100, y: 100, diameter: 0.15 };
   const { container } = render(<NewBuildOutletCanvas {...props} outlets={[outlet]} />);
-  expect(context.arc).toHaveBeenCalledWith(100, 100, 10, 0, Math.PI * 2);
+  expect(context.arc).toHaveBeenCalledWith(100, 100, 5, 0, Math.PI * 2);
   context.arc.mockClear();
   fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-  expect(context.arc).toHaveBeenCalledWith(100, 100, expect.closeTo(10 / 1.15), 0, Math.PI * 2);
+  expect(context.arc).toHaveBeenCalledWith(100, 100, expect.closeTo(5 / 1.15), 0, Math.PI * 2);
   expect(Number.parseFloat(container.querySelector("canvas")!.style.width)).toBeCloseTo(920);
   expect(props.onMoveOutlet).not.toHaveBeenCalled();
+});
+
+it("preserves the screen-space gap from the widest boundary stroke when zooming", () => {
+  const context = mockCanvasContext();
+  const props = createProps();
+  const roof = [{ x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 400 }, { x: 100, y: 400 }];
+  const outlet = { id: "o1", x: 110, y: 200, diameter: 0.15 };
+  render(<NewBuildOutletCanvas {...props} roofOutlines={[roof]} outlets={[outlet]} />);
+  // Ten source pixels of clearance leave 6.5 screen pixels for the full halo at 100%.
+  expect(context.arc).toHaveBeenCalledWith(110, 200, expect.closeTo(6.5 * 5 / 6), 0, Math.PI * 2);
+  context.arc.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+  // At 115%, the full halo grows to 8px while the stroke/gap reserve stays 3.5px.
+  expect(context.arc).toHaveBeenCalledWith(110, 200, expect.closeTo(8 * 5 / 6 / 1.15), 0, Math.PI * 2);
+});
+
+it("selects an outside suggestion beyond its compact glyph without moving or resizing its physical data", () => {
+  const context = mockCanvasContext();
+  const props = createProps();
+  const outlet = Object.freeze({ id: "outside", x: 90, y: 150, diameter: 0.15, diameter_confirmed: false,
+    review_status: "suggested" as const, validity: "needs_review" as const });
+  const { container } = render(<NewBuildOutletCanvas {...props} outlets={[outlet]} outletMode="select" />);
+  expect(context.arc).toHaveBeenCalledWith(90, 150, 5, 0, Math.PI * 2);
+  fireEvent.mouseDown(container.querySelector("canvas")!, { button: 0, clientX: 102, clientY: 150 });
+  fireEvent.mouseUp(container.querySelector("canvas")!);
+  expect(props.onSelectOutlet).toHaveBeenCalledWith(outlet);
+  expect(props.onMoveOutlet).not.toHaveBeenCalled();
+  expect(props.onAddOutlet).not.toHaveBeenCalled();
+  expect(outlet).toMatchObject({ x: 90, y: 150, diameter: 0.15, diameter_confirmed: false, validity: "needs_review" });
 });
 
 it("keeps a screen-sized target at low zoom and selects the nearest overlapping marker", () => {
@@ -142,7 +171,7 @@ it("Escape discards the drag preview and restores the original anchor without a 
   fireEvent.mouseMove(canvas, { clientX: 120, clientY: 130 });
   context.arc.mockClear();
   fireEvent.keyDown(window, { key: "Escape" });
-  expect(context.arc).toHaveBeenCalledWith(100, 100, 10, 0, Math.PI * 2);
+  expect(context.arc).toHaveBeenCalledWith(100, 100, 5, 0, Math.PI * 2);
   fireEvent.mouseUp(canvas);
   fireEvent.mouseLeave(canvas);
   expect(props.onMoveOutlet).not.toHaveBeenCalled();
@@ -160,5 +189,18 @@ it("zooms to a selected tiny outlet without changing its position", () => {
   expect(Number.parseFloat(canvas.style.width)).toBe(160);
   fireEvent.click(screen.getByRole("button", { name: "Zoom to outlet" }));
   expect(Number.parseFloat(canvas.style.width)).toBeGreaterThanOrEqual(800);
+  expect(props.onMoveOutlet).not.toHaveBeenCalled();
+});
+
+it("zooms enough to fit the preferred marker plus its screen-space boundary margin", () => {
+  const context = mockCanvasContext();
+  const props = createProps();
+  const roof = [{ x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 400 }, { x: 100, y: 400 }];
+  const outlet = { id: "o1", x: 110, y: 200, diameter: 0.15 };
+  const { container } = render(<NewBuildOutletCanvas {...props} roofOutlines={[roof]} outlets={[outlet]} selectedOutlet={outlet} />);
+  context.arc.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Zoom to outlet" }));
+  expect(Number.parseFloat(container.querySelector("canvas")!.style.width)).toBeCloseTo(800 * 1.55);
+  expect(context.arc).toHaveBeenCalledWith(110, 200, expect.closeTo(10 / 1.55), 0, Math.PI * 2);
   expect(props.onMoveOutlet).not.toHaveBeenCalled();
 });

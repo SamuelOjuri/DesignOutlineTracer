@@ -5,7 +5,7 @@ import type { OutlineRequest, OutlineResponse } from "../../src/types/outline";
 import type { OutletRequest, OutletResponse } from "../../src/types/outlet";
 import type { Box2D, PageContext } from "../../src/types/roi";
 
-test("detects, reviews and preserves outlet anchors with contained and boundary-overlapping blue markers", async ({ page }, testInfo) => {
+test("detects, reviews and preserves outlet anchors with contained and boundary-overlapping magenta markers", async ({ page }, testInfo) => {
   const requests: OutletRequest[] = [];
   const uploads: Buffer[] = [];
   let context: PageContext;
@@ -75,7 +75,7 @@ test("detects, reviews and preserves outlet anchors with contained and boundary-
   await page.mouse.move(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.85);
   await page.mouse.up();
   await page.getByRole("button", { name: "Set Outlines", exact: true }).click();
-  await page.getByRole("button", { name: "Generate outline", exact: true }).click();
+  await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
   await page.getByRole("button", { name: "Use outline", exact: true }).click();
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Penetrations", exact: true })).toBeVisible();
@@ -97,22 +97,29 @@ test("detects, reviews and preserves outlet anchors with contained and boundary-
       for (let py = 0; py < 40; py++) for (let px = 0; px < 40; px++) {
         const i = (py * 40 + px) * 4;
         const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
-        // Subpixel antialiasing blends a thin blue stroke with its white halo.
-        if (r < 180 && g > r + 20 && b > g + 25 && b > 150) found.push(x - 20 + px);
+        // Subpixel antialiasing blends a thin magenta stroke with its white halo.
+        if (r > g + 25 && b > g + 20 && r > b + 5) found.push(x - 20 + px);
       }
       return { left: Math.min(...found), right: Math.max(...found), screenWidth: (Math.max(...found) - Math.min(...found) + 1) * scale };
     };
-    return { interior: dimensions(90, 150), boundary: dimensions(60, 220) };
+    return { interior: dimensions(90, 150), boundary: dimensions(60, 220), outside: dimensions(200, 270) };
   });
   const before = await ink();
   expect(before.boundary.left).toBeLessThan(60);
   expect(before.boundary.right).toBeGreaterThan(60);
   expect(before.interior.left).toBeGreaterThan(60);
+  // Boundary and outside anchors retain a compact, visible marker without moving the inlet.
+  for (const marker of [before.boundary, before.outside]) {
+    expect(marker.screenWidth).toBeGreaterThan(6);
+    expect(marker.screenWidth).toBeLessThan(16);
+  }
   await page.getByRole("button", { name: "Zoom in", exact: true }).click();
   const after = await ink();
   expect(Math.abs(before.interior.screenWidth - after.interior.screenWidth)).toBeLessThan(3);
+  expect(Math.abs(before.outside.screenWidth - after.outside.screenWidth)).toBeLessThan(3);
   await page.getByRole("button", { name: /Outside notch/ }).click();
   await expect(page.getByRole("button", { name: "Accept outlet", exact: true })).toBeDisabled();
+  await expect(page.getByRole("alert")).toContainText("Making the marker smaller will not resolve this warning.");
   await page.getByRole("button", { name: "Reject", exact: true }).click();
   await page.getByRole("button", { name: /Boundary inlet.*accepted/ }).click();
   await page.getByText("Correct position, type or size", { exact: true }).click();

@@ -48,6 +48,7 @@ function describeIssue(issue: string) {
 export interface OutlineGenerationPanelProps {
   page: PageSession;
   regions: RoiAnnotation[];
+  regionLabels: Record<string, string>;
   roiId: string | null;
   onRoiChange: (id: string) => void;
   policy: OutlineBoundaryPolicy;
@@ -67,7 +68,8 @@ export interface OutlineGenerationPanelProps {
 }
 
 export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
-  const { page, regions, roiId, result, busy, feedback } = props;
+  const { page, regions, regionLabels, roiId, result, busy, feedback } = props;
+  const targetLabel = roiId ? regionLabels[roiId] : null;
   const [replacements, setReplacements] = useState<string[]>([]);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applied, setApplied] = useState(false);
@@ -85,7 +87,13 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
       <label className="block text-sm font-medium">Roof area
         <select aria-label="Outline roof area" className="mt-1 block w-full rounded-md border border-input bg-background p-2"
           value={roiId ?? ""} onChange={event => { setReplacements([]); setApplied(false); setApplyError(null); props.onRoiChange(event.target.value); }}>
-          {regions.map((region, index) => <option key={region.id} value={region.id}>{region.label || `Roof area ${index + 1}`}</option>)}
+          {regions.map(region => {
+            const label = regionLabels[region.id];
+            const customLabel = region.label.trim();
+            return <option key={region.id} value={region.id}>
+              {label}{customLabel && customLabel.toLowerCase() !== "roof_roi" && customLabel !== label ? ` — ${customLabel}` : ""}
+            </option>;
+          })}
         </select>
       </label>
       <label className="block text-sm font-medium">Boundary to follow
@@ -109,7 +117,7 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
       <div className="flex flex-wrap gap-2">
         <Button onClick={generate} disabled={busy || !roiId} className="flex-1">
           {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <WandSparkles className="mr-2 h-4 w-4" />}
-          {busy ? "Generating outline..." : "Generate outline"}
+          {busy ? "Generating outline..." : targetLabel ? `Generate ${targetLabel} outline` : "Generate outline"}
         </Button>
         {busy && <Button variant="outline" onClick={props.cancel}>Cancel</Button>}
       </div>

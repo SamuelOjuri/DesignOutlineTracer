@@ -14,6 +14,13 @@ const buttonVariants = cva(
           "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         outline:
           "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+        adjustTool: [
+          "border border-primary/50 bg-primary/5 text-foreground shadow-none duration-150",
+          "hover:border-primary hover:bg-primary/10 focus-visible:ring-primary/25 [&_svg]:text-primary",
+          "aria-pressed:border-primary aria-pressed:bg-primary aria-pressed:text-primary-foreground [&[aria-pressed=true]_svg]:text-primary-foreground",
+          "aria-pressed:hover:bg-[color-mix(in_srgb,hsl(var(--primary))_90%,hsl(0_0%_0%))]",
+          "aria-pressed:hover:border-[color-mix(in_srgb,hsl(var(--primary))_90%,hsl(0_0%_0%))]",
+        ],
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",

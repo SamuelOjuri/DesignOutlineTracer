@@ -49,17 +49,43 @@ describe("outlet marker footprint", () => {
     expect(outletMarkerGeometry({ x: 75, y: 100 }, [concave], [], 1).clearance).toBe(5);
   });
 
-  it("preserves full perimeter symbols and keeps almost-on-edge interior anchors visible", () => {
+  it("uses compact perimeter symbols and keeps almost-on-edge interior anchors visible", () => {
     for (const point of [{ x: 0, y: 0 }, { x: 0, y: 140 }, { x: 400, y: 400 }]) {
       for (const scale of [0.2, 1, 3]) {
         const marker = outletMarkerGeometry(point, [roof], [], scale);
         expect(marker.status).toBe("boundary");
-        expect(marker.outerRadius * scale).toBe(12);
+        expect(marker.outerRadius * scale).toBe(6);
       }
     }
     const close = outletMarkerGeometry({ x: 0.001, y: 140 }, [roof], [], 1);
     expect(close.status).toBe("interior");
     expect(close.outerRadius).toBe(6);
+  });
+
+  it("reserves the same screen-space boundary stroke and gap across zoom", () => {
+    for (const scale of [0.2, 1, 3]) {
+      const marker = outletMarkerGeometry({ x: 200, y: 10 / scale }, [roof], [], scale, [], 5 / scale);
+      expect(marker.status).toBe("interior");
+      expect(marker.outerRadius * scale).toBeCloseTo(6.5);
+      expect((marker.clearance - marker.outerRadius) * scale).toBeCloseTo(3.5);
+    }
+  });
+
+  it("keeps outside suggestions compact and dashed without changing their anchors or physical diameter", () => {
+    const outlet = Object.freeze({ x: -1, y: 140, diameter: 0.15, diameter_confirmed: false,
+      outline_id: "roof-a", review_status: "suggested" as const, validity: "needs_review" as const });
+    const original = { ...outlet };
+    for (const scale of [0.2, 1, 3]) {
+      const marker = outletMarkerGeometry(outlet, [roof], [], scale, ["roof-a"]);
+      expect(marker.status).toBe("outside");
+      expect(marker.outerRadius * scale).toBeCloseTo(6);
+      expect(marker.hitRadius * scale).toBeCloseTo(16);
+      const ctx = mockCanvasContext();
+      drawOutletMarker(ctx as unknown as CanvasRenderingContext2D, outlet, marker, true);
+      expect(ctx.arc).toHaveBeenCalledWith(-1, 140, expect.closeTo(5 / scale), 0, Math.PI * 2);
+      expect(ctx.setLineDash).toHaveBeenCalledWith([marker.strokeWidth * 2, marker.strokeWidth * 1.5]);
+    }
+    expect(outlet).toEqual(original);
   });
 
   it("uses the assigned roof and does not enlarge a marker using an overlapping neighbour", () => {
@@ -87,7 +113,7 @@ describe("outlet marker footprint", () => {
     }
   });
 
-  it("draws a transparent blue circle/crosshair with a white halo and an inset selection ring", () => {
+  it("draws a transparent magenta circle/crosshair with a white halo and an inset selection ring", () => {
     const ctx = mockCanvasContext();
     const point = { x: 8, y: 6, review_status: "suggested" as const };
     const marker = outletMarkerGeometry(point, [roof], [], 1);
@@ -97,7 +123,7 @@ describe("outlet marker footprint", () => {
     expect(ctx.setLineDash).toHaveBeenCalledWith([marker.strokeWidth * 2, marker.strokeWidth * 1.5]);
     const radii = ctx.arc.mock.calls.map(call => call[2] as number);
     expect(Math.max(...radii) + marker.haloWidth / 2).toBeCloseTo(marker.outerRadius);
-    expect((ctx as unknown as CanvasRenderingContext2D).strokeStyle).toBe("#0077CC");
+    expect((ctx as unknown as CanvasRenderingContext2D).strokeStyle).toBe("#C000A0");
   });
 });
 
@@ -137,10 +163,11 @@ describe("uniform reviewed outlet markers", () => {
     expect(markers[3].outerRadius).toBe(6);
     expect(markers[4].outerRadius).toBe(6);
     expect(markers[5].status).toBe("outside");
+    expect(markers[5].outerRadius).toBe(6);
   });
 
   it("groups manual and accepted boundary anchors without changing their positions or physical diameters", () => {
-    const outlets = [{ ...accepted(0.001, 20), diameter: 0.15 },
+    const outlets = [{ ...accepted(20, 20), diameter: 0.15 },
       { x: 200, y: 200, diameter: 0.3 }, { ...accepted(0, 60), diameter: 0.1 }];
     const original = JSON.stringify(outlets);
     const markers = outletMarkerGeometries(outlets, [roof], [], 1, ["roof-a"]);

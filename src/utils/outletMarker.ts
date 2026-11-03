@@ -1,7 +1,7 @@
 import polygonClipping, { type Polygon } from "polygon-clipping";
 import type { Point } from "@/types/roof";
 
-export const OUTLET_COLOUR = "#0077CC";
+export const OUTLET_COLOUR = "#C000A0";
 export const OUTLET_SCREEN_RADIUS = 12;
 export const OUTLET_MIN_SCREEN_RADIUS = 6;
 export const OUTLET_HIT_RADIUS = 16;
@@ -47,7 +47,9 @@ function inRing(point: Point, ring: Point[]): boolean {
   return inside;
 }
 
-/** Uses the assigned outline, never a neighbouring roof's clearance. Holes stay excluded. */
+/** Uses the assigned outline, never a neighbouring roof's clearance. Holes stay excluded.
+ * boundaryStrokeWidth is in source/canvas units, like the returned geometry.
+ */
 export function outletMarkerGeometry(outlet: MarkerOutlet, outlines: Point[][], holes: Point[][],
   displayScale: number, outlineIds: string[] = [], boundaryStrokeWidth = 3): OutletMarkerGeometry {
   const scale = Number.isFinite(displayScale) && displayScale > 0 ? displayScale : 1;
@@ -83,12 +85,15 @@ export function outletMarkerGeometry(outlet: MarkerOutlet, outlines: Point[][], 
     }
   }
   const preferred = OUTLET_SCREEN_RADIUS / scale;
+  const compact = OUTLET_MIN_SCREEN_RADIUS / scale;
   const margin = 1 / scale + boundaryStrokeWidth / 2;
   // Symbols are annotations, not physical footprints. Prefer containment, but
   // allow overlap rather than making a valid near-edge inlet invisible. Keep
   // the actual anchor and its scope classification independent of display size.
+  // Boundary and outside points have no interior clearance: use the compact
+  // glyph so unresolved positions do not obscure the source inlet symbol.
   const outerRadius = status === "interior"
-    ? Math.max(OUTLET_MIN_SCREEN_RADIUS / scale, Math.min(preferred, clearance - margin)) : preferred;
+    ? Math.max(compact, Math.min(preferred, clearance - margin)) : compact;
   const ratio = outerRadius / preferred;
   const haloWidth = 4 * ratio / scale;
   return { outerRadius, circleRadius: Math.max(0, outerRadius - haloWidth / 2),
@@ -126,7 +131,7 @@ export function outletMarkerGeometries(outlets: readonly MarkerOutlet[], outline
   });
 }
 
-/** Transparent glyph: white under-stroke, blue circle and crosshair, optional inner selection ring. */
+/** Transparent glyph: white under-stroke, magenta circle and crosshair, optional inner selection ring. */
 export function drawOutletMarker(ctx: CanvasRenderingContext2D, outlet: MarkerOutlet,
   geometry: OutletMarkerGeometry, selected = false, offset: Point = { x: 0, y: 0 }): void {
   if (geometry.outerRadius <= 0) return;

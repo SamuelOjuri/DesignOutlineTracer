@@ -10,6 +10,8 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   let context: PageContext | undefined;
   const points = [{ x: 60, y: 320 }, { x: 140, y: 320 }, { x: 140, y: 200 },
     { x: 260, y: 200 }, { x: 260, y: 120 }, { x: 60, y: 120 }];
+  const steppedSide = [{ x: 390, y: 40 }, { x: 504, y: 40 }, { x: 504, y: 46 },
+    { x: 512, y: 46 }, { x: 511, y: 70 }, { x: 510, y: 100 }, { x: 390, y: 100 }];
   await page.route("http://127.0.0.1:4199/api/roi/v1/**", async route => {
     const request = route.request();
     const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type",
@@ -28,13 +30,16 @@ test("generates a reviewable stepped outline, applies without filling its notch,
     expect(request.url()).toMatch(/\/outlines$/);
     const payload = request.postDataJSON() as OutlineRequest;
     requests.push(payload);
+    const proposalPoints = payload.roi.id === secondRoiId
+      ? steppedSide
+      : points;
     const response: OutlineResponse = {
       schema_version: "outline-1", page_id: payload.page_id, request_id: payload.request_id,
       source_image_hash: payload.source_image_hash, roi_revision: payload.roi_revision,
       geometry_revision: payload.geometry_revision, roi_id: payload.roi.id, roi_annotation_revision: payload.roi.revision,
       boundary_policy: payload.boundary_policy, status: "needs_review",
-      proposals: [{ id: `outline-${requests.length}`, points, proposed_points: points, warnings: [],
-        edges: points.map((_, index) => ({ index, support: index === 2 ? 0.3 : 1, source: "vector", ambiguous: index === 2 })) }],
+      proposals: [{ id: `outline-${requests.length}`, points: proposalPoints, proposed_points: proposalPoints, warnings: [],
+        edges: proposalPoints.map((_, index) => ({ index, support: index === 2 ? 0.3 : 1, source: "vector", ambiguous: index === 2 })) }],
       warnings: ["ambiguous_edges"],
       crop: { x: 20, y: 70, width: 300, height: 290, inference_width: 300, inference_height: 290 },
       run: { model: "gemini-4-argon", prompt_version: "roof-outline-v1", algorithm_version: "synthetic-fit",
@@ -52,16 +57,37 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await page.mouse.down();
   await page.mouse.move(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.85);
   await page.mouse.up();
+  await page.getByLabel("Region label", { exact: true }).fill("roof_roi");
+  await page.getByRole("button", { name: "Apply correction", exact: true }).click();
+  await page.getByRole("button", { name: "Manual region", exact: true }).click();
+  await page.mouse.move(bounds.x + bounds.width * 0.62, bounds.y + bounds.height * 0.07);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * 0.88, bounds.y + bounds.height * 0.28);
+  await page.mouse.up();
+  await page.getByLabel("Region label", { exact: true }).fill("roof_roi");
+  await page.getByRole("button", { name: "Apply correction", exact: true }).click();
   await page.getByRole("button", { name: "Set Outlines", exact: true }).click();
+  const regionSelect = page.getByRole("combobox", { name: "Outline roof area", exact: true });
+  await expect(regionSelect.getByRole("option")).toHaveText(["Roof area 1", "Roof area 2"]);
+  const secondRoiId = await regionSelect.inputValue();
+  const targetLabel = page.getByTestId("annotation-overlay").locator('[aria-current="true"]');
+  await expect(targetLabel).toHaveText("Roof area 2");
+  await expect(page.getByRole("button", { name: "Generate Roof area 2 outline", exact: true })).toBeVisible();
+  await testInfo.attach("outline-target", { body: await page.screenshot(), contentType: "image/png" });
+  await regionSelect.selectOption({ label: "Roof area 1" });
+  const firstRoiId = await regionSelect.inputValue();
+  await expect(targetLabel).toHaveText("Roof area 1");
   const next = page.getByRole("button", { name: "Next", exact: true });
+  await expect(page.getByRole("button", { name: "Straighten", exact: true })).toHaveCount(0);
   await expect(next).toBeDisabled();
   expect(requests).toHaveLength(0);
   await page.getByLabel("Boundary to follow", { exact: true }).selectOption("inner_parapet");
-  await page.getByRole("button", { name: "Generate outline", exact: true }).click();
+  await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
   const overlay = page.getByTestId("outline-proposal-overlay");
   await expect(overlay).toBeVisible();
   await expect(next).toBeDisabled();
   expect(requests).toHaveLength(1);
+  expect(requests[0].roi.id).toBe(firstRoiId);
   expect(requests[0].vector_segments.length).toBeGreaterThan(0);
   expect(requests[0].source_image_hash).toBe(context!.source_image_hash);
   await expect(overlay.locator('[data-uncertain="true"]')).toHaveCount(1);
@@ -107,17 +133,76 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await testInfo.attach("accepted-outline", { body: await page.screenshot(), contentType: "image/png" });
   await page.getByRole("button", { name: "Adjust", exact: true }).click();
   await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(points.length);
+  const adjust = page.getByRole("button", { name: "Adjust", exact: true });
+  const adjustTools = page.getByRole("group", { name: "Adjust tools", exact: true });
+  const straighten = adjustTools.getByRole("button", { name: "Straighten", exact: true });
+  await expect(adjustTools.getByRole("button", { name: "Snap to line", exact: true })).toBeVisible();
   await testInfo.attach("accepted-outline-adjust", { body: await page.screenshot(), contentType: "image/png" });
+  await straighten.click();
+  await expect(adjust).toHaveAttribute("aria-pressed", "true");
+  await expect(straighten).toHaveAttribute("aria-pressed", "true");
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(0);
+  await testInfo.attach("adjust-straighten", { body: await page.screenshot(), contentType: "image/png" });
+  await straighten.click();
+  await expect(straighten).toHaveAttribute("aria-pressed", "false");
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(points.length);
+  await straighten.click();
+  await page.keyboard.press("Escape");
+  await expect(straighten).toHaveAttribute("aria-pressed", "false");
+  await expect(adjust).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Select", exact: true }).click();
+  await expect(adjustTools).toHaveCount(0);
   await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(0);
   await page.getByRole("button", { name: "Undo generated outline", exact: true }).click();
   await expect(accepted).toHaveCount(0);
   await expect(next).toBeDisabled();
-  await page.getByRole("button", { name: "Generate outline", exact: true }).click();
+  await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
   await expect(overlay).toBeVisible();
   expect(uploads).toHaveLength(2);
   expect(uploads[1]).toEqual(uploads[0]);
   await page.getByLabel("Boundary to follow", { exact: true }).selectOption("roof_deck");
   await expect(overlay).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Use outline", exact: true })).toHaveCount(0);
+  await regionSelect.selectOption({ label: "Roof area 2" });
+  await expect(targetLabel).toHaveText("Roof area 2");
+  await page.getByRole("button", { name: "Generate Roof area 2 outline", exact: true }).click();
+  await expect(overlay).toBeVisible();
+  expect(requests).toHaveLength(3);
+  expect(requests[2].roi.id).toBe(secondRoiId);
+  await page.getByRole("button", { name: "Use outline", exact: true }).click();
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  await page.getByRole("button", { name: "Snap to line", exact: true }).click();
+  const fitSurface = page.getByTestId("side-fit-overlay");
+  const clickFit = async (x: number, y: number) => {
+    const box = (await fitSurface.boundingBox())!;
+    await page.mouse.click(box.x + x / 600 * box.width, box.y + y / 400 * box.height);
+  };
+  await clickFit(504, 40);
+  await clickFit(510, 100);
+  await clickFit(510, 75);
+  await expect(page.getByTestId("side-fit-target")).toHaveAttribute("data-source", "vector");
+  await expect(page.getByTestId("side-fit-preview")).toHaveAttribute("points", "390,40 510,40 510,100 390,100");
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(7);
+  await straighten.click();
+  await expect(fitSurface).toHaveCount(0);
+  await expect(adjust).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Snap to line", exact: true }).click();
+  await expect(straighten).toHaveAttribute("aria-pressed", "false");
+  await clickFit(504, 40);
+  await clickFit(510, 100);
+  await clickFit(510, 75);
+  await expect(page.getByTestId("side-fit-preview")).toHaveAttribute("points", "390,40 510,40 510,100 390,100");
+  await testInfo.attach("fit-side-preview", { body: await page.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: "Apply fit", exact: true }).click();
+  await expect(fitSurface).toHaveCount(0);
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", "390,40 510,40 510,100 390,100");
+  await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(4);
+  await testInfo.attach("fit-side-applied", { body: await page.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", steppedSide.map(p => `${p.x},${p.y}`).join(" "));
+  await page.getByRole("button", { name: "Snap to line", exact: true }).click();
+  await clickFit(504, 40);
+  await page.keyboard.press("Escape");
+  await expect(fitSurface).toHaveCount(0);
+  expect(requests).toHaveLength(3); // Fitting uses the uploaded drawing locally, without another model request.
 });

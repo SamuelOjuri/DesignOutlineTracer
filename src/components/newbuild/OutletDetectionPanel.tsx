@@ -33,7 +33,7 @@ const messages: Record<string, string> = {
   possible_duplicate: "A nearby outlet may already represent this inlet. Review before accepting.",
   ambiguous_outlet: "The inlet interpretation is uncertain. Check the source symbol before accepting.",
 };
-const outsideMessage = "The inlet centre is outside its insulation scope. Move it to the roof-side inlet symbol or correct the assigned outline.";
+const outsideMessage = "The inlet centre is outside its insulation scope. Move it to the roof-side inlet symbol or correct the assigned outline. Making the marker smaller will not resolve this warning.";
 const describe = (message: string) => ["candidate_outside_scope", "outlet_outside_scope",
   "The inlet is outside its insulation scope. Correct its position or association."].includes(message)
   ? outsideMessage : messages[message] ?? message.replace(/_/g, " ");
@@ -182,6 +182,7 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
     {selected && <div className="space-y-2 rounded-md border border-border p-3">
       <p className="text-sm font-medium">{selected.label}</p>
       {selected.evidence && <p className="text-xs text-muted-foreground">{selected.evidence}</p>}
+      <p className="text-xs text-muted-foreground">The magenta marker locates the inlet centre. Its display size is independent of the outlet diameter.</p>
       {associationError && <p role="alert" className="text-sm text-destructive">{associationError}</p>}
       {warnings.length > 0 && <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
         {warnings.map(warning => <li key={warning}>{warning}</li>)}

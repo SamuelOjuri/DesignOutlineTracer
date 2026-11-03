@@ -59,6 +59,7 @@ export const NewBuildApp = () => {
   const [selectedRoiId, setSelectedRoiId] = useState<string | null>(null);
   const [addingRoi, setAddingRoi] = useState(false);
   const roofRegions = activePage?.annotations.filter((annotation) => annotation.kind === "roof_roi") ?? [];
+  const regionLabels = Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]));
   const acceptedRegions = roofRegions.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current");
   const outlineRoiId = acceptedRegions.find(region => region.id === selectedRoiId)?.id ?? acceptedRegions[0]?.id ?? null;
   const [outlinePolicy, setOutlinePolicy] = useState<OutlineBoundaryPolicy>("inner_parapet");
@@ -282,7 +283,7 @@ export const NewBuildApp = () => {
       case "penetrations":
         return pdfCanvas && activePage ? <RoiReviewCanvas key={`${activePage.source.page_id}:penetrations`} kind="penetration"
           pdfCanvas={pdfCanvas} annotations={penetrationAnnotations} contextAnnotations={acceptedRegions} drawing={activePage.drawing} page={activePage}
-          contextLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
+          contextLabels={regionLabels}
           selectedId={selectedPenetrationId} adding={addingPenetration} onAddingChange={setAddingPenetration}
           onSelect={setSelectedPenetrationId} onEdit={editRoi} onAdd={(box) => {
             const id = crypto.randomUUID();
@@ -305,8 +306,10 @@ export const NewBuildApp = () => {
             interiorHoles={interiorHoles}
             penetrationHoles={openingHoles}
             acceptedRegions={roiClient.enabled ? acceptedRegions : undefined}
-            regionLabels={Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]))}
+            regionLabels={regionLabels}
+            outlineTargetId={roiClient.enabled ? outlineRoiId : undefined}
             outlineProposals={outlineDetection.result?.proposals}
+            vectorSegments={activePage?.source.vector_segments}
           />
         ) : null;
       case "outlets":
@@ -393,6 +396,7 @@ export const NewBuildApp = () => {
       <>
         {currentStep === "paint" && roiClient.enabled && activePage && <OutlineGenerationPanel
           key={activePage.source.page_id} page={activePage} regions={acceptedRegions} roiId={outlineRoiId}
+          regionLabels={regionLabels}
           onRoiChange={setSelectedRoiId} policy={outlinePolicy} onPolicyChange={setOutlinePolicy}
           notes={outlineNotes} onNotesChange={setOutlineNotes} result={outlineDetection.result}
           feedback={outlineDetection.feedback} busy={outlineDetection.busy} generate={outlineDetection.generate}

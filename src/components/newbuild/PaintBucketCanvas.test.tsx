@@ -6,6 +6,7 @@ import { steppedRoof, trimmedRoof, trimmedRoofWithNotch } from "@/test/roofBound
 import { rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
 import { syntheticAnnotation } from "@/test/roi";
 import type { Point } from "@/types/roof";
+import type { VectorSegment } from "@/types/outline";
 import { PaintBucketCanvas } from "./PaintBucketCanvas";
 
 vi.mock("@/utils/floodFill", () => ({
@@ -50,7 +51,7 @@ const roof: Point[] = [{ x: 40, y: 40 }, { x: 200, y: 40 }, { x: 202, y: 160 }, 
 const otherRoof: Point[] = [{ x: 280, y: 40 }, { x: 360, y: 40 }, { x: 360, y: 260 }, { x: 280, y: 260 }];
 const cutout: Point[] = [{ x: 60, y: 80 }, { x: 90, y: 80 }, { x: 90, y: 110 }, { x: 60, y: 110 }];
 
-async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout]) {
+async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], vectorSegments: VectorSegment[] = []) {
   const context = mockCanvasContext();
   const width = 400, height = 300;
   Object.assign(context, {
@@ -74,7 +75,7 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout]) 
   function Editor() {
     const [currentOutlines, setOutlines] = useState(outlines);
     const [currentHoles, setHoles] = useState(holes);
-    return <PaintBucketCanvas pdfCanvas={source} roofOutlines={currentOutlines} interiorHoles={currentHoles}
+    return <PaintBucketCanvas pdfCanvas={source} roofOutlines={currentOutlines} interiorHoles={currentHoles} vectorSegments={vectorSegments}
       onOutlinesExtracted={(next, index) => { outlinesChanged(next, index); setOutlines(next); }}
       onHolesExtracted={next => { holesChanged(next); setHoles(next); }} />;
   }
@@ -89,6 +90,118 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout]) 
   };
   return { canvas, event, context, outlinesChanged, holesChanged };
 }
+
+it("previews a fitted side at zoom, cycles parallel targets and applies with a single undo", async () => {
+  const vectors = [195, 198].map(x => ({ start: { x, y: 40 }, end: { x, y: 260 } }));
+  const { canvas, outlinesChanged, holesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  const overlay = screen.getByTestId("side-fit-overlay");
+  vi.spyOn(overlay, "getBoundingClientRect").mockImplementation(() => ({ left: -80, top: -40,
+    width: parseFloat(canvas.style.width), height: parseFloat(canvas.style.height) } as DOMRect));
+  const click = (x: number, y: number) => {
+    const scale = parseFloat(canvas.style.width) / 400;
+    fireEvent.pointerDown(overlay, { button: 0, clientX: -80 + x * scale, clientY: -40 + y * scale });
+  };
+  click(201, 100);
+  expect(screen.getByTestId("side-fit-section")).toHaveAttribute("points", "200,40 202,160 200,260");
+  click(196, 150);
+  expect(screen.getByTestId("side-fit-target")).toHaveAttribute("data-source", "vector");
+  expect(screen.getByTestId("side-fit-preview")).toHaveAttribute("points", "40,40 195,40 195,260 40,260");
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Next line (1/2)" }));
+  expect(screen.getByTestId("side-fit-preview")).toHaveAttribute("points", "40,40 198,40 198,260 40,260");
+  fireEvent.click(screen.getByRole("button", { name: "Apply fit" }));
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([[{ x: 40, y: 40 }, { x: 198, y: 40 }, { x: 198, y: 260 }, { x: 40, y: 260 }], otherRoof], 0);
+  expect(holesChanged).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("cancels fitting without mutation on Escape, tool change and existing geometry changes", async () => {
+  const { outlinesChanged } = await adjustmentEditor();
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  fireEvent.click(screen.getByRole("button", { name: "Select" }));
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([], undefined);
+});
+
+it("groups both subtools under Adjust and discards previews when switching between them", async () => {
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([roof, otherRoof], [cutout],
+    [{ start: { x: 195, y: 40 }, end: { x: 195, y: 260 } }]);
+  const adjust = screen.getByRole("button", { name: "Adjust" });
+  const fit = screen.getByRole("button", { name: "Snap to line" });
+  const straighten = screen.getByRole("button", { name: "Straighten" });
+  const tools = screen.getByRole("group", { name: "Adjust tools" });
+  expect(tools).toContainElement(fit);
+  expect(tools).toContainElement(straighten);
+  fireEvent.click(fit);
+  const surface = screen.getByTestId("side-fit-overlay");
+  vi.spyOn(surface, "getBoundingClientRect").mockImplementation(() => ({ left: 0, top: 0,
+    width: parseFloat(canvas.style.width), height: parseFloat(canvas.style.height) } as DOMRect));
+  const scale = parseFloat(canvas.style.width) / 400;
+  for (const [x, y] of [[201, 100], [195, 150]]) {
+    fireEvent.pointerDown(surface, { button: 0, clientX: x * scale, clientY: y * scale });
+  }
+  expect(screen.getByRole("button", { name: "Apply fit" })).toBeEnabled();
+  fireEvent.click(straighten);
+  expect(screen.queryByTestId("side-fit-preview")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  expect(straighten).toHaveAttribute("aria-pressed", "true");
+  expect(adjust).toHaveAttribute("aria-pressed", "true");
+  expect(fit).toHaveAttribute("aria-pressed", "false");
+  event("pointerDown", 201, 100);
+  event("pointerMove", 200, 100);
+  fireEvent.click(fit);
+  event("pointerUp", 200, 100);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(fit).toHaveAttribute("aria-pressed", "true");
+  expect(straighten).toHaveAttribute("aria-pressed", "false");
+  expect(adjust).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("button", { name: "Apply fit" })).not.toBeInTheDocument();
+  fireEvent.click(fit);
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  expect(screen.getByTestId("accepted-outline-overlay").querySelectorAll("[data-outline-vertex]")).toHaveLength(roof.length + otherRoof.length);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  for (const name of ["Select", "Cut Out"]) {
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(screen.queryByRole("button", { name: "Straighten" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Snap to line" })).not.toBeInTheDocument();
+  }
+  fireEvent.click(adjust);
+  expect(screen.getByRole("button", { name: "Straighten" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "Snap to line" })).toHaveAttribute("aria-pressed", "false");
+});
+
+it.each(["toggle", "Escape"])("returns from Straighten to normal dragging with %s", async exit => {
+  const { event, outlinesChanged } = await adjustmentEditor();
+  const straighten = screen.getByRole("button", { name: "Straighten" });
+  fireEvent.click(straighten);
+  expect(screen.getByRole("button", { name: "Adjust" })).toHaveAttribute("aria-pressed", "true");
+  event("pointerDown", 201, 100);
+  event("pointerMove", 200, 100);
+  if (exit === "toggle") fireEvent.click(straighten);
+  else fireEvent.keyDown(window, { key: "Escape" });
+  event("pointerUp", 200, 100);
+  expect(straighten).toHaveAttribute("aria-pressed", "false");
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  event("pointerDown", 202, 160);
+  event("pointerUp", 198, 150);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof.map((p, index) => index === 2 ? { x: 198, y: 150 } : p), otherRoof], 0);
+});
 
 it("highlights a merge at zoom, commits only on release and restores points and cutouts with one undo", async () => {
   const { canvas, event, outlinesChanged, holesChanged } = await adjustmentEditor();

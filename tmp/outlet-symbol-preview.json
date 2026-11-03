@@ -1,0 +1,293 @@
+{
+  "colour": "#C000A0",
+  "variants": [
+    {
+      "label": "Accepted",
+      "strokes": [
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 10,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [],
+          "width": 4,
+          "colour": "white"
+        },
+        {
+          "path": [
+            {
+              "type": "move",
+              "x": -5,
+              "y": 0
+            },
+            {
+              "type": "line",
+              "x": 5,
+              "y": 0
+            },
+            {
+              "type": "move",
+              "x": 0,
+              "y": -5
+            },
+            {
+              "type": "line",
+              "x": 0,
+              "y": 5
+            }
+          ],
+          "dash": [],
+          "width": 4,
+          "colour": "white"
+        },
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 10,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [],
+          "width": 2,
+          "colour": "#C000A0"
+        },
+        {
+          "path": [
+            {
+              "type": "move",
+              "x": -5,
+              "y": 0
+            },
+            {
+              "type": "line",
+              "x": 5,
+              "y": 0
+            },
+            {
+              "type": "move",
+              "x": 0,
+              "y": -5
+            },
+            {
+              "type": "line",
+              "x": 0,
+              "y": 5
+            }
+          ],
+          "dash": [],
+          "width": 2,
+          "colour": "#C000A0"
+        }
+      ]
+    },
+    {
+      "label": "Suggested / needs review",
+      "strokes": [
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 10,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [
+            4,
+            3
+          ],
+          "width": 4,
+          "colour": "white"
+        },
+        {
+          "path": [
+            {
+              "type": "move",
+              "x": -5,
+              "y": 0
+            },
+            {
+              "type": "line",
+              "x": 5,
+              "y": 0
+            },
+            {
+              "type": "move",
+              "x": 0,
+              "y": -5
+            },
+            {
+              "type": "line",
+              "x": 0,
+              "y": 5
+            }
+          ],
+          "dash": [],
+          "width": 4,
+          "colour": "white"
+        },
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 10,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [
+            4,
+            3
+          ],
+          "width": 2,
+          "colour": "#C000A0"
+        },
+        {
+          "path": [
+            {
+              "type": "move",
+              "x": -5,
+              "y": 0
+            },
+            {
+              "type": "line",
+              "x": 5,
+              "y": 0
+            },
+            {
+              "type": "move",
+              "x": 0,
+              "y": -5
+            },
+            {
+              "type": "line",
+              "x": 0,
+              "y": 5
+            }
+          ],
+          "dash": [],
+          "width": 2,
+          "colour": "#C000A0"
+        }
+      ]
+    },
+    {
+      "label": "Selected (accepted)",
+      "strokes": [
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 10,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [],
+          "width": 4,
+          "colour": "white"
+        },
+        {
+          "path": [
+            {
+              "type": "move",
+              "x": -5,
+              "y": 0
+            },
+            {
+              "type": "line",
+              "x": 5,
+              "y": 0
+            },
+            {
+              "type": "move",
+              "x": 0,
+              "y": -5
+            },
+            {
+              "type": "line",
+              "x": 0,
+              "y": 5
+            }
+          ],
+          "dash": [],
+          "width": 4,
+          "colour": "white"
+        },
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 10,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [],
+          "width": 2,
+          "colour": "#C000A0"
+        },
+        {
+          "path": [
+            {
+              "type": "move",
+              "x": -5,
+              "y": 0
+            },
+            {
+              "type": "line",
+              "x": 5,
+              "y": 0
+            },
+            {
+              "type": "move",
+              "x": 0,
+              "y": -5
+            },
+            {
+              "type": "line",
+              "x": 0,
+              "y": 5
+            }
+          ],
+          "dash": [],
+          "width": 2,
+          "colour": "#C000A0"
+        },
+        {
+          "path": [
+            {
+              "type": "arc",
+              "x": 0,
+              "y": 0,
+              "radius": 7,
+              "start": 0,
+              "end": 6.283185307179586
+            }
+          ],
+          "dash": [],
+          "width": 1.2,
+          "colour": "#C000A0"
+        }
+      ]
+    }
+  ]
+}

@@ -49,7 +49,7 @@ export function buildTricsPrompt(model: RoofExportModel, paths: TricsPromptPaths
     `| \`${paths.svg}\` | True-scale vector drawing (1 unit = 1 mm). |`,
     `| \`${paths.drawingPng}\` | Raster image of the roof layout as reviewed in TaperedPlus XPress. |`,
     `| \`${paths.maskPng}\` | Black-and-white mask of the insulated area; its pixel-to-millimetre mapping is \`mask_png\` in the metadata. |`,
-    ...paths.markedUp.map(path => `| \`${cell(path)}\` | Roof plan page with the requested area of interest highlighted in red and outlets in blue. |`),
+    ...paths.markedUp.map(path => `| \`${cell(path)}\` | Roof plan page with the requested area of interest highlighted in red and outlets in magenta. |`),
     "",
     "## How to use the sources",
     "",

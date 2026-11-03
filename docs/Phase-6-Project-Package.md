@@ -103,7 +103,7 @@ including any roof areas dragged on that page.
 - Raster images: `roof_drawing.png` is the Project Details drawing without grid
   or hover state. `roof_mask.png` is white roof on black with a 2% margin.
   `roof_plan_marked_up_p<page>.png` overlays the page's roof area (red),
-  openings, drainage edges and outlets (blue) on the original page image.
+  openings, blue drainage edges and magenta outlets on the original page image.
 
 ## Verification
 

@@ -199,7 +199,7 @@ export const NewBuildOutletCanvas = ({
 
     // Draw outlets
     const previews = outlets.map(outlet => dragPreview?.id === outlet.id ? { ...outlet, ...dragPreview } : outlet);
-    const markers = outletMarkerGeometries(previews, roofOutlines, interiorHoles, displayScale, outlineIds, 5);
+    const markers = outletMarkerGeometries(previews, roofOutlines, interiorHoles, displayScale, outlineIds, 5 / displayScale);
     previews.forEach((outlet, index) => {
       drawOutletMarker(ctx, outlet, markers[index], selectedOutlet?.id === outlet.id);
     });
@@ -350,9 +350,9 @@ export const NewBuildOutletCanvas = ({
   const handleFitToScreen = () => setDisplayScale(fitScale);
   const handleZoomToOutlet = () => {
     if (!selectedOutlet) return;
-    const geometry = outletMarkerGeometry(selectedOutlet, roofOutlines, interiorHoles, displayScale, outlineIds, 5);
-    const available = geometry.clearance - 2.5;
-    const targetScale = geometry.status === "interior" && available > 0 ? 13 / available : 1;
+    const geometry = outletMarkerGeometry(selectedOutlet, roofOutlines, interiorHoles, displayScale, outlineIds, 5 / displayScale);
+    // Reserve the 12px marker radius, 1px gap and half the 5px drainage stroke.
+    const targetScale = geometry.status === "interior" && geometry.clearance > 0 ? 15.5 / geometry.clearance : 1;
     zoomTarget.current = selectedOutlet;
     const nextScale = Math.min(MAX_ZOOM, Math.max(displayScale, 1, targetScale));
     // Recenter even when the selected outlet is already at the desired zoom.

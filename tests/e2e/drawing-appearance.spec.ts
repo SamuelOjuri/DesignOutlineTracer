@@ -31,7 +31,8 @@ for (const [example, fixture] of [["1833", tp17221Illustration], ["1915", tp1722
           const ink: number[] = [];
           for (let y = 0; y < 60; y++) for (let x = 0; x < 60; x++) {
             const i = (y * 60 + x) * 4;
-            if (pixels[i] < 180 && pixels[i + 1] > pixels[i] + 20 && pixels[i + 2] > pixels[i + 1] + 25) ink.push(x);
+            const r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+            if (r > g + 25 && b > g + 20 && r > b + 5) ink.push(x);
           }
           return ink.length ? (Math.max(...ink) - Math.min(...ink) + 1) / imageScale : 0;
         });

@@ -314,7 +314,7 @@ export async function renderMarkedUpPagePng(page: PageSession): Promise<Blob> {
   }
   ctx.setLineDash([]);
 
-  ctx.strokeStyle = OUTLET_COLOUR;
+  ctx.strokeStyle = "#0077CC";
   ctx.lineCap = "round";
   ctx.lineWidth = line * 1.5;
   for (const edge of editorDrainage(page)) {
@@ -324,6 +324,7 @@ export async function renderMarkedUpPagePng(page: PageSession): Promise<Blob> {
     ctx.beginPath(); ctx.moveTo(start.x, start.y); ctx.lineTo(end.x, end.y); ctx.stroke();
   }
 
+  ctx.strokeStyle = OUTLET_COLOUR;
   ctx.lineWidth = line;
   const radius = Math.max(8, Math.max(width, height) / 160);
   for (const outlet of activePageOutlets(page)) {

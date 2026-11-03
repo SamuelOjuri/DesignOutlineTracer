@@ -11,7 +11,7 @@ and drainage-edge tools remain available.
 2. Review penetration openings in Step 4.
 3. In Step 5 select **Detect outlets**. This uploads the immutable source page and
    requests detailed crops; entering the step does not call the model.
-4. Review the suggested blue inlet markers. Select a recommendation to see its
+4. Review the suggested magenta inlet markers. Select a recommendation to see its
    evidence, type, assigned outline and any scope warnings. **Accept eligible**
    accepts current, geometrically valid suggestions without warnings. Other
    candidates can be corrected and accepted individually.
@@ -33,7 +33,7 @@ implemented and do not influence the marker.
 
 ## Marker rules
 
-- Transparent circle and central crosshair in `#0077CC`, with a thin white halo.
+- Transparent circle and central crosshair in magenta (`#C000A0`), with a thin white halo.
 - Preferred complete footprint: 24 CSS pixels across. The anchor remains in
   original-page pixels, independent of zoom and the physical diameter.
 - For an interior inlet, reduce the entire painted footprint to the clearance
@@ -48,10 +48,14 @@ implemented and do not influence the marker.
   PNG exports. Other roofs and pending/stale/outside suggestions do not reduce
   that size. Near-edge anchors participate in the shared size and remain visible.
 - For an inlet exactly on an exterior perimeter, allow the circle to overlap
-  that perimeter, using the same size as its accepted peers. Never shift or clip the symbol.
+  that perimeter with a compact 12 CSS-pixel footprint, using the same size as its
+  accepted peers. Outside suggestions also use this compact footprint while
+  retaining their dashed review style and scope warning. Never shift or clip the symbol.
   Numerical boundary tolerance is fixed in source coordinates, not screen pixels.
 - Opening edges remain excluded. Invalid/outside suggestions are visible for
   correction but cannot be accepted until their association is valid.
+  Marker size is visual: reducing it or changing physical diameter does not resolve
+  an out-of-scope inlet centre. Correct the anchor or assigned outline instead.
 - Suggested or unresolved points use dashed circles. Selection uses an inner
   ring, keeping its footprint within the same limit. Hit targets remain usable
   at a fixed screen size. **Zoom to outlet** and sidebar selection remain

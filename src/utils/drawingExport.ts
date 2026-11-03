@@ -2,6 +2,7 @@ import polygonClipping, { type Polygon } from "polygon-clipping";
 import type { Point } from "@/types/roof";
 import type { PageSession } from "@/types/roi";
 import { combinePageDrawings, mmPerPixel, type CombinedDrawing } from "./roiDrawing";
+import { OUTLET_COLOUR } from "./outletMarker";
 
 export const DRAWING_EXPORT_VERSION = "tpid-drawing-v1";
 
@@ -243,7 +244,7 @@ export function buildRoofExport(pages: PageSession[], offsets: Record<string, Po
 
 const DXF_LAYERS: [name: string, colour: number][] = [
   ["ROOF_OUTLINE", 7], ["CUTOUTS", 8], ["PENETRATIONS", 3], ["DRAINAGE_EDGES", 4],
-  ["OUTLETS", 5], ["OUTLETS_UNCONFIRMED", 6], ["LABELS", 2],
+  ["OUTLETS", 6], ["OUTLETS_UNCONFIRMED", 6], ["LABELS", 2],
 ];
 
 /** AutoCAD R12 ASCII DXF in millimetres; readable by virtually every CAD package without handles. */
@@ -326,7 +327,7 @@ export function roofExportSvg(model: RoofExportModel): string {
       return `  <line data-roof-area="${xml(edge.roof_area_id)}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
     }),
     "</g>",
-    `<g id="outlets" fill="none" stroke="#0077cc" stroke-width="${stroke}">`,
+    `<g id="outlets" fill="none" stroke="${OUTLET_COLOUR}" stroke-width="${stroke}">`,
     ...model.outlets.map(outlet => {
       const [x, y] = flip(outlet.position).split(",").map(Number);
       const radius = outlet.diameter_mm / 2;

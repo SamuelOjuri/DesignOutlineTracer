@@ -22,13 +22,13 @@ async function redPixels(canvas: Locator) {
   });
 }
 
-async function blueOutletPixels(canvas: Locator) {
+async function magentaOutletPixels(canvas: Locator) {
   return canvas.evaluate((element: HTMLCanvasElement) => {
     const pixels = element.getContext("2d")!.getImageData(0, 0, element.width, element.height).data;
     let count = 0;
     for (let index = 0; index < pixels.length; index += 4) {
       const r = pixels[index], g = pixels[index + 1], b = pixels[index + 2];
-      if (r < 180 && g > r + 20 && b > g + 25 && b > 150) count++;
+      if (r > g + 25 && b > g + 20 && r > b + 5) count++;
     }
     return count;
   });
@@ -97,10 +97,10 @@ test("New Build: PDF pages, manual fill/undo, zoom, outlet and package download"
   await next.click();
   await expect(page.getByRole("heading", { name: "Outlets & Drainage" })).toBeVisible();
   const outletCanvas = page.locator("canvas");
-  const originalBluePixels = await blueOutletPixels(outletCanvas);
+  const originalMagentaPixels = await magentaOutletPixels(outletCanvas);
   await clickCanvas(outletCanvas, 0.7, 0.5);
   await expect(page.getByText(/^Outlet 1\b/)).toBeVisible();
-  await expect.poll(() => blueOutletPixels(outletCanvas)).toBeGreaterThan(originalBluePixels);
+  await expect.poll(() => magentaOutletPixels(outletCanvas)).toBeGreaterThan(originalMagentaPixels);
   await capture(page, testInfo, "new-build-outlet");
   await page.getByRole("button", { name: "Previous", exact: true }).click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();

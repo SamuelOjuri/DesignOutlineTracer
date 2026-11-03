@@ -25,7 +25,7 @@ function props(patch: Partial<OutlineGenerationPanelProps> = {}): OutlineGenerat
     drawing: { outlines: [{ id: "manual-1", page_id: "page-1", roi_id: null, points }], holes: [], outlets: [],
       drainage_edges: [], drawing_scale: { paperSize: "A1", scaleRatio: 50 } },
   };
-  return { page, regions: page.annotations, roiId: "roi-1", onRoiChange: vi.fn(), policy: "inner_parapet",
+  return { page, regions: page.annotations, regionLabels: { "roi-1": "Roof area 1" }, roiId: "roi-1", onRoiChange: vi.fn(), policy: "inner_parapet",
     onPolicyChange: vi.fn(), notes: "", onNotesChange: vi.fn(), result: null, busy: false, feedback: null,
     generate: vi.fn(), cancel: vi.fn(), dismiss: vi.fn(), apply: vi.fn(() => null), undo: vi.fn(), canUndo: false,
     onReviewRegion: vi.fn(), ...patch };
@@ -35,14 +35,14 @@ it("requires an accepted region and only generates from an explicit action with 
   const user = userEvent.setup();
   const callbacks = props({ regions: [], roiId: null });
   const { rerender } = render(<OutlineGenerationPanel {...callbacks} />);
-  expect(screen.queryByRole("button", { name: "Generate outline" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /Generate .*outline/ })).not.toBeInTheDocument();
   expect(callbacks.generate).not.toHaveBeenCalled();
   await user.click(screen.getByRole("button", { name: "Review roof areas" }));
   expect(callbacks.onReviewRegion).toHaveBeenCalledOnce();
   rerender(<OutlineGenerationPanel {...callbacks} regions={[syntheticAnnotation()]} roiId="roi-1" />);
   await user.selectOptions(screen.getByLabelText("Boundary to follow"), "roof_deck");
   expect(callbacks.onPolicyChange).toHaveBeenCalledWith("roof_deck");
-  await user.click(screen.getByRole("button", { name: "Generate outline" }));
+  await user.click(screen.getByRole("button", { name: "Generate Roof area 1 outline" }));
   expect(callbacks.generate).toHaveBeenCalledOnce();
   expect(callbacks.apply).not.toHaveBeenCalled();
 });

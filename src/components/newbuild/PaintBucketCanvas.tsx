@@ -10,6 +10,8 @@ import { AnnotationOverlay } from "./AnnotationOverlay";
 import type { OutlineProposal } from "@/types/outline";
 import { OutlineProposalOverlay } from "./OutlineProposalOverlay";
 import { AcceptedOutlineOverlay } from "./AcceptedOutlineOverlay";
+import { useSideFit } from "@/hooks/useSideFit";
+import type { VectorSegment } from "@/types/outline";
 import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler } from "lucide-react";
 
 type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust" | "straighten";
@@ -31,7 +33,9 @@ interface PaintBucketCanvasProps {
   penetrationHoles?: Point[][];
   acceptedRegions?: RoiAnnotation[];
   regionLabels?: Record<string, string>;
+  outlineTargetId?: string | null;
   outlineProposals?: OutlineProposal[];
+  vectorSegments?: readonly VectorSegment[];
 }
 
 const FILL_COLOR: [number, number, number, number] = [37, 99, 235, 15];
@@ -50,7 +54,9 @@ export const PaintBucketCanvas = ({
   penetrationHoles = [],
   acceptedRegions = [],
   regionLabels,
+  outlineTargetId,
   outlineProposals = [],
+  vectorSegments = [],
 }: PaintBucketCanvasProps) => {
   // Step 4 owns these openings. Display them without folding them into Step 3's
   // editable base geometry, which would leave stale cutouts after a later move.
@@ -63,6 +69,7 @@ export const PaintBucketCanvas = ({
   const [fitScale, setFitScale] = useState(1);
   const [fillCount, setFillCount] = useState(0);
   const [activeTool, setActiveTool] = useState<PaintTool>("fill");
+  const isAdjustMode = activeTool === "adjust" || activeTool === "straighten";
   const [cutoutSensitivity, setCutoutSensitivity] = useState(DEFAULT_CUTOUT_SENSITIVITY);
   const cutoutSensitivityId = useId();
   const [selectionSensitivity, setSelectionSensitivity] = useState(DEFAULT_SELECTION_SENSITIVITY);
@@ -632,8 +639,37 @@ export const PaintBucketCanvas = ({
     setSelectionMessage(null);
   }, []);
 
+  const sideFit = useSideFit({ enabled: isAdjustMode && !isInitializing && roofOutlines.length > 0,
+    outlines: roofOutlines, holes: interiorHoles, openings: penetrationHoles, vectors: vectorSegments,
+    source: pdfCanvas, scale: displayScale, onCommit: commitAdjustment,
+    onActivate: () => {
+      cancelAdjustment();
+      setHoveredEdge(null);
+      setHoveredVertex(null);
+      setSelectionMessage(null);
+      setActiveTool("adjust");
+    } });
+
+  const selectTool = (tool: PaintTool) => {
+    cancelAdjustment();
+    sideFit.cancel();
+    setHoveredEdge(null);
+    setHoveredVertex(null);
+    setSelectionMessage(null);
+    setActiveTool(tool);
+  };
+
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") cancelAdjustment(); };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      cancelAdjustment();
+      if (activeTool === "straighten") {
+        setActiveTool("adjust");
+        setHoveredEdge(null);
+        setHoveredVertex(null);
+        setSelectionMessage(null);
+      }
+    };
     window.addEventListener("keydown", escape);
     window.addEventListener("blur", cancelAdjustment);
     return () => {
@@ -1030,7 +1066,7 @@ export const PaintBucketCanvas = ({
           <Button
             variant={activeTool === "fill" ? "default" : "ghost"}
             size="sm"
-            onClick={() => setActiveTool("fill")}
+            onClick={() => selectTool("fill")}
             title="Select roof areas"
             className="rounded-none"
             disabled={isInitializing}
@@ -1041,7 +1077,7 @@ export const PaintBucketCanvas = ({
           <Button
             variant={activeTool === "cutout" ? "default" : "ghost"}
             size="sm"
-            onClick={() => setActiveTool("cutout")}
+            onClick={() => selectTool("cutout")}
             title="Cut out areas from fill"
             className="rounded-none"
             disabled={isInitializing}
@@ -1052,7 +1088,7 @@ export const PaintBucketCanvas = ({
           <Button
             variant={activeTool === "rectangle-cutout" ? "default" : "ghost"}
             size="sm"
-            onClick={() => setActiveTool("rectangle-cutout")}
+            onClick={() => selectTool("rectangle-cutout")}
             title="Drag a rectangle to remove selected areas inside it"
             aria-pressed={activeTool === "rectangle-cutout"}
             className="rounded-none"
@@ -1062,28 +1098,16 @@ export const PaintBucketCanvas = ({
             Cut Out rectangle
           </Button>
           <Button
-            variant={activeTool === "adjust" ? "default" : "ghost"}
+            variant={isAdjustMode ? "default" : "ghost"}
             size="sm"
-            onClick={() => setActiveTool("adjust")}
+            onClick={() => selectTool("adjust")}
             title="Drag edges or vertices; drop onto a neighbouring vertex to merge. Shift aligns a corner."
-            aria-pressed={activeTool === "adjust"}
+            aria-pressed={isAdjustMode}
             className="rounded-none"
             disabled={isInitializing || !hasAnyFill}
           >
             <Move className="w-4 h-4 mr-1" />
             Adjust
-          </Button>
-          <Button
-            variant={activeTool === "straighten" ? "default" : "ghost"}
-            size="sm"
-            onClick={() => setActiveTool("straighten")}
-            title="Click a side to align it horizontally or vertically, including intermediate points"
-            aria-pressed={activeTool === "straighten"}
-            className="rounded-none"
-            disabled={isInitializing || !roofOutlines.length}
-          >
-            <Ruler className="w-4 h-4 mr-1" />
-            Straighten
           </Button>
         </div>
 
@@ -1170,9 +1194,21 @@ export const PaintBucketCanvas = ({
       {acceptedRegions.length > 0 && <p className="text-xs text-muted-foreground px-1 mb-2">
         Selection stays inside the green roof regions. Use Cut Out or Adjust to refine the roof boundary.
       </p>}
-      {(activeTool === "adjust" || activeTool === "straighten")
-        ? <div role="status" className="h-12 shrink-0 overflow-y-auto text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</div>
-        : selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
+      {isAdjustMode ? <div className="px-1 mb-2 min-h-12">
+        <div role="group" aria-label="Adjust tools" className="flex flex-wrap items-center gap-2 min-h-10">
+          {sideFit.button}
+          <Button variant="adjustTool" size="sm"
+            onClick={() => selectTool(activeTool === "straighten" ? "adjust" : "straighten")}
+            title="Click a side to align it horizontally or vertically, including intermediate points"
+            aria-pressed={activeTool === "straighten"} disabled={isInitializing || !roofOutlines.length}>
+            <Ruler className="w-4 h-4 mr-1" />Straighten
+          </Button>
+          {sideFit.controls}
+        </div>
+        {!sideFit.active && <p role="status" className="text-sm text-muted-foreground">
+          {selectionMessage ?? (activeTool === "straighten" ? "Click a side to align it horizontally or vertically. Esc returns to dragging." : null)}
+        </p>}
+      </div> : selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
 
       {/* Canvas area */}
       <div
@@ -1182,6 +1218,12 @@ export const PaintBucketCanvas = ({
       >
         <div className="min-w-fit min-h-fit p-2 relative">
           <canvas ref={canvasRef} className="block mx-auto" data-testid="paint-source-canvas" />
+          {/* Keep region guides and labels behind outline boundaries and editing handles. */}
+          {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            <AnnotationOverlay annotations={acceptedRegions} labels={regionLabels} outlineTargetId={outlineTargetId}
+              contextual={roofOutlines.length > 0 || outlineProposals.length > 0} />
+          </div>}
           {displayedGeometry.outlines.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
             <AcceptedOutlineOverlay outlines={displayedGeometry.outlines} holes={displayedGeometry.holes}
@@ -1207,18 +1249,18 @@ export const PaintBucketCanvas = ({
             className={`absolute top-2 left-1/2 -translate-x-1/2 ${activeTool === "adjust" ? "cursor-move" : activeTool === "cutout" || activeTool === "straighten" ? "cursor-pointer" : "cursor-crosshair"}`}
             style={{ pointerEvents: "auto", touchAction: activeTool === "rectangle-cutout" || activeTool === "adjust" || activeTool === "straighten" ? "none" : "auto" }}
           />
-          {acceptedRegions.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
-            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
-            <AnnotationOverlay annotations={acceptedRegions} labels={regionLabels} contextual={roofOutlines.length > 0} />
-          </div>}
           {outlineProposals.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
             <OutlineProposalOverlay proposals={outlineProposals} width={pdfCanvas.width} height={pdfCanvas.height} />
           </div>}
+          {sideFit.active && <div className="absolute top-2 left-1/2 -translate-x-1/2"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            {sideFit.overlay}
+          </div>}
         </div>
       </div>
 
-      {activeTool !== "straighten" && <div className="flex items-center justify-center gap-2 mt-2 px-4">
+      {activeTool !== "straighten" && !sideFit.active && <div className="flex items-center justify-center gap-2 mt-2 px-4">
         <MousePointer className="w-3.5 h-3.5 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">
           {activeTool === "rectangle-cutout"
