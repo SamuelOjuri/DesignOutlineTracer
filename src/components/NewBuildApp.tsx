@@ -33,9 +33,21 @@ import { penetrationOpenings } from "@/utils/penetrationOpenings";
 import { outletFromAnnotation, pointInOutletRing, reviewPageOutlets } from "@/utils/outletScope";
 import { useOutletDetection } from "@/hooks/useOutletDetection";
 import { OutletDetectionPanel, OutletSummary } from "./newbuild/OutletDetectionPanel";
+import { nextRegionToOutline, outlinedRegionIds, preferredOutlineTarget } from "@/utils/outlineCoverage";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { FileUp } from "lucide-react";
 
 const ignoreRenderedCanvas = () => undefined;
+const formatList = (items: string[]) => items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 
 export const NewBuildApp = () => {
   const [currentStep, setCurrentStep] = useState<NewBuildStep>("upload");
@@ -61,7 +73,15 @@ export const NewBuildApp = () => {
   const roofRegions = activePage?.annotations.filter((annotation) => annotation.kind === "roof_roi") ?? [];
   const regionLabels = Object.fromEntries(roofRegions.map((annotation, index) => [annotation.id, `Roof area ${index + 1}`]));
   const acceptedRegions = roofRegions.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current");
-  const outlineRoiId = acceptedRegions.find(region => region.id === selectedRoiId)?.id ?? acceptedRegions[0]?.id ?? null;
+  const outlinedRoiIds = activePage ? outlinedRegionIds(activePage, acceptedRegions) : new Set<string>();
+  const outlineRoiId = acceptedRegions.find(region => region.id === selectedRoiId)?.id
+    ?? acceptedRegions.find(region => !outlinedRoiIds.has(region.id))?.id ?? acceptedRegions[0]?.id ?? null;
+  const unoutlinedRegions = currentStep === "paint" && roiClient.enabled
+    ? acceptedRegions.filter(region => !outlinedRoiIds.has(region.id)) : [];
+  // Prefer the current target so an unapplied proposal for it is not discarded.
+  const unoutlinedFocus = unoutlinedRegions.find(region => region.id === outlineRoiId) ?? unoutlinedRegions[0] ?? null;
+  const [unoutlinedWarningOpen, setUnoutlinedWarningOpen] = useState(false);
+  const lastOutlinedRoi = useRef<Record<string, string>>({});
   const [outlinePolicy, setOutlinePolicy] = useState<OutlineBoundaryPolicy>("inner_parapet");
   const [outlineNotes, setOutlineNotes] = useState("");
   const [paintGeneration, setPaintGeneration] = useState(0);
@@ -221,6 +241,12 @@ export const NewBuildApp = () => {
     setAddingRoi(false);
   };
 
+  const goToStep = (step: NewBuildStep) => {
+    const page = getActivePage();
+    if (step === "paint" && page) setSelectedRoiId(current => preferredOutlineTarget(page, current) ?? current);
+    setCurrentStep(step);
+  };
+
   const handleNext = () => {
     detection.cancel();
     penetrationDetection.cancel();
@@ -230,13 +256,18 @@ export const NewBuildApp = () => {
     setAddingRoi(false);
     if (showAdditionalUpload) {
       setShowAdditionalUpload(false);
-      setCurrentStep(roiClient.enabled ? "roi" : "paint");
+      goToStep(roiClient.enabled ? "roi" : "paint");
       return;
     }
     const idx = stepOrder.indexOf(currentStep);
     if (idx < stepOrder.length - 1) {
-      setCurrentStep(stepOrder[idx + 1]);
+      goToStep(stepOrder[idx + 1]);
     }
+  };
+
+  const requestNext = () => {
+    if (unoutlinedRegions.length) setUnoutlinedWarningOpen(true);
+    else handleNext();
   };
 
   const cancelAdditionalUpload = () => {
@@ -254,7 +285,7 @@ export const NewBuildApp = () => {
     setAddingRoi(false);
     if (showAdditionalUpload) return cancelAdditionalUpload();
     const idx = stepOrder.indexOf(currentStep);
-    if (idx > 0) setCurrentStep(stepOrder[idx - 1]);
+    if (idx > 0) goToStep(stepOrder[idx - 1]);
   };
 
   const canProceed = (): boolean => {
@@ -400,17 +431,29 @@ export const NewBuildApp = () => {
       <>
         {currentStep === "paint" && roiClient.enabled && activePage && <OutlineGenerationPanel
           key={activePage.source.page_id} page={activePage} regions={acceptedRegions} roiId={outlineRoiId}
-          regionLabels={regionLabels}
+          regionLabels={regionLabels} outlinedIds={outlinedRoiIds}
           onRoiChange={setSelectedRoiId} policy={outlinePolicy} onPolicyChange={setOutlinePolicy}
           notes={outlineNotes} onNotesChange={setOutlineNotes} result={outlineDetection.result}
           feedback={outlineDetection.feedback} busy={outlineDetection.busy} generate={outlineDetection.generate}
           cancel={outlineDetection.cancel} dismiss={outlineDetection.dismiss} canUndo={outlineDetection.canUndo}
           apply={replacements => {
             const error = outlineDetection.apply(replacements);
-            if (!error) setPaintGeneration(generation => generation + 1);
+            const page = getActivePage();
+            if (!error && page) {
+              setPaintGeneration(generation => generation + 1);
+              if (outlineRoiId) lastOutlinedRoi.current[page.source.page_id] = outlineRoiId;
+              const next = nextRegionToOutline(page, outlineRoiId);
+              if (next) setSelectedRoiId(next);
+            }
             return error;
           }}
-          undo={() => { outlineDetection.undo(); setPaintGeneration(generation => generation + 1); }}
+          undo={() => {
+            const pageId = getActivePage()?.source.page_id;
+            outlineDetection.undo();
+            setPaintGeneration(generation => generation + 1);
+            // Return to the roof area whose outline was removed, so it can be regenerated directly.
+            if (pageId && lastOutlinedRoi.current[pageId]) setSelectedRoiId(lastOutlinedRoi.current[pageId]);
+          }}
           onReviewRegion={() => { outlineDetection.cancel(); setCurrentStep("roi"); }}
         />}
         {currentStep === "outlets" && !showAdditionalUpload && roiClient.enabled && activePage && <OutletDetectionPanel
@@ -479,13 +522,32 @@ export const NewBuildApp = () => {
               Previous
             </Button>
             <Button
-              onClick={handleNext}
+              onClick={requestNext}
               disabled={currentStep === "details" || !canProceed()}
               className="flex-1 min-w-0 whitespace-normal h-auto min-h-10 py-2"
             >
               {currentStep === "details" ? "Complete" : currentStep === "roi" ? "Set Outlines" : "Next"}
             </Button>
           </div>
+          <AlertDialog open={unoutlinedWarningOpen && unoutlinedRegions.length > 0} onOpenChange={setUnoutlinedWarningOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Some roof areas have no outline</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {formatList(unoutlinedRegions.map(region => regionLabels[region.id]))}
+                  {unoutlinedRegions.length === 1 ? " has" : " have"} no outline yet. Outline
+                  {unoutlinedRegions.length === 1 ? " it" : " them"} now, or continue if
+                  {unoutlinedRegions.length === 1 ? " it is" : " they are"} not part of the insulation scope.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                {unoutlinedFocus && <AlertDialogCancel onClick={() => setSelectedRoiId(unoutlinedFocus.id)}>
+                  Outline {regionLabels[unoutlinedFocus.id]}
+                </AlertDialogCancel>}
+                <AlertDialogAction onClick={() => { setUnoutlinedWarningOpen(false); handleNext(); }}>Continue anyway</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
 
         <div className={`flex-1 min-w-0 p-4 flex overflow-hidden ${isReviewStep ? "flex-col min-h-[360px] md:min-h-0" : currentStep === "paint" ? "flex-col min-h-[480px] md:min-h-0" : currentStep === "outlets" || currentStep === "details" ? "flex-col" : "items-center justify-center"}`}>

@@ -67,7 +67,7 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await page.getByLabel("Region label", { exact: true }).fill("roof_roi");
   await page.getByRole("button", { name: "Apply correction", exact: true }).click();
   await page.getByRole("button", { name: "Set Outlines", exact: true }).click();
-  const regionSelect = page.getByRole("combobox", { name: "Outline roof area", exact: true });
+  const regionSelect = page.getByRole("combobox", { name: "Select roof area to outline", exact: true });
   await expect(regionSelect.getByRole("option")).toHaveText(["Roof area 1", "Roof area 2"]);
   const secondRoiId = await regionSelect.inputValue();
   const targetLabel = page.getByTestId("annotation-overlay").locator('[aria-current="true"]');
@@ -99,6 +99,11 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await page.getByRole("button", { name: "Use outline", exact: true }).click();
   await expect(overlay).toHaveCount(0);
   await expect(next).toBeEnabled();
+  // The next roof area that still needs an outline is selected automatically.
+  await expect(regionSelect).toHaveValue(secondRoiId);
+  await expect(targetLabel).toHaveText("Roof area 2");
+  await expect(regionSelect.getByRole("option")).toHaveText(["Roof area 1 (outlined)", "Roof area 2"]);
+  await expect(page.getByTestId("outline-progress")).toHaveText("1 of 2 roof areas outlined. Still to outline: Roof area 2.");
   await expect(page.getByRole("button", { name: "Adjust", exact: true })).toBeEnabled();
   const accepted = page.getByTestId("accepted-outline-overlay");
   await expect(accepted).toBeVisible();
@@ -156,6 +161,7 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await page.getByRole("button", { name: "Undo generated outline", exact: true }).click();
   await expect(accepted).toHaveCount(0);
   await expect(next).toBeDisabled();
+  await expect(regionSelect).toHaveValue(firstRoiId);
   await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
   await expect(overlay).toBeVisible();
   expect(uploads).toHaveLength(2);

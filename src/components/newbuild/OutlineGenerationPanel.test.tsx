@@ -25,7 +25,7 @@ function props(patch: Partial<OutlineGenerationPanelProps> = {}): OutlineGenerat
     drawing: { outlines: [{ id: "manual-1", page_id: "page-1", roi_id: null, points }], holes: [], outlets: [],
       drainage_edges: [], drawing_scale: { paperSize: "A1", scaleRatio: 50 } },
   };
-  return { page, regions: page.annotations, regionLabels: { "roi-1": "Roof area 1" }, roiId: "roi-1", onRoiChange: vi.fn(), policy: "inner_parapet",
+  return { page, regions: page.annotations, regionLabels: { "roi-1": "Roof area 1" }, outlinedIds: new Set<string>(), roiId: "roi-1", onRoiChange: vi.fn(), policy: "inner_parapet",
     onPolicyChange: vi.fn(), notes: "", onNotesChange: vi.fn(), result: null, busy: false, feedback: null,
     generate: vi.fn(), cancel: vi.fn(), dismiss: vi.fn(), apply: vi.fn(() => null), undo: vi.fn(), canUndo: false,
     onReviewRegion: vi.fn(), ...patch };

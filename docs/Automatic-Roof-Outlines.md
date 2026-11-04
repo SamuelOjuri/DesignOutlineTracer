@@ -8,8 +8,9 @@ separate from the editable drawing until **Use outline** is selected.
 ## Using the feature
 
 1. Upload the PDF and select its drawing scale. Accept or manually draw the
-   required roof region in Step 2.
-2. In Step 3, select the roof region and boundary convention. The default is
+   required roof regions in Step 2.
+2. In Step 3, choose the roof region under **Select roof area to outline** and
+   the boundary convention. The default is
    **Insulation edge / inner parapet face**. **Roof deck edge** and **Outer roof
    edge** are alternatives. Optional boundary guidance records job-specific
    exceptions. This is an explicit user choice; the default is not a claim that
@@ -23,11 +24,30 @@ separate from the editable drawing until **Use outline** is selected.
    are rejected. **Use outline** installs the polygons directly, without passing
    them through the manual fill tool's gap-closing/contour cleanup.
 5. **Undo generated outline** restores the preceding drawing in one action,
-   while that application remains the latest page edit. Further manual edits
-   use the existing canvas Undo. Existing adjustment tools remain available.
+   while that application remains the latest page edit, and reselects the roof
+   area whose outline was removed. Further manual edits use the existing canvas
+   Undo. Existing adjustment tools remain available.
 6. Review rooflights and other openings separately in Step 4. Changing or undoing
    the base scope invalidates dependent opening decisions; it does not silently
    restore stale accepted openings.
+
+### Several roof areas on one page
+
+Every accepted roof area is listed in **Select roof area to outline**, so they can
+be outlined one after another without returning to Step 2:
+
+- Step 3 opens on the area chosen in Step 2 while it still needs an outline;
+  otherwise it opens on the next area that does.
+- After **Use outline**, the next area without an outline (in roof-area order,
+  wrapping round) is selected automatically. The boundary convention and
+  guidance carry over; change them before generating if that area differs.
+- Outlined areas are marked **(outlined)** and a progress line lists the areas
+  still to outline. An outline counts for the area it was generated for; a
+  manual, edited or orphaned outline counts for any accepted area whose box
+  contains the outline's centre.
+- **Next** asks for confirmation while an accepted area has no outline. Choose
+  **Outline Roof area N** to stay, or **Continue anyway** when that area is not
+  part of the insulation scope. Nothing is blocked.
 
 An ROI that cuts off the proposed scope must be corrected before use. Cropping
 supplies context and never turns the ROI rectangle into a roof perimeter.

@@ -49,6 +49,8 @@ export interface OutlineGenerationPanelProps {
   page: PageSession;
   regions: RoiAnnotation[];
   regionLabels: Record<string, string>;
+  /** Accepted regions that already have an outline on the page. */
+  outlinedIds: ReadonlySet<string>;
   roiId: string | null;
   onRoiChange: (id: string) => void;
   policy: OutlineBoundaryPolicy;
@@ -68,15 +70,17 @@ export interface OutlineGenerationPanelProps {
 }
 
 export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
-  const { page, regions, regionLabels, roiId, result, busy, feedback } = props;
+  const { page, regions, regionLabels, outlinedIds, roiId, result, busy, feedback } = props;
   const targetLabel = roiId ? regionLabels[roiId] : null;
   const [replacements, setReplacements] = useState<string[]>([]);
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [applied, setApplied] = useState(false);
+  const [applied, setApplied] = useState<{ id: string; label: string } | null>(null);
+  const remaining = regions.filter(region => !outlinedIds.has(region.id));
+  const advanced = applied && roiId && roiId !== applied.id && !outlinedIds.has(roiId);
   const available = page.drawing.outlines.filter(outline => !outline.roi_id || outline.roi_id === roiId);
   const warnings = [...new Set([...(result?.warnings ?? []), ...(result?.proposals.flatMap(proposal => proposal.warnings) ?? [])])];
   const usable = Boolean(result?.proposals.length && result.status !== "roi_too_tight" && result.status !== "no_outline");
-  const generate = () => { setApplyError(null); setApplied(false); props.generate(); };
+  const generate = () => { setApplyError(null); setApplied(null); props.generate(); };
 
   return <section aria-label="Automatic outline" className="mb-5 space-y-3 border-b border-border pb-5">
     <h3 className="text-base font-semibold">Automatic outline</h3>
@@ -84,21 +88,26 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
       <p className="text-sm text-muted-foreground">Accept a roof area to generate its insulation perimeter. Manual tools are also available.</p>
       <Button variant="outline" onClick={props.onReviewRegion}>Review roof areas</Button>
     </> : <>
-      <label className="block text-sm font-medium">Roof area
-        <select aria-label="Outline roof area" className="mt-1 block w-full rounded-md border border-input bg-background p-2"
-          value={roiId ?? ""} onChange={event => { setReplacements([]); setApplied(false); setApplyError(null); props.onRoiChange(event.target.value); }}>
+      <label className="block text-sm font-medium">Select roof area to outline
+        <select aria-label="Select roof area to outline" className="mt-1 block w-full rounded-md border border-input bg-background p-2"
+          value={roiId ?? ""} onChange={event => { setReplacements([]); setApplied(null); setApplyError(null); props.onRoiChange(event.target.value); }}>
           {regions.map(region => {
             const label = regionLabels[region.id];
             const customLabel = region.label.trim();
             return <option key={region.id} value={region.id}>
               {label}{customLabel && customLabel.toLowerCase() !== "roof_roi" && customLabel !== label ? ` — ${customLabel}` : ""}
+              {outlinedIds.has(region.id) ? " (outlined)" : ""}
             </option>;
           })}
         </select>
       </label>
+      <p className="text-xs text-muted-foreground" data-testid="outline-progress">
+        {regions.length - remaining.length} of {regions.length} roof area{regions.length === 1 ? "" : "s"} outlined
+        {remaining.length ? `. Still to outline: ${remaining.map(region => regionLabels[region.id]).join(", ")}.` : "."}
+      </p>
       <label className="block text-sm font-medium">Boundary to follow
         <select aria-label="Boundary to follow" className="mt-1 block w-full rounded-md border border-input bg-background p-2"
-          value={props.policy} onChange={event => { setApplied(false); props.onPolicyChange(event.target.value as OutlineBoundaryPolicy); }}>
+          value={props.policy} onChange={event => { setApplied(null); props.onPolicyChange(event.target.value as OutlineBoundaryPolicy); }}>
           <option value="inner_parapet">Insulation edge / inner parapet face</option>
           <option value="roof_deck">Roof deck edge</option>
           <option value="outer_roof">Outer roof edge</option>
@@ -109,7 +118,7 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
         <summary className="cursor-pointer text-sm">Boundary guidance (optional)</summary>
         <label className="block mt-2 text-sm">Exceptions or edges to follow
           <textarea aria-label="Boundary guidance" value={props.notes} maxLength={1000} rows={3}
-            onChange={event => { setApplied(false); props.onNotesChange(event.target.value); }}
+            onChange={event => { setApplied(null); props.onNotesChange(event.target.value); }}
             className="mt-1 w-full rounded-md border border-input bg-background p-2" />
         </label>
       </details>
@@ -127,7 +136,8 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
         {result?.status === "no_outline" && <p>No usable perimeter was found. Refine the boundary guidance or use the manual tools.</p>}
         {result?.status === "roi_too_tight" && <p>{issueMessages.roi_too_tight}</p>}
         {usable && <p>{result!.proposals.length} suggested outline{result!.proposals.length === 1 ? "" : "s"}. Blue shows the proposal; orange dashed edges need review.</p>}
-        {applied && !result && <p>Outline applied. Use the existing tools for any further adjustments.</p>}
+        {applied && !result && <p>{applied.label} outline applied. {advanced
+          ? `${targetLabel} is selected next.` : "Use the existing tools for any further adjustments."}</p>}
       </div>
       {warnings.length > 0 && <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
         {warnings.map(warning => <li key={warning}>{describeIssue(warning)}</li>)}
@@ -145,8 +155,9 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
         </fieldset>}
         <div className="flex flex-wrap gap-2">
           <Button onClick={() => {
+            const appliedTo = roiId && targetLabel ? { id: roiId, label: targetLabel } : null;
             const error = props.apply(replacements.filter(id => available.some(outline => outline.id === id)));
-            setApplyError(error); setApplied(!error);
+            setApplyError(error); setApplied(error ? null : appliedTo);
             if (!error) setReplacements([]);
           }} disabled={busy}>Use outline</Button>
           <Button variant="outline" onClick={() => { props.dismiss(); setApplyError(null); }}>Discard proposal</Button>
@@ -154,7 +165,7 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
       </>}
       {applyError && <p role="alert" className="text-sm text-destructive">{applyError}</p>}
     </>}
-    {props.canUndo && <Button variant="outline" size="sm" onClick={() => { props.undo(); setApplied(false); setApplyError(null); }}>
+    {props.canUndo && <Button variant="outline" size="sm" onClick={() => { props.undo(); setApplied(null); setApplyError(null); }}>
       <Undo2 className="mr-2 h-4 w-4" />Undo generated outline
     </Button>}
   </section>;

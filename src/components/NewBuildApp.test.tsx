@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PdfUpload } from "./newbuild/PdfUpload";
@@ -12,6 +12,7 @@ import { NewBuildApp } from "./NewBuildApp";
 import { syntheticAnnotation, syntheticPage, syntheticRun } from "@/test/roi";
 import { roiClient } from "@/integrations/roi/client";
 import { drawingWithPenetrations } from "@/utils/penetrationOpenings";
+import { outlineResponse } from "@/test/outline";
 
 const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 100, y: 300 }];
 const hole = [{ x: 150, y: 150 }, { x: 180, y: 150 }, { x: 180, y: 180 }];
@@ -56,6 +57,7 @@ vi.mock("./newbuild/RoiReviewCanvas", () => ({
     <output data-testid="review-regions">{JSON.stringify(annotations)}</output>
     <output data-testid="review-drawing">{JSON.stringify(page && drawingWithPenetrations(page))}</output>
     <button onClick={() => onAdd([100.25, 200.5, 400.75, 600.5])}>Add test region</button>
+    <button onClick={() => onAdd([700, 700, 900, 900])}>Add far test region</button>
     <button onClick={() => onEdit(annotations[0].id, [240, 300, 300, 350])}>Move test penetration</button>
   </>,
 }));
@@ -143,6 +145,70 @@ describe("manual New Build state", () => {
     await next();
     expect(screen.getByTestId("editor-outlets")).toHaveTextContent("page-1");
     expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("outlines accepted roof areas one after another and warns before leaving one without an outline", async () => {
+    roiClient.enabled = true;
+    vi.spyOn(roiClient, "uploadPage").mockResolvedValue({ page: {
+      ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
+    }, upload_id: "upload", expires_in_seconds: 900 });
+    const generate = vi.spyOn(roiClient, "generateOutline").mockImplementation(async (request) => {
+      const [top, left, bottom, right] = request.roi.box_2d;
+      return outlineResponse(request, [{ x: left * 0.8 + 10, y: top * 0.6 + 10 }, { x: right * 0.8 - 10, y: top * 0.6 + 10 },
+        { x: right * 0.8 - 10, y: bottom * 0.6 - 10 }, { x: left * 0.8 + 10, y: bottom * 0.6 - 10 }]);
+    });
+    const user = userEvent.setup();
+    render(<NewBuildApp />);
+    const next = () => user.click(screen.getByRole("button", { name: "Next" }));
+    const target = () => screen.getByRole("combobox", { name: "Select roof area to outline" });
+    const progress = () => screen.getByTestId("outline-progress");
+    const generateAndUse = async (label: string) => {
+      await user.click(screen.getByRole("button", { name: `Generate ${label} outline` }));
+      await user.click(await screen.findByRole("button", { name: "Use outline" }));
+    };
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Add test region" }));
+    await user.click(screen.getByRole("button", { name: "Add far test region" }));
+    await user.click(screen.getByRole("button", { name: "Set Outlines" }));
+    // The area chosen in Step 2 is kept while it still needs an outline.
+    expect(target()).toHaveDisplayValue("Roof area 2");
+    expect(progress()).toHaveTextContent("0 of 2 roof areas outlined. Still to outline: Roof area 1, Roof area 2.");
+
+    await generateAndUse("Roof area 2");
+    expect(target()).toHaveDisplayValue("Roof area 1");
+    expect(screen.getByText("Roof area 2 outline applied. Roof area 1 is selected next.")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Roof area 2 (outlined)" })).toBeInTheDocument();
+    expect(progress()).toHaveTextContent("1 of 2 roof areas outlined. Still to outline: Roof area 1.");
+
+    await user.click(screen.getByRole("button", { name: "Undo generated outline" }));
+    expect(target()).toHaveDisplayValue("Roof area 2");
+    expect(progress()).toHaveTextContent("0 of 2 roof areas outlined.");
+    await generateAndUse("Roof area 2");
+    expect(target()).toHaveDisplayValue("Roof area 1");
+
+    await next();
+    const warning = screen.getByRole("alertdialog");
+    expect(warning).toHaveTextContent("Roof area 1 has no outline yet.");
+    await user.click(within(warning).getByRole("button", { name: "Outline Roof area 1" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(target()).toHaveDisplayValue("Roof area 1");
+    await next();
+    await user.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Continue anyway" }));
+    expect(screen.getByRole("heading", { name: "Penetrations" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Previous" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(target()).toHaveDisplayValue("Roof area 1");
+
+    await generateAndUse("Roof area 1");
+    expect(screen.getByText("Roof area 1 outline applied. Use the existing tools for any further adjustments.")).toBeInTheDocument();
+    expect(progress()).toHaveTextContent("2 of 2 roof areas outlined.");
+    await next();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Penetrations" })).toBeInTheDocument();
+    expect(generate).toHaveBeenCalledTimes(3);
+    expect(generate.mock.calls.map(([request]) => request.roi.box_2d)).toEqual([
+      [700, 700, 900, 900], [700, 700, 900, 900], [100.25, 200.5, 400.75, 600.5]]);
   });
 
   it("carries editable penetration openings through the roof mask, outlet view and project payload", async () => {
