@@ -9,7 +9,7 @@ function props(): OutletDetectionPanelProps {
   const page = outletPage();
   page.annotations.push(outletResponse().annotations[0]);
   return { page, selectedId: "outlet-annotation-1", onSelect: vi.fn(), onModeChange: vi.fn(), dispatch: vi.fn(),
-    detection: { generate: vi.fn(async () => undefined), cancel: vi.fn(), busy: false, feedback: null } };
+    detection: { generate: vi.fn(async () => undefined), cancel: vi.fn(), busy: false, restarting: false, feedback: null } };
 }
 
 describe("outlet review controls", () => {
@@ -97,6 +97,18 @@ describe("outlet review controls", () => {
     callbacks.page.annotations.splice(1, 1);
     rerender(<OutletDetectionPanel {...callbacks} selectedId={null} />);
     expect(screen.getByText("1 manual outlet", { exact: true })).toBeInTheDocument();
+  });
+
+  it("explains an automatic retry and a service that is still restarting", () => {
+    const callbacks = props();
+    callbacks.detection = { ...callbacks.detection, busy: true, restarting: true, feedback: { status: "detecting" } };
+    const { rerender } = render(<OutletDetectionPanel {...callbacks} />);
+    expect(screen.getByText("The service is restarting after an update. Retrying automatically...")).toBeInTheDocument();
+    rerender(<OutletDetectionPanel {...callbacks} detection={{ ...callbacks.detection, busy: false, restarting: false,
+      feedback: { status: "error", error: "storage_unavailable" } }} />);
+    expect(screen.queryByText(/Retrying automatically/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("alert")[0]).toHaveTextContent(
+      "The service is restarting after an update. Existing outlets are unchanged; try again in a minute.");
   });
 
   it("excludes stale accepted geometry from the project summary", () => {

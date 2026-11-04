@@ -9,6 +9,7 @@ import { validateBox } from "@/utils/roiCoordinates";
 import type { RoiSessionAction } from "@/utils/roiSession";
 import { acceptedRoofRegions, penetrationAssociationWarnings } from "@/utils/penetrationAssociation";
 import { penetrationFootprint } from "@/utils/penetrationOpenings";
+import { SERVICE_RESTART_MESSAGE, SERVICE_RESTART_RETRYING } from "@/integrations/roi/serviceRestart";
 
 interface RoiReviewSidebarProps {
   kind?: "roof_roi" | "penetration";
@@ -86,6 +87,8 @@ const errorMessages: Record<string, string> = {
   follow_up_limit: "The follow-up limit for this upload has been reached.",
   invalid_configuration: "The annotation service URL or timeout is not configured correctly.",
   model_unavailable: "The configured model is unavailable.", provider_refusal: "The model declined this request.",
+  storage_unavailable: `${SERVICE_RESTART_MESSAGE} Try again in a minute.`,
+  storage_starting: `${SERVICE_RESTART_MESSAGE} Try again in a minute.`,
 };
 
 export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, onSelect, onAddingChange, dispatch, detection }: RoiReviewSidebarProps) => {
@@ -102,7 +105,7 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
   const canAccept = !isPenetration || Boolean(selected && parents.some((parent) => parent.id === selected.roi_id)
     && penetrationSubtypes.some((subtype) => subtype === selected.subtype) && !footprint?.error);
   const accepted = annotations.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current").length;
-  const { feedback, busy } = detection;
+  const { feedback, busy, restarting } = detection;
   const review = (review_status: RoiAnnotation["review_status"]) => {
     if (selected) dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch: { review_status, validity: "current" } });
   };
@@ -121,7 +124,7 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
         </Button>}
       <div role="status" aria-live="polite" className="text-sm">
         {busy && <span className="flex gap-2 items-center"><Loader2 className="w-4 h-4 animate-spin shrink-0" />
-          {feedback?.status === "uploading" ? "Uploading selected page..." : `Detecting ${subject}...`}</span>}
+          {restarting ? SERVICE_RESTART_RETRYING : feedback?.status === "uploading" ? "Uploading selected page..." : `Detecting ${subject}...`}</span>}
         {!busy && feedback?.status === "complete" && "Recommendations ready for review."}
         {!busy && feedback?.status === "no_detections" && `No ${subject} returned. This does not confirm the page has none.`}
         {!busy && feedback?.status === "partial" && `Partial result. Some ${subject} may be missing.`}

@@ -4,15 +4,40 @@ import type { OutlineRequest, OutlineResponse } from "@/types/outline";
 import { outlineRequestSchema, outlineResponseSchema } from "./outlineContracts";
 import type { OutletRequest, OutletResponse } from "@/types/outlet";
 import { outletRequestSchema, validateOutletResponse } from "./outlets";
+import { SERVICE_RESTART_CODES, SERVICE_RESTART_RETRY_WINDOW_MS } from "./serviceRestart";
 import {
   detectionSchema, healthSchema, identifier, pageContextSchema, parentSchema, receiptSchema, requestSchema, subtypes,
 } from "./contracts";
 
 export class RoiApiError extends Error {
-  constructor(public readonly code: string, public readonly status = 0, public readonly retryable = false) {
+  constructor(public readonly code: string, public readonly status = 0, public readonly retryable = false,
+    public readonly retryAfterMs?: number) {
     super(`ROI request failed: ${code}`);
     this.name = "RoiApiError";
   }
+}
+
+/** Retry briefly while a redeployed API instance takes over durable storage. */
+const DEFAULT_RESTART_RETRY_DELAY_MS = 2_000;
+const MAX_RESTART_RETRY_DELAY_MS = 10_000;
+
+export function isServiceRestart(error: unknown): error is RoiApiError {
+  return error instanceof RoiApiError && error.status === 503 && SERVICE_RESTART_CODES.has(error.code);
+}
+
+function retryAfterMs(response: Response): number {
+  const seconds = Number(response.headers.get("Retry-After"));
+  return Number.isFinite(seconds) && seconds > 0
+    ? Math.min(seconds * 1000, MAX_RESTART_RETRY_DELAY_MS) : DEFAULT_RESTART_RETRY_DELAY_MS;
+}
+
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => { clearTimeout(timer); reject(new DOMException("Request aborted", "AbortError")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export interface RoiDetectionResult {
@@ -78,6 +103,12 @@ export function createRoiClient(options: ClientOptions = {}) {
   const baseUrl = options.baseUrl ?? import.meta.env.VITE_ROI_API_BASE_URL;
   const fetcher = options.fetch ?? globalThis.fetch;
   let sessionToken: string | undefined;
+  let restartWaits = 0;
+  const restartListeners = new Set<() => void>();
+  const notifyRestart = (delta: number) => {
+    restartWaits += delta;
+    restartListeners.forEach((listener) => listener());
+  };
 
   function ensureEnabled() {
     if (!enabled) throw new RoiApiError("feature_disabled");
@@ -108,8 +139,8 @@ export function createRoiClient(options: ClientOptions = {}) {
     return timeout;
   }
 
-  async function send(path: string, method: string, body?: BodyInit, signal?: AbortSignal,
-    timeoutMs = options.timeoutMs ?? 70_000): Promise<unknown> {
+  async function attempt(path: string, method: string, body: BodyInit | undefined, signal: AbortSignal | undefined,
+    timeoutMs: number): Promise<unknown> {
     const url = endpoint(path);
     if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
     if (!sessionToken) {
@@ -131,7 +162,7 @@ export function createRoiClient(options: ClientOptions = {}) {
         const parsed = z.object({ error: z.object({ code: z.string().max(80).regex(/^[a-z_]+$/), retryable: z.boolean() }).strict() })
           .strict().safeParse(payload);
         if (!parsed.success) throw new RoiApiError("request_failed", response.status);
-        throw new RoiApiError(parsed.data.error.code, response.status, parsed.data.error.retryable);
+        throw new RoiApiError(parsed.data.error.code, response.status, parsed.data.error.retryable, retryAfterMs(response));
       }
       return payload;
     } catch (error) {
@@ -145,8 +176,36 @@ export function createRoiClient(options: ClientOptions = {}) {
     }
   }
 
+  // Retries resend the same body and request ID; the API replays or rejects a
+  // request ID it has already started, so a retry cannot start a second paid call.
+  async function send(path: string, method: string, body?: BodyInit, signal?: AbortSignal,
+    timeoutMs = options.timeoutMs ?? 70_000): Promise<unknown> {
+    const deadline = Date.now() + SERVICE_RESTART_RETRY_WINDOW_MS;
+    let restarting = false;
+    try {
+      while (true) {
+        try {
+          return await attempt(path, method, body, signal, timeoutMs);
+        } catch (error) {
+          const delay = isServiceRestart(error) ? error.retryAfterMs ?? DEFAULT_RESTART_RETRY_DELAY_MS : 0;
+          if (!delay || Date.now() + delay > deadline) throw error;
+          if (!restarting) { restarting = true; notifyRestart(1); }
+          await wait(delay, signal);
+        }
+      }
+    } finally {
+      if (restarting) notifyRestart(-1);
+    }
+  }
+
   return {
     enabled,
+    /** True while any request is waiting for the API to finish restarting. */
+    serviceRestarting: () => restartWaits > 0,
+    subscribeServiceRestart(listener: () => void) {
+      restartListeners.add(listener);
+      return () => { restartListeners.delete(listener); };
+    },
     async health(signal?: AbortSignal) {
       return validate(healthSchema, await send("/health", "GET", undefined, signal));
     },

@@ -7,8 +7,12 @@ import type { RoiSessionAction } from "@/utils/roiSession";
 import { activePageOutlets, outletAssociation, outletScopes } from "@/utils/outletScope";
 import { boxToSource } from "@/utils/roiCoordinates";
 import type { useOutletDetection } from "@/hooks/useOutletDetection";
+import { SERVICE_RESTART_MESSAGE, SERVICE_RESTART_RETRYING } from "@/integrations/roi/serviceRestart";
 
+const restartMessage = `${SERVICE_RESTART_MESSAGE} Existing outlets are unchanged; try again in a minute.`;
 const messages: Record<string, string> = {
+  storage_unavailable: restartMessage,
+  storage_starting: restartMessage,
   provider_not_configured: "Outlet detection is unavailable. You can still add outlets manually.",
   network_error: "Could not reach the annotation service. Existing outlets are unchanged.",
   request_failed: "Outlet detection failed. Existing outlets are unchanged; try again or add outlets manually.",
@@ -168,6 +172,7 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
       {detection.busy && <Button variant="outline" onClick={detection.cancel}>Cancel</Button>}
     </div>
     <div aria-live="polite" className="text-sm">
+      {detection.restarting && <p>{SERVICE_RESTART_RETRYING}</p>}
       {feedback?.status === "error" && <p role="alert" className="text-destructive">{describe(feedback.error ?? "request_failed")}</p>}
       {feedback?.status === "cancelled" && <p>Detection cancelled. Existing outlets are unchanged.</p>}
       {feedback?.status === "no_detections" && <p>No rainwater inlet symbols were found. Check the drawing and add any missed outlets manually.</p>}

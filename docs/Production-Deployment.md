@@ -103,6 +103,13 @@ restores the latest snapshot and becomes active. This avoids writing stale state
 If activation does not finish within five minutes, the health check fails.
 Do not configure Render to use the API readiness endpoint for this handover.
 
+The frontend retries `storage_unavailable` and `storage_starting` responses
+automatically for up to one minute, honouring `Retry-After` (capped at 10 seconds)
+and resending the same request ID. While it waits, the assisted panels show "The
+service is restarting after an update. Retrying automatically...". If the API is
+still unavailable after that window, they ask the user to try again in a minute.
+Cancel stops the wait immediately.
+
 Once active, `GET /api/roi/v1/health` returns `mode: public` and needs no bearer token.
 `status: ready` means the provider is configured; it does not perform a paid
 model call or verify that the credential has access to the selected model.

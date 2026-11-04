@@ -18,7 +18,7 @@ function Editor({ canvas }: { canvas: HTMLCanvasElement }) {
   return <>
     <RoiReviewSidebar kind="penetration" page={page} selectedId={selected} adding={adding}
       onSelect={select} onAddingChange={setAdding} dispatch={dispatch}
-      detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />
+      detection={{ busy: false, restarting: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />
     <RoiReviewCanvas kind="penetration" page={page} pdfCanvas={canvas} annotations={annotations}
       selectedId={selected} adding={adding} onSelect={select} onAddingChange={setAdding}
       onEdit={(id, box_2d) => dispatch({ type: "review", page_id: "page-1", id, patch: { box_2d } })}

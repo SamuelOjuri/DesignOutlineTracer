@@ -2,6 +2,7 @@ import { useState } from "react";
 import { roiClient, RoiApiError } from "@/integrations/roi/client";
 import type { AnnotationKind, PageSession } from "@/types/roi";
 import type { useRoiSession } from "./useRoiSession";
+import { useServiceRestarting } from "./useServiceRestarting";
 
 interface DetectionFeedback {
   status: "uploading" | "detecting" | "complete" | "no_detections" | "partial" | "error" | "cancelled";
@@ -15,6 +16,7 @@ export function useRoiDetection(session: ReturnType<typeof useRoiSession>, clien
   const [followedRequests] = useState(() => new Set<string>());
   const [followedUploads] = useState(() => new Set<string>());
   const [partialUploads] = useState(() => new Map<string, string>());
+  const restarting = useServiceRestarting(client);
   const feedbackKey = (page: PageSession) => task === "roof_roi" ? `${page.source.page_id}:${task}`
     : `${page.source.page_id}:${task}:${page.roi_revision}:${page.geometry_revision}`;
 
@@ -66,6 +68,7 @@ export function useRoiDetection(session: ReturnType<typeof useRoiSession>, clien
   const currentFeedback = session.activePage ? feedback[feedbackKey(session.activePage)] : undefined;
   const staleLoading = !session.activePage?.pending[task]
     && (currentFeedback?.status === "uploading" || currentFeedback?.status === "detecting");
+  const busy = Boolean(session.activePage?.pending[task]);
   return { detect, cancel, feedback: staleLoading ? { status: "cancelled" as const } : currentFeedback,
-    busy: Boolean(session.activePage?.pending[task]) };
+    busy, restarting: busy && restarting };
 }

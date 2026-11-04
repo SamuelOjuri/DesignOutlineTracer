@@ -3,8 +3,12 @@ import { Button } from "@/components/ui/button";
 import type { PageSession, RoiAnnotation } from "@/types/roi";
 import type { OutlineBoundaryPolicy, OutlineResponse } from "@/types/outline";
 import { Loader2, WandSparkles, Undo2 } from "lucide-react";
+import { SERVICE_RESTART_MESSAGE, SERVICE_RESTART_RETRYING } from "@/integrations/roi/serviceRestart";
 
+const restartMessage = `${SERVICE_RESTART_MESSAGE} Your drawing is unchanged; try again in a minute.`;
 const issueMessages: Record<string, string> = {
+  storage_unavailable: restartMessage,
+  storage_starting: restartMessage,
   provider_not_configured: "Outline generation is unavailable. Configure the annotation service or continue with the manual tools.",
   network_error: "Could not reach the annotation service. Your drawing is unchanged.",
   request_timeout: "Outline generation timed out. Your drawing is unchanged; you can try again.",
@@ -59,6 +63,8 @@ export interface OutlineGenerationPanelProps {
   onNotesChange: (notes: string) => void;
   result: OutlineResponse | null;
   busy: boolean;
+  /** A request is waiting for the annotation service to finish restarting. */
+  restarting?: boolean;
   feedback: { status: string; error?: string } | null;
   generate: () => void;
   cancel: () => void;
@@ -131,6 +137,7 @@ export function OutlineGenerationPanel(props: OutlineGenerationPanelProps) {
         {busy && <Button variant="outline" onClick={props.cancel}>Cancel</Button>}
       </div>
       <div aria-live="polite" className="text-sm">
+        {busy && props.restarting && <p>{SERVICE_RESTART_RETRYING}</p>}
         {feedback?.status === "error" && <p role="alert" className="text-destructive">{describeIssue(feedback.error ?? "Outline generation failed.")}</p>}
         {feedback?.status === "cancelled" && <p>Generation cancelled. Your drawing is unchanged.</p>}
         {result?.status === "no_outline" && <p>No usable perimeter was found. Refine the boundary guidance or use the manual tools.</p>}

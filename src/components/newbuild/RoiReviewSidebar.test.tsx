@@ -19,7 +19,7 @@ describe("ROI failure feedback", () => {
     const dispatch = vi.fn();
     render(<RoiReviewSidebar kind="penetration" page={state.pages[source.page_id]} selectedId="child" adding={false}
       onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={dispatch}
-      detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
+      detection={{ busy: false, restarting: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
     const user = userEvent.setup();
     await user.click(screen.getByText("Edit type, roof area and coordinates"));
     await user.selectOptions(screen.getByRole("combobox", { name: "Parent roof area" }), "second-roof");
@@ -41,7 +41,7 @@ describe("ROI failure feedback", () => {
       annotation: syntheticAnnotation("child", { kind: "penetration", subtype: "vent", review_status: "suggested" }) });
     render(<RoiReviewSidebar kind="penetration" page={state.pages[source.page_id]} selectedId="child" adding={false}
       onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()}
-      detection={{ busy: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
+      detection={{ busy: false, restarting: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />);
     expect(screen.getByRole("button", { name: "Detect penetrations" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Add opening" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Manual penetration" })).toBeEnabled();
@@ -51,6 +51,7 @@ describe("ROI failure feedback", () => {
     ["malformed_output", "The model response could not be validated. No new regions were added."],
     ["truncated_output", "The model response ended before valid annotations were complete. No new regions were added."],
     ["call_budget_exceeded", "The model-call budget has been used. Further detection requires an approved budget reset."],
+    ["storage_unavailable", "The service is restarting after an update. Try again in a minute."],
   ])("explains %s while retaining accepted regions and manual controls", async (code, message) => {
     const source = syntheticPage();
     let state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });
@@ -59,7 +60,7 @@ describe("ROI failure feedback", () => {
     const onAddingChange = vi.fn();
     render(<RoiReviewSidebar page={state.pages[source.page_id]} selectedId="roi-1" adding={false}
       onSelect={vi.fn()} onAddingChange={onAddingChange} dispatch={vi.fn()}
-      detection={{ busy: false, cancel: vi.fn(), detect, feedback: { status: "error", error: code } }} />);
+      detection={{ busy: false, restarting: false, cancel: vi.fn(), detect, feedback: { status: "error", error: code } }} />);
     expect(screen.getByRole("alert")).toHaveTextContent(message);
     expect(screen.getByRole("alert")).toHaveTextContent("Existing work is retained.");
     expect(screen.getByText("accepted / Manual")).toBeVisible();
@@ -68,5 +69,18 @@ describe("ROI failure feedback", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Manual region" }));
     expect(onAddingChange).toHaveBeenCalledWith(true);
     expect(detect).not.toHaveBeenCalled();
+  });
+
+  it("explains an automatic retry while the service restarts", () => {
+    const source = syntheticPage();
+    const state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });
+    const detection = { busy: true, restarting: false, cancel: vi.fn(), detect: vi.fn(), feedback: { status: "detecting" as const } };
+    const { rerender } = render(<RoiReviewSidebar page={state.pages[source.page_id]} selectedId={null} adding={false}
+      onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()} detection={detection} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Detecting roof areas...");
+    rerender(<RoiReviewSidebar page={state.pages[source.page_id]} selectedId={null} adding={false}
+      onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()} detection={{ ...detection, restarting: true }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("The service is restarting after an update. Retrying automatically...");
+    expect(screen.getByRole("button", { name: "Cancel detection" })).toBeEnabled();
   });
 });

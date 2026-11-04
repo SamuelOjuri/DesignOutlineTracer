@@ -5,13 +5,14 @@ import type { OutletRequest, OutletResponse } from "@/types/outlet";
 import type { PageSession, RenderedPdfPage } from "@/types/roi";
 import { outletScopes, outletScopeSignature } from "@/utils/outletScope";
 import type { useRoiSession } from "./useRoiSession";
+import { useServiceRestarting, type ServiceRestartSource } from "./useServiceRestarting";
 
 export interface OutletDetectionFeedback {
   status: "uploading" | "detecting" | "complete" | "partial" | "no_detections" | "error" | "cancelled";
   error?: string;
   warnings?: string[];
 }
-export interface OutletDetectionClient {
+export interface OutletDetectionClient extends ServiceRestartSource {
   enabled: boolean;
   uploadPage: (page: RenderedPdfPage, signal?: AbortSignal) => Promise<unknown>;
   generateOutlets: (request: OutletRequest, signal?: AbortSignal) => Promise<OutletResponse>;
@@ -31,6 +32,7 @@ export function useOutletDetection(session: ReturnType<typeof useRoiSession>, op
   latestEnabled.current = enabled;
   const key = contextKey(session.activePage, enabled);
   const dispatch = session.dispatch;
+  const restarting = useServiceRestarting(client);
 
   const cancel = useCallback(() => {
     const request = active.current;
@@ -92,5 +94,6 @@ export function useOutletDetection(session: ReturnType<typeof useRoiSession>, op
   };
 
   const feedback = state.key === key ? state.feedback : null;
-  return { generate, cancel, feedback, busy: feedback?.status === "uploading" || feedback?.status === "detecting" };
+  const busy = feedback?.status === "uploading" || feedback?.status === "detecting";
+  return { generate, cancel, feedback, busy, restarting: busy && restarting };
 }

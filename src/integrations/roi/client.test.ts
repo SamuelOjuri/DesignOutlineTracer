@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DetectionRequest } from "@/types/roi";
 import { syntheticAnnotation, syntheticPage, syntheticRun } from "@/test/roi";
 import { createRoiClient } from "./client";
+import { SERVICE_RESTART_RETRY_WINDOW_MS } from "./serviceRestart";
 
 const page = { ...syntheticPage(), source_image_hash: "a".repeat(64) };
 const request: DetectionRequest = { page_id: page.page_id, request_id: "request", task: "roof_roi",
@@ -254,5 +255,63 @@ describe("isolated ROI client", () => {
     const { fetcher, client } = setup();
     await expect(client.detect(request)).rejects.toMatchObject({ code: "invalid_configuration" });
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("service restart retries", () => {
+  const restarting = (code = "storage_unavailable", retryAfter?: string) => new Response(
+    JSON.stringify({ error: { code, retryable: true } }),
+    { status: 503, headers: { "Content-Type": "application/json", ...(retryAfter ? { "Retry-After": retryAfter } : {}) } });
+
+  it("waits for a restarting service, reports the wait and resends the same request", async () => {
+    vi.useFakeTimers();
+    const { fetcher, client } = setup();
+    fetcher.mockResolvedValueOnce(restarting()).mockResolvedValueOnce(restarting("storage_starting", "1"))
+      .mockResolvedValueOnce(jsonResponse(responseEnvelope()));
+    const states: boolean[] = [];
+    const unsubscribe = client.subscribeServiceRestart(() => states.push(client.serviceRestarting()));
+    const pending = client.detect(request);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(client.serviceRestarting()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await pending).request_id).toBe(request.request_id);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(new Set(fetcher.mock.calls.map(([, init]) => init.body)).size).toBe(1);
+    expect(states).toEqual([true, false]);
+    expect(client.serviceRestarting()).toBe(false);
+    unsubscribe();
+  });
+
+  it("stops after the restart window and reports the restart code", async () => {
+    vi.useFakeTimers();
+    const { fetcher, client } = setup();
+    fetcher.mockImplementation(async () => restarting("storage_unavailable", "120"));
+    const pending = expect(client.uploadPage(page)).rejects.toMatchObject({ code: "storage_unavailable", status: 503 });
+    await vi.advanceTimersByTimeAsync(SERVICE_RESTART_RETRY_WINDOW_MS);
+    await pending;
+    // Retry-After is capped at 10 seconds: attempts at 0, 10, ..., 60 seconds.
+    expect(fetcher).toHaveBeenCalledTimes(7);
+    expect(client.serviceRestarting()).toBe(false);
+  });
+
+  it("cancels a restart wait without retrying, and does not retry other unavailable errors", async () => {
+    vi.useFakeTimers();
+    const { fetcher, client } = setup();
+    fetcher.mockImplementation(async () => restarting());
+    const controller = new AbortController();
+    const pending = expect(client.detect(request, { signal: controller.signal })).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(client.serviceRestarting()).toBe(true);
+    controller.abort();
+    await pending;
+    expect(client.serviceRestarting()).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    fetcher.mockResolvedValueOnce(jsonResponse({ error: { code: "network_error", retryable: true } }, 503));
+    await expect(client.health()).rejects.toMatchObject({ code: "network_error", status: 503 });
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

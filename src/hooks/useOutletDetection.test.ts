@@ -7,10 +7,10 @@ import { RoiApiError } from "@/integrations/roi/client";
 import { useRoiSession } from "./useRoiSession";
 import { useOutletDetection, type OutletDetectionClient } from "./useOutletDetection";
 
-function setup(enabled = true) {
+function setup(enabled = true, extra: Partial<OutletDetectionClient> = {}) {
   const upload = vi.fn<OutletDetectionClient["uploadPage"]>().mockResolvedValue({});
   const generate = vi.fn<OutletDetectionClient["generateOutlets"]>().mockImplementation(async request => outletResponse(request));
-  const client = { enabled, uploadPage: upload, generateOutlets: generate };
+  const client = { enabled, uploadPage: upload, generateOutlets: generate, ...extra };
   const hook = renderHook(({ visible }: { visible: boolean }) => {
     const session = useRoiSession();
     return { session, detection: useOutletDetection(session, { enabled: visible }, client) };
@@ -25,6 +25,23 @@ function setup(enabled = true) {
 }
 
 describe("explicit outlet detection", () => {
+  it("reports a service restart only while its detection is waiting", async () => {
+    let restarting = true;
+    const listeners = new Set<() => void>();
+    const hook = setup(true, { serviceRestarting: () => restarting,
+      subscribeServiceRestart: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; } });
+    expect(hook.result.current.detection.restarting).toBe(false);
+    let resolve!: (value: OutletResponse) => void;
+    hook.generate.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    let pending!: Promise<void>;
+    await act(async () => { pending = hook.result.current.detection.generate(); });
+    expect(hook.result.current.detection.restarting).toBe(true);
+    act(() => { restarting = false; listeners.forEach(listener => listener()); });
+    expect(hook.result.current.detection.restarting).toBe(false);
+    await act(async () => { resolve(outletResponse(hook.generate.mock.calls[0][0])); await pending; });
+    expect(hook.result.current.detection.feedback?.status).toBe("complete");
+  });
+
   it("makes no automatic requests and uploads pristine source only after Detect", async () => {
     const hook = setup();
     expect(hook.upload).not.toHaveBeenCalled();

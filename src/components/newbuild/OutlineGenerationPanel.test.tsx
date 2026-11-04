@@ -116,3 +116,12 @@ it("explains perimeter corrections and unresolved connections and boundary conve
   expect(screen.getByRole("button", { name: "Use outline" })).toBeEnabled();
   expect(callbacks.apply).not.toHaveBeenCalled();
 });
+
+it("explains an automatic retry and a service that is still restarting", () => {
+  const { rerender } = render(<OutlineGenerationPanel {...props({ busy: true, restarting: true, feedback: { status: "generating" } })} />);
+  expect(screen.getByText("The service is restarting after an update. Retrying automatically...")).toBeInTheDocument();
+  rerender(<OutlineGenerationPanel {...props({ feedback: { status: "error", error: "storage_unavailable" } })} />);
+  expect(screen.queryByText(/Retrying automatically/)).not.toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "The service is restarting after an update. Your drawing is unchanged; try again in a minute.");
+});

@@ -434,7 +434,8 @@ export const NewBuildApp = () => {
           regionLabels={regionLabels} outlinedIds={outlinedRoiIds}
           onRoiChange={setSelectedRoiId} policy={outlinePolicy} onPolicyChange={setOutlinePolicy}
           notes={outlineNotes} onNotesChange={setOutlineNotes} result={outlineDetection.result}
-          feedback={outlineDetection.feedback} busy={outlineDetection.busy} generate={outlineDetection.generate}
+          feedback={outlineDetection.feedback} busy={outlineDetection.busy} restarting={outlineDetection.restarting}
+          generate={outlineDetection.generate}
           cancel={outlineDetection.cancel} dismiss={outlineDetection.dismiss} canUndo={outlineDetection.canUndo}
           apply={replacements => {
             const error = outlineDetection.apply(replacements);

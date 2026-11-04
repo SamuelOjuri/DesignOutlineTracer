@@ -4,6 +4,7 @@ import type { OutlineBoundaryPolicy, OutlineRequest, OutlineResponse, VectorSegm
 import type { PageSession } from "@/types/roi";
 import { outlineResponseError, prepareOutlineApplication } from "@/utils/outlineSession";
 import type { useRoiSession } from "./useRoiSession";
+import { useServiceRestarting } from "./useServiceRestarting";
 
 interface OutlineOptions { roiId: string | null; boundaryPolicy: OutlineBoundaryPolicy; boundaryNotes?: string; enabled?: boolean }
 interface Feedback { status: "uploading" | "generating" | "ready" | "error" | "cancelled"; error?: string }
@@ -30,6 +31,7 @@ export function useOutlineDetection(session: ReturnType<typeof useRoiSession>, o
   const latestOptions = useRef(options);
   latestOptions.current = options;
   const key = contextKey(session.activePage, options);
+  const restarting = useServiceRestarting(client);
   useEffect(() => {
     const request = active.current;
     if (request && request.key !== key) { request.controller.abort(); active.current = null; }
@@ -106,5 +108,6 @@ export function useOutlineDetection(session: ReturnType<typeof useRoiSession>, o
     if (page) session.dispatch({ type: "undo_outline", page_id: page.source.page_id });
     dismiss();
   };
-  return { generate, cancel, dismiss, result, feedback, busy: feedback?.status === "uploading" || feedback?.status === "generating", apply, undo, canUndo };
+  const busy = feedback?.status === "uploading" || feedback?.status === "generating";
+  return { generate, cancel, dismiss, result, feedback, busy, restarting: busy && restarting, apply, undo, canUndo };
 }
