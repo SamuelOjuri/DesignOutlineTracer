@@ -171,6 +171,7 @@ class OutlineService:
                 settings["inference_height"] = crop["inference_height"]
                 while True:
                     service.reserve_call(session)
+                    await service.flush()
                     attempts += 1
                     finish_reason, response_chars = "unavailable", None
                     try:

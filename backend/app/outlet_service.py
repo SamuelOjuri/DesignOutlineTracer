@@ -147,6 +147,7 @@ class OutletService:
                                 break
                             raise RoiError("call_budget_exceeded", 429)
                         service.reserve_call(session)
+                        await service.flush()
                         attempts += 1
                         crop_attempts += 1
                         finish_reason, response_chars = "unavailable", None

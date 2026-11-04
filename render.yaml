@@ -1,5 +1,5 @@
 # Import as a Render Blueprint, or apply these settings to the existing API service.
-# Keep one instance and one Uvicorn worker: the persistent store has one writer.
+# Keep one instance and one Uvicorn worker: the Supabase store has one writer.
 services:
   - type: web
     name: taperedplus-roi-api
@@ -10,16 +10,21 @@ services:
     autoDeployTrigger: commit
     buildCommand: python -m pip install --require-hashes -r backend/app/requirements.lock
     startCommand: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log
-    healthCheckPath: /api/roi/v1/health
-    disk:
-      name: roi-state
-      mountPath: /var/data
-      sizeGB: 1
+    healthCheckPath: /healthz
     envVars:
       - key: ROI_DEPLOYMENT_MODE
         value: public
-      - key: ROI_STATE_PATH
-        value: /var/data/roi.sqlite3
+      - key: ROI_STORAGE_BACKEND
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ROI_STORAGE_BUCKET
+        # Enter roi-pages unless you chose a different private bucket name.
+        sync: false
       # Enter exact frontend origins, comma-separated and without trailing slashes.
       - key: ROI_ALLOWED_ORIGINS
         sync: false

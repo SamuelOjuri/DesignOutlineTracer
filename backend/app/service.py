@@ -17,6 +17,7 @@ from .outline_models import CachedOutline, OutlineResponse
 from .outlet_models import CachedOutlets, OutletResponse
 from .parsing import parse_proposals
 from .storage import StateStore
+from .supabase_storage import SupabaseStateStore
 
 
 logger = logging.getLogger("roi_app.detections")
@@ -77,18 +78,32 @@ class RoiService:
         self.total_calls = 0
         self.call_times: list[float] = []
         self.tasks: set[asyncio.Task] = set()
-        self.store = StateStore(settings.state_path) if settings.state_path else None
+        self._state_version = 0
+        self._saved_version = 0
+        self._storage_available = True
+        self._flush_lock = asyncio.Lock()
+        self._store_write_task: asyncio.Task | None = None
+        backend = settings.resolved_storage_backend
+        self.store = (SupabaseStateStore(settings.database_url.get_secret_value(), settings.supabase_url,
+                                        settings.supabase_secret_key.get_secret_value(), settings.storage_bucket,
+                                        wall_clock=self.wall_clock)
+                      if backend == "supabase" else StateStore(settings.state_path) if backend == "sqlite" else None)
         if self.store:
             try:
-                self.restore()
+                pruned = self.restore()
                 self.cleanup()
+                if pruned:
+                    self.persist()
             except Exception:
                 self.store.close()
                 raise RuntimeError("ROI persistent state could not be loaded") from None
 
-    def persist(self) -> None:
-        if self.store is None:
-            return
+    @property
+    def storage_available(self) -> bool:
+        return self._storage_available and (self.store is None or getattr(self.store, "healthy", True))
+
+    def state_snapshot(self) -> tuple[dict, dict[str, tuple[bytes, bytes]]]:
+        """Capture only detached JSON values and immutable bytes before yielding to a storage thread."""
         offset = self.wall_clock() - self.clock()
         images = {}
         sessions = {}
@@ -102,7 +117,7 @@ class RoiService:
                     "image": {name: getattr(page.image, name) for name in (
                         "source_hash", "width", "height", "inference_width", "inference_height")},
                     "cache": {key: {"annotations": [item.model_dump(mode="json") for item in value.annotations],
-                                    "status": value.status, "warnings": value.warnings, "expires": value.expires + offset}
+                                    "status": value.status, "warnings": list(value.warnings), "expires": value.expires + offset}
                               for key, value in page.cache.items()},
                     "outline_cache": {key: {"response": value.response.model_dump(mode="json"), "expires": value.expires + offset}
                                       for key, value in page.outline_cache.items()},
@@ -122,23 +137,90 @@ class RoiService:
                 }
             sessions[owner] = {"expires": session.expires + offset, "calls": session.calls,
                                "pages": pages, "operations": operations}
-        self.store.save({"version": 1, "total_calls": self.total_calls,
-                         "call_times": [stamp + offset for stamp in self.call_times], "sessions": sessions}, images)
+        return {"version": 1, "total_calls": self.total_calls,
+                "call_times": [stamp + offset for stamp in self.call_times], "sessions": sessions}, images
 
-    def restore(self) -> None:
+    def persist(self) -> None:
+        if self.store is None:
+            return
+        self._state_version += 1
+        if getattr(self.store, "deferred", False):
+            return
+        try:
+            self.store.save(*self.state_snapshot())
+        except Exception:
+            self._storage_available = False
+            raise RoiError("storage_unavailable", 503, True) from None
+        self._storage_available = True
+        self._saved_version = self._state_version
+
+    @staticmethod
+    async def drain_storage_task(task: asyncio.Task) -> bool:
+        cancelled = False
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                break
+        return cancelled
+
+    async def flush(self) -> None:
+        """Commit remote state without blocking the API event loop or racing another snapshot.
+
+        Cancellation cannot release the lock while a synchronous writer is still
+        running: a stale write after a newer reservation would refund a paid call.
+        """
+        if self.store is None or not getattr(self.store, "deferred", False):
+            return
+        async with self._flush_lock:
+            while self.store is not None and self._saved_version < self._state_version:
+                version = self._state_version
+                snapshot = self.state_snapshot()
+                task = asyncio.create_task(asyncio.to_thread(self.store.save, *snapshot))
+                self._store_write_task = task
+                try:
+                    # Drain even after repeated cancellation; threads cannot be cancelled.
+                    cancelled = await self.drain_storage_task(task)
+                    if task.cancelled() or task.exception() is not None:
+                        self._storage_available = False
+                        if not cancelled:
+                            raise RoiError("storage_unavailable", 503, True) from None
+                    else:
+                        self._storage_available = True
+                        self._saved_version = version
+                    if cancelled:
+                        raise asyncio.CancelledError
+                finally:
+                    self._store_write_task = None
+
+    def restore(self) -> bool:
         payload, images = self.store.load()
         if payload is None:
-            return
+            return False
         if payload["version"] != 1:
             raise ValueError("unsupported_state_version")
-        offset = self.clock() - self.wall_clock()
+        now = self.wall_clock()
+        offset = self.clock() - now
+        pruned = False
         self.call_times = [stamp + offset for stamp in payload["call_times"]]
         self.total_calls = len(self.call_times)
         response_types = {"detection": DetectionResponse, "outline": OutlineResponse, "outlet": OutletResponse}
         for owner, stored_session in payload["sessions"].items():
+            if stored_session["expires"] <= now:
+                pruned = True
+                continue
             session = Session(stored_session["expires"] + offset, calls=stored_session["calls"])
             self.sessions[owner] = session
+            expired_uploads = set()
             for page_id, stored in stored_session["pages"].items():
+                # Retired object bytes may already be gone from remote storage.
+                # Check expiry before dereferencing an upload's image manifest.
+                if stored["expires"] <= now:
+                    pruned = True
+                    expired_uploads.add(stored["upload_id"])
+                    continue
                 original, png = images[stored["upload_id"]]
                 page = PageRecord(PageContext.model_validate(stored["context"]), PreparedImage(original, png, **stored["image"]),
                                   stored["expires"] + offset, upload_id=stored["upload_id"], follow_ups=stored["follow_ups"])
@@ -151,6 +233,11 @@ class RoiService:
                                      for key, value in stored["outlet_cache"].items()}
                 session.pages[page_id] = page
             for request_id, stored in stored_session["operations"].items():
+                if stored["upload_id"] in expired_uploads:
+                    # Match remove_page(): keep the identity ledger but retire private results.
+                    session.operations[request_id] = Operation(
+                        stored["fingerprint"], stored["key"], stored["upload_id"], None)
+                    continue
                 response = (response_types[stored["response_kind"]].model_validate(stored["response"])
                             if stored["response"] is not None else None)
                 session.operations[request_id] = Operation(
@@ -158,6 +245,7 @@ class RoiService:
                     response=response, error=tuple(stored["error"]) if stored["error"] else None,
                     interrupted=stored["interrupted"],
                 )
+        return pruned
 
     def refresh_budget(self) -> bool:
         cutoff = self.clock() - self.settings.call_budget_window_seconds
@@ -222,6 +310,7 @@ class RoiService:
                 raise
             finally:
                 self.persist()
+                await self.flush()
 
         task = asyncio.create_task(run())
         operation.task = task
@@ -405,6 +494,7 @@ class RoiService:
                 async with asyncio.timeout(self.settings.timeout_seconds):
                     while True:
                         self.reserve_call(session)
+                        await self.flush()
                         attempts += 1
                         finish_reason, response_chars = "unavailable", None
                         try:
@@ -471,9 +561,21 @@ class RoiService:
         await asyncio.gather(*tasks, return_exceptions=True)
         try:
             self.persist()
+            await self.flush()
         finally:
-            if self.store is not None:
-                self.store.close()
-                self.store = None
-            self.sessions.clear()
-            await self.provider.close()
+            try:
+                async with self._flush_lock:
+                    if self.store is not None:
+                        store, self.store = self.store, None
+                        if getattr(store, "deferred", False):
+                            closing = asyncio.create_task(asyncio.to_thread(store.close))
+                            cancelled = await self.drain_storage_task(closing)
+                            if cancelled:
+                                raise asyncio.CancelledError
+                            if closing.cancelled() or closing.exception() is not None:
+                                raise RoiError("storage_unavailable", 503, True) from None
+                        else:
+                            store.close()
+            finally:
+                self.sessions.clear()
+                await self.provider.close()

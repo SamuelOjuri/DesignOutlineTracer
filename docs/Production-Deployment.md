@@ -13,29 +13,74 @@ rather than unintentionally creating a second backend from a Blueprint.
 
 ## Render backend
 
-Use a paid Python web service with a persistent disk mounted at `/var/data`,
-one service instance and one Uvicorn worker. The Blueprint includes a paid
-compute plan and a 1 GB disk; review the plan in Render before creating it.
-Image preparation and cached uploads require sufficient memory.
+Use a paid Python web service, one service instance and one Uvicorn worker.
+The Blueprint includes a paid compute plan and uses Supabase Postgres plus
+private Storage for durable state, without a Render disk. Complete
+[Supabase setup](Supabase-Setup.md) before starting it. Image preparation and
+cached uploads require sufficient memory.
 
 Run both commands from the repository root:
 
 ```sh
-pip install --require-hashes -r backend/app/requirements.lock
-uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" --workers 1
+python -m pip install --require-hashes -r backend/app/requirements.lock
+python -m uvicorn backend.app.main:app --host 0.0.0.0 --port "$PORT" --workers 1 --no-access-log
 ```
 
-Set the health check path to `/api/roi/v1/health`. Set these environment variables
+Set Render's health check path to `/healthz`. Set these environment variables
 on the Render web service:
 
 | Variable | Value |
 | --- | --- |
 | `ROI_DEPLOYMENT_MODE` | `public` |
 | `ROI_ALLOWED_ORIGINS` | Your exact frontend origin, e.g. `https://your-app.netlify.app` |
-| `ROI_STATE_PATH` | `/var/data/roi.sqlite3` |
+| `ROI_STORAGE_BACKEND` | `supabase` |
+| `SUPABASE_URL` | Your Supabase project HTTPS origin |
+| `SUPABASE_SECRET_KEY` | Your server-only Supabase secret key |
+| `DATABASE_URL` | PostgreSQL direct or session pooler URI on port 5432 |
+| `ROI_STORAGE_BUCKET` | Your private bucket name, normally `roi-pages` |
 | `ROI_ALLOW_LIVE` | `true` to enable the existing Gemini features |
 | `GOOGLE_API_KEY` | Your server-side Gemini credential |
 | `ROI_MODEL` | The existing selected model, with access verified for this credential |
+
+Keep the Root Directory blank so both commands run from the repository root.
+The checked-in `.python-version` selects Python 3.13; remove an older
+`PYTHON_VERSION` environment override if present. Render supplies `PORT`.
+The required PostgreSQL migration is
+[`20261104180000_roi_private_state.sql`](../supabase/migrations/20261104180000_roi_private_state.sql).
+The application checks the schema and private bucket at startup; it does not
+apply SQL migrations or create buckets automatically. New `sync: false` values
+must be added manually to an existing Render service.
+
+Before the first API deployment, use the local check below to prepare the schema.
+Once the service is running, the Render Shell equivalent checks the configured
+private bucket, SSL database connection and required tables without creating
+application state or making a model call:
+
+```sh
+python -m backend.scripts.check_supabase_storage
+```
+
+If the required ROI tables are missing, review the checked-in migration, then
+apply it explicitly and rerun the check:
+
+```sh
+python -m backend.scripts.check_supabase_storage --apply-migration
+python -m backend.scripts.check_supabase_storage
+```
+
+The apply flag changes only the application's private ROI schema/tables and
+their permissions. It does not upload bucket objects or create model calls.
+For a local Windows checkout with the root `.env`, the equivalent read-only
+check is:
+
+```powershell
+& ./backend/app/.venv/Scripts/python.exe -m backend.scripts.check_supabase_storage --env-file .env
+```
+
+Add `--local-only` to validate values without network requests, or the explicit
+`--apply-migration` flag to apply the reviewed migration. The checker hides
+credentials. Replace the four descriptive placeholders in `.env.example` with
+actual project/key/connection/bucket values; those labels are not Render values.
 
 Origins are comma-separated if you use both a Netlify hostname and a custom
 domain. Use HTTPS origins without trailing slashes or URL paths. List specific
@@ -49,7 +94,16 @@ domain, set `ROI_ALLOWED_HOSTS` explicitly, e.g.
 `your-api.onrender.com,api.example.com`. Host entries are hostnames, without
 schemes, ports or paths.
 
-`GET /api/roi/v1/health` returns `mode: public` and needs no bearer token.
+`GET /healthz` is Render's deployment health endpoint. A new instance checks its
+credentials, private bucket and schema before becoming healthy. During Render's
+deployment overlap it can wait in standby while the previous instance still
+holds the writer lock. Its API responds with temporary HTTP 503 and `Retry-After`
+until Render retires the previous instance and the new one acquires the lock,
+restores the latest snapshot and becomes active. This avoids writing stale state.
+If activation does not finish within five minutes, the health check fails.
+Do not configure Render to use the API readiness endpoint for this handover.
+
+Once active, `GET /api/roi/v1/health` returns `mode: public` and needs no bearer token.
 `status: ready` means the provider is configured; it does not perform a paid
 model call or verify that the credential has access to the selected model.
 All page mutation requests still use the automatically generated page-ownership
@@ -74,7 +128,8 @@ VITE_ENABLE_SEND_TO_TAPEREDPLUS=false
 
 The API URL is an origin only, without `/api/roi/v1` or a trailing path.
 Rebuild the frontend after changing a `VITE_*` value. Keep `GOOGLE_API_KEY`
-only on Render: `VITE_*` settings are included in public browser JavaScript.
+and the Supabase secret/database credentials only on Render: `VITE_*` settings
+are included in public browser JavaScript.
 Project email submission remains controlled by the existing
 `VITE_ENABLE_SEND_TO_TAPEREDPLUS` switch and Supabase Edge Function; configure
 and verify that integration separately before enabling it.
@@ -87,19 +142,36 @@ workflow can remain in place.
 
 ## Storage, budgets and restarts
 
-Public mode requires durable SQLite state. It retains unexpired uploaded images,
-their contexts, hashed owners, completed operation results and call counters.
-The database never contains the provider credential or raw browser bearer token.
-Expiry and explicit deletion remove active records. Treat the disk and provider
-backups as containing uploaded drawing data.
+Public mode requires durable state. The recommended `supabase` backend stores
+contexts, hashed owners, completed operation results and call counters in a
+private PostgreSQL `roi` schema, with original/prepared images in a private
+Storage bucket. Expiry and explicit deletion remove active records and schedule
+object deletion. The state never contains provider credentials or raw browser
+bearer tokens. Treat database and Storage backups as containing drawing data.
 
-Keep one worker and one instance: the state store takes a single-writer lock and
-fails startup if another process is already using the same file. This deployment
-does not support horizontal replicas. Render persistent disks are attached to a
-single instance and cause brief downtime during redeploys. A restart cannot
-resume an in-flight Gemini call. Interrupted request IDs return an explicit
+Keep one worker and one instance: the Supabase state store holds a PostgreSQL
+session advisory lock. A replacement instance enters validated standby while
+the previous process owns that state, and serves no application requests until
+it acquires the lock and loads a fresh snapshot. Temporary API 503 responses
+during this deployment handover are expected; retry after activation. Use the
+session pooler on port 5432 or a direct connection,
+not the transaction pooler on 6543. This deployment does not support horizontal
+replicas. A restart cannot resume an in-flight Gemini call. Interrupted request IDs return an explicit
 error rather than starting a second paid call; initiate a new detection after
 the deployment finishes. Completed request IDs can be replayed while retained.
+
+`ROI_STORAGE_BACKEND=auto` selects Supabase when all three Supabase credential
+settings are supplied, otherwise SQLite when `ROI_STATE_PATH` is set, otherwise
+memory for local development. Partial Supabase configuration fails startup.
+For the previous SQLite deployment, explicitly set `ROI_STORAGE_BACKEND=sqlite`
+and `ROI_STATE_PATH=/var/data/roi.sqlite3`, with a real persistent disk mounted at
+`/var/data`. Do not remove an existing disk until its retained data is no longer
+needed. Selecting Supabase starts a separate state store; existing SQLite pages
+and completed operations are not automatically imported.
+
+For a local root `.env`, start Uvicorn with `--env-file .env`. On Render set
+credentials in the service environment; the production start command does not
+load a committed environment file.
 
 Existing limits remain configurable: upload size, retained bytes, sessions,
 pages, concurrency and per-session model calls. `ROI_MAX_TOTAL_CALLS` defaults
@@ -135,3 +207,6 @@ fixtures and do not call Gemini.
 - [Render port binding](https://render.com/docs/web-services#port-binding)
 - [Render persistent disk restrictions](https://render.com/docs/disks)
 - [Render long-running HTTP requests](https://render.com/docs/render-vs-vercel-comparison)
+- [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres)
+- [Supabase private buckets](https://supabase.com/docs/guides/storage/buckets/fundamentals)
+- [Supabase backend secret keys](https://supabase.com/docs/guides/getting-started/api-keys)

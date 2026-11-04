@@ -12,7 +12,8 @@ the ROI implementation; the former extraction backend has been retired and is
 not imported or called by the ROI workflow.
 
 The ROI service defaults to localhost development. Public deployment supports
-a Netlify frontend and a single-worker Render API with persistent storage and
+a Netlify frontend and a single-worker Render API with Supabase Postgres/private
+Storage (or a persistent SQLite fallback) and
 anonymous page ownership, without a user login. See
 [production deployment](docs/Production-Deployment.md) for the required settings.
 Live model access and domain-quality evaluation remain separate from offline verification.
@@ -119,12 +120,20 @@ If either port changes, update the corresponding setting. `localhost` and
 | `ROI_ALLOW_LIVE` | Backend | Set to `true` to permit model requests; defaults to `false` in code. |
 | `GOOGLE_API_KEY` | Backend | Server-side credential required for live detection. |
 | `ROI_ALLOWED_ORIGINS` | Backend | Comma-separated frontend origins allowed to call the API. |
+| `ROI_STORAGE_BACKEND` | Backend | `auto` selects Supabase when all credentials are present, otherwise SQLite when `ROI_STATE_PATH` is set, otherwise local memory. Public mode requires a durable store. |
+| `SUPABASE_URL` | Backend | Supabase project HTTPS origin, without a trailing slash. |
+| `SUPABASE_SECRET_KEY` | Backend | Server-only Supabase secret key for private Storage. |
+| `DATABASE_URL` | Backend | PostgreSQL direct or session-pooler connection on port 5432; transaction poolers cannot hold the store's advisory lock. |
+| `ROI_STORAGE_BUCKET` | Backend | Private Storage bucket name; defaults to `roi-pages`. |
 
 Vite reads frontend environment settings at startup/build time; restart the
 development server or rebuild after changing them. The Python application reads
 the launching process's environment and does not automatically load either the
 root `.env` or `backend/app/.env`. If using a backend environment file, load
-it explicitly with Uvicorn's `--env-file backend/app/.env` option.
+it explicitly with Uvicorn's `--env-file .env` option for a root file, or
+`--env-file backend/app/.env` for the backend file. Do not read or print its
+credentials in diagnostics. See [Supabase setup](docs/Supabase-Setup.md) for
+the migration, private bucket and Render settings.
 See [`backend/app/.env.example`](backend/app/.env.example) for additional
 limits and settings. That example sets `ROI_ALLOW_LIVE=true`; the startup command
 above explicitly disables live calls for initial setup.
@@ -141,6 +150,11 @@ To use the settings in `backend/app/.env`, start the API from the repository roo
 & ./backend/app/.venv/Scripts/python.exe -m uvicorn backend.app.main:app --env-file backend/app/.env --host 127.0.0.1 --port 8080 --workers 1 --no-proxy-headers --no-access-log
 ```
 
+If the Supabase settings are in the root `.env`, use `--env-file .env` instead.
+`SUPABASE_URL`, `SUPABASE_SECRET_KEY` and `DATABASE_URL` must all be supplied;
+partial Supabase configuration fails startup rather than choosing another store.
+Keep the database URL and both provider/storage credentials on the backend.
+
 Environment variables already set in that terminal take precedence over the file.
 Remove an old terminal `ROI_MODEL` override when switching models through `.env`.
 Keep the browser detection deadline longer than the backend deadline, and the
@@ -155,8 +169,13 @@ it does not configure the application service.
 Local mode checks loopback client addresses, hosts, and frontend origins.
 Public mode accepts configured HTTPS frontend origins and configured API hosts;
 the browser calls the Render HTTPS API directly. Keep one API worker and one
-instance. Public mode requires `ROI_STATE_PATH` on a Render persistent disk to
-retain unexpired pages, completed operations and call budgets across restarts.
+instance. The production configuration stores metadata and call budgets in
+Supabase Postgres and uploaded page images in private Supabase Storage.
+Apply the checked-in [migration](supabase/migrations/20261104180000_roi_private_state.sql)
+and follow [Supabase setup](docs/Supabase-Setup.md) before starting that backend.
+An explicit `ROI_STORAGE_BACKEND=sqlite` with `ROI_STATE_PATH` on a persistent
+disk remains supported. Both durable stores retain unexpired pages, completed
+operations and call budgets across restarts; active Gemini calls cannot resume.
 The browser-generated session token represents anonymous ownership of uploaded
 pages, not authenticated user identity. There is no user login. An interrupted
 detection must be started again after a backend restart; completed results can

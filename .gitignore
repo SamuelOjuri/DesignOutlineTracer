@@ -44,6 +44,7 @@ backend/storage/
 *.sqlite3
 *.sqlite3-*
 *.sqlite3.lock
+/tmp/supabase-lock-tools/
 /backend/roi_reference/private/
 /docs/roi-evaluation/private/
 

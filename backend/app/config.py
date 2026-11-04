@@ -2,7 +2,7 @@ import os
 import ipaddress
 import re
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
@@ -24,7 +24,7 @@ def valid_hostname(value: str) -> bool:
 
 
 class Settings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
     model: ModelName = DEFAULT_MODEL
     thinking_level: Literal["low", "medium", "high"] = "medium"
@@ -41,7 +41,12 @@ class Settings(BaseModel):
     deployment_mode: Literal["localhost_only", "public"] = "localhost_only"
     allowed_origins: tuple[str, ...] = ("http://127.0.0.1:8080", "http://localhost:8080")
     allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1", "[::1]")
-    # Use a path on a persistent Render disk in public mode. One process owns this store.
+    storage_backend: Literal["auto", "memory", "sqlite", "supabase"] = "auto"
+    supabase_url: str | None = None
+    supabase_secret_key: SecretStr | None = Field(default=None, exclude=True)
+    database_url: SecretStr | None = Field(default=None, exclude=True)
+    storage_bucket: str = "roi-pages"
+    # SQLite fallback uses a persistent disk. Both durable stores have one writer.
     state_path: str | None = None
     max_upload_bytes: Annotated[int, Field(gt=0, le=40 * 1024 * 1024)] = 20 * 1024 * 1024
     max_decoded_pixels: Annotated[int, Field(gt=0, le=80_000_000)] = 40_000_000
@@ -66,6 +71,25 @@ class Settings(BaseModel):
     session_ttl_seconds: Annotated[float, Field(gt=0, le=86400)] = 3600
     cleanup_interval_seconds: Annotated[float, Field(gt=0, le=60)] = 30
 
+    @model_validator(mode="before")
+    @classmethod
+    def protect_secret_inputs(cls, values):
+        # A model-level validation error retains its input mapping. Mask credentials
+        # before any later validator can reject that mapping during startup.
+        if isinstance(values, dict):
+            for name in ("api_key", "supabase_secret_key", "database_url"):
+                if isinstance(values.get(name), str):
+                    values[name] = SecretStr(values[name])
+        return values
+
+    @property
+    def resolved_storage_backend(self) -> Literal["memory", "sqlite", "supabase"]:
+        if self.storage_backend != "auto":
+            return self.storage_backend
+        if all(value is not None for value in (self.supabase_url, self.supabase_secret_key, self.database_url)):
+            return "supabase"
+        return "sqlite" if self.state_path else "memory"
+
     @property
     def generation_settings(self) -> dict:
         settings: dict = {"max_output_tokens": self.max_output_tokens}
@@ -77,6 +101,48 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def deployment_settings(self):
+        supplied_supabase = [value is not None for value in (self.supabase_url, self.supabase_secret_key, self.database_url)]
+        if self.storage_backend in {"auto", "supabase"} and any(supplied_supabase) and not all(supplied_supabase):
+            raise ValueError("supabase_configuration_incomplete")
+        if self.resolved_storage_backend == "supabase":
+            if not all(supplied_supabase):
+                raise ValueError("supabase_configuration_required")
+            if not self.supabase_secret_key.get_secret_value().strip():
+                raise ValueError("supabase_secret_key_required")
+            try:
+                project_url = urlsplit(self.supabase_url)
+                valid_project = (project_url.scheme == "https" and bool(project_url.hostname)
+                                 and valid_hostname(project_url.hostname) and project_url.port in {None, 443}
+                                 and not project_url.path and not project_url.query and not project_url.fragment
+                                 and project_url.username is None and project_url.password is None
+                                 and "?" not in self.supabase_url and "#" not in self.supabase_url
+                                 and not project_url.netloc.endswith(":")
+                                 and not any(char.isspace() or ord(char) < 32 for char in self.supabase_url))
+            except ValueError:
+                valid_project = False
+            if not valid_project:
+                raise ValueError("invalid_supabase_url")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", self.storage_bucket):
+                raise ValueError("invalid_storage_bucket")
+            try:
+                connection = self.database_url.get_secret_value()
+                parsed_database = urlsplit(connection)
+                ssl_modes = parse_qs(parsed_database.query, keep_blank_values=True).get("sslmode", [])
+                valid_database = (parsed_database.scheme in {"postgres", "postgresql"}
+                                  and bool(parsed_database.hostname) and valid_hostname(parsed_database.hostname)
+                                  and bool(parsed_database.username) and bool(parsed_database.password)
+                                  and parsed_database.port in {None, 5432}
+                                  and parsed_database.path not in {"", "/"}
+                                  and parsed_database.path.count("/") == 1 and not parsed_database.fragment
+                                  and "#" not in connection and not parsed_database.netloc.endswith(":")
+                                  and not any(char.isspace() or ord(char) < 32 for char in connection)
+                                  and all(mode in {"require", "verify-ca", "verify-full"} for mode in ssl_modes))
+            except ValueError:
+                valid_database = False
+            if not valid_database:
+                raise ValueError("invalid_database_url_use_direct_or_session_pooler_5432")
+        if self.resolved_storage_backend == "sqlite" and not self.state_path:
+            raise ValueError("sqlite_state_path_required")
         if not self.allowed_origins:
             raise ValueError("allowed_origins_required")
         for origin in self.allowed_origins:
@@ -109,8 +175,8 @@ class Settings(BaseModel):
         if self.state_path is not None and (not self.state_path.strip() or self.state_path == ":memory:"):
             raise ValueError("invalid_state_path")
         if self.deployment_mode == "public":
-            if self.state_path is None:
-                raise ValueError("persistent_state_path_required")
+            if self.resolved_storage_backend == "memory":
+                raise ValueError("durable_storage_required")
             if all(host.strip("[]") in LOOPBACK_HOSTS for host in self.allowed_hosts):
                 raise ValueError("public_host_required")
         if self.cache_ttl_seconds > self.page_ttl_seconds:
@@ -120,10 +186,10 @@ class Settings(BaseModel):
     @classmethod
     def from_env(cls):
         values = {}
+        aliases = {"api_key": "GOOGLE_API_KEY", "supabase_url": "SUPABASE_URL",
+                   "supabase_secret_key": "SUPABASE_SECRET_KEY", "database_url": "DATABASE_URL"}
         for name in cls.model_fields:
-            if name == "api_key":
-                continue
-            value = os.environ.get(f"ROI_{name.upper()}")
+            value = os.environ.get(aliases.get(name, f"ROI_{name.upper()}"))
             if value is not None:
                 values[name] = (tuple(item.strip() for item in value.split(","))
                                 if name in {"allowed_origins", "allowed_hosts"} else value)
@@ -131,5 +197,4 @@ class Settings(BaseModel):
             render_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
             if render_hostname:
                 values["allowed_hosts"] = (*cls.model_fields["allowed_hosts"].default, render_hostname)
-        values["api_key"] = os.environ.get("GOOGLE_API_KEY") or None
         return cls.model_validate(values)
