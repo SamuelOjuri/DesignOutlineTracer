@@ -50,13 +50,15 @@ implemented and do not influence the marker.
 - For an inlet exactly on an exterior perimeter, allow the circle to overlap
   that perimeter with a compact 12 CSS-pixel footprint, using the same size as its
   accepted peers. Outside suggestions also use this compact footprint while
-  retaining their dashed review style and scope warning. Never shift or clip the symbol.
+  retaining their broken-ring review style and scope warning. Never shift or clip the symbol.
   Numerical boundary tolerance is fixed in source coordinates, not screen pixels.
 - Opening edges remain excluded. Invalid/outside suggestions are visible for
   correction but cannot be accepted until their association is valid.
   Marker size is visual: reducing it or changing physical diameter does not resolve
   an out-of-scope inlet centre. Correct the anchor or assigned outline instead.
-- Suggested or unresolved points use dashed circles. Selection uses an inner
+- Suggested or unresolved points use a broken ring: four solid arcs centred on
+  the crosshair arms with wide diagonal gaps over a continuous white halo. A
+  fine dash pattern is not used because it blurs at marker size. Selection uses an inner
   ring, keeping its footprint within the same limit. Hit targets remain usable
   at a fixed screen size. **Zoom to outlet** and sidebar selection remain
   available for small markers.

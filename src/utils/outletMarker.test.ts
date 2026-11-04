@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { drawOutletMarker, outletMarkerGeometry, outletMarkerGeometries } from "./outletMarker";
+import { drawOutletMarker, outletMarkerGeometry, outletMarkerGeometries, PENDING_RING_GAP } from "./outletMarker";
 import { mockCanvasContext } from "@/test/canvas";
 
 const rectangle = (left: number, top: number, right: number, bottom: number) => [
   { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom },
 ];
 const roof = rectangle(0, 0, 400, 400);
+const partialArcs = (ctx: ReturnType<typeof mockCanvasContext>) => ctx.arc.mock.calls
+  .filter(([, , , start, end]) => (end as number) - (start as number) < Math.PI * 2 - 1e-9);
+
+/** Pending rings are four solid arcs centred on the crosshair arms, never a fine dash pattern. */
+function expectBrokenRing(ctx: ReturnType<typeof mockCanvasContext>, x: number, y: number, radius: number) {
+  const sweep = Math.PI / 2 - PENDING_RING_GAP;
+  const arcs = partialArcs(ctx);
+  expect(arcs).toHaveLength(4);
+  arcs.forEach(([cx, cy, r, start, end], quadrant) => {
+    expect([cx, cy]).toEqual([x, y]);
+    expect(r).toBeCloseTo(radius);
+    expect((end as number) - (start as number)).toBeCloseTo(sweep);
+    expect(((start as number) + (end as number)) / 2).toBeCloseTo(quadrant * Math.PI / 2);
+  });
+  expect(ctx.setLineDash.mock.calls.every(([dash]) => (dash as number[]).length === 0)).toBe(true);
+}
 
 describe("outlet marker footprint", () => {
   it("keeps the whole glyph at 24 CSS pixels and its source anchor unchanged across zoom", () => {
@@ -71,7 +87,7 @@ describe("outlet marker footprint", () => {
     }
   });
 
-  it("keeps outside suggestions compact and dashed without changing their anchors or physical diameter", () => {
+  it("keeps outside suggestions compact and broken-ringed without changing their anchors or physical diameter", () => {
     const outlet = Object.freeze({ x: -1, y: 140, diameter: 0.15, diameter_confirmed: false,
       outline_id: "roof-a", review_status: "suggested" as const, validity: "needs_review" as const });
     const original = { ...outlet };
@@ -83,7 +99,7 @@ describe("outlet marker footprint", () => {
       const ctx = mockCanvasContext();
       drawOutletMarker(ctx as unknown as CanvasRenderingContext2D, outlet, marker, true);
       expect(ctx.arc).toHaveBeenCalledWith(-1, 140, expect.closeTo(5 / scale), 0, Math.PI * 2);
-      expect(ctx.setLineDash).toHaveBeenCalledWith([marker.strokeWidth * 2, marker.strokeWidth * 1.5]);
+      expectBrokenRing(ctx, -1, 140, 5 / scale);
     }
     expect(outlet).toEqual(original);
   });
@@ -120,10 +136,33 @@ describe("outlet marker footprint", () => {
     drawOutletMarker(ctx as unknown as CanvasRenderingContext2D, point, marker, true);
     expect(ctx.fill).not.toHaveBeenCalled();
     expect(ctx.arc).toHaveBeenCalledWith(8, 6, marker.circleRadius, 0, Math.PI * 2);
-    expect(ctx.setLineDash).toHaveBeenCalledWith([marker.strokeWidth * 2, marker.strokeWidth * 1.5]);
+    expectBrokenRing(ctx, 8, 6, marker.circleRadius);
     const radii = ctx.arc.mock.calls.map(call => call[2] as number);
     expect(Math.max(...radii) + marker.haloWidth / 2).toBeCloseTo(marker.outerRadius);
     expect((ctx as unknown as CanvasRenderingContext2D).strokeStyle).toBe("#C000A0");
+  });
+
+  it("keeps pending ring gaps open at the compact size and draws accepted rings continuously", () => {
+    for (const scale of [0.27, 1, 3]) {
+      const pending = { x: -1, y: 140, review_status: "suggested" as const };
+      const marker = outletMarkerGeometry(pending, [roof], [], scale);
+      const ctx = mockCanvasContext();
+      const strokes: { colour: unknown; cap: string }[] = [];
+      ctx.stroke.mockImplementation(() => {
+        const state = ctx as unknown as CanvasRenderingContext2D;
+        strokes.push({ colour: state.strokeStyle, cap: state.lineCap });
+      });
+      drawOutletMarker(ctx as unknown as CanvasRenderingContext2D, pending, marker);
+      // Butt caps do not eat into the gap, so each gap stays at least 2.5 CSS pixels wide.
+      expect(strokes).toContainEqual({ colour: "#C000A0", cap: "butt" });
+      expect(marker.circleRadius * scale * PENDING_RING_GAP).toBeGreaterThanOrEqual(2.5);
+
+      const accepted = { x: 200, y: 200, review_status: "accepted" as const };
+      const acceptedCtx = mockCanvasContext();
+      drawOutletMarker(acceptedCtx as unknown as CanvasRenderingContext2D, accepted,
+        outletMarkerGeometry(accepted, [roof], [], scale));
+      expect(partialArcs(acceptedCtx)).toHaveLength(0);
+    }
   });
 });
 

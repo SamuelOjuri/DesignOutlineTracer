@@ -131,30 +131,44 @@ export function outletMarkerGeometries(outlets: readonly MarkerOutlet[], outline
   });
 }
 
-/** Transparent glyph: white under-stroke, magenta circle and crosshair, optional inner selection ring. */
+/** Angular gap at each diagonal of a pending marker's broken ring. */
+export const PENDING_RING_GAP = Math.PI / 5;
+
+/** Transparent glyph: white under-stroke, magenta circle and crosshair, optional inner selection ring.
+ * Pending markers break the magenta ring into four arcs with wide diagonal gaps. A fine dash
+ * pattern is not used: at marker size its round caps closed the gaps and blurred the ring.
+ */
 export function drawOutletMarker(ctx: CanvasRenderingContext2D, outlet: MarkerOutlet,
   geometry: OutletMarkerGeometry, selected = false, offset: Point = { x: 0, y: 0 }): void {
   if (geometry.outerRadius <= 0) return;
   const { circleRadius, crosshairRadius, strokeWidth, haloWidth } = geometry;
   const x = outlet.x + offset.x, y = outlet.y + offset.y;
   ctx.save();
-  ctx.lineCap = "round";
-  const dashed = outlet.review_status === "suggested" || outlet.validity === "needs_review" || geometry.status === "outside";
-  const circle = (width: number, colour: string) => {
+  ctx.setLineDash([]);
+  const pending = outlet.review_status === "suggested" || outlet.validity === "needs_review"
+    || geometry.status === "outside";
+  const sweep = Math.PI / 2 - PENDING_RING_GAP;
+  const glyph = (width: number, colour: string, broken: boolean) => {
     ctx.strokeStyle = colour;
     ctx.lineWidth = width;
-    ctx.setLineDash(dashed ? [strokeWidth * 2, strokeWidth * 1.5] : []);
+    ctx.lineCap = "butt";
     ctx.beginPath();
-    ctx.arc(x, y, circleRadius, 0, Math.PI * 2);
+    if (broken) {
+      for (let quadrant = 0; quadrant < 4; quadrant++) {
+        const start = quadrant * Math.PI / 2 - sweep / 2;
+        ctx.moveTo(x + circleRadius * Math.cos(start), y + circleRadius * Math.sin(start));
+        ctx.arc(x, y, circleRadius, start, start + sweep);
+      }
+    } else ctx.arc(x, y, circleRadius, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.lineCap = "round";
     ctx.beginPath();
     ctx.moveTo(x - crosshairRadius, y); ctx.lineTo(x + crosshairRadius, y);
     ctx.moveTo(x, y - crosshairRadius); ctx.lineTo(x, y + crosshairRadius);
     ctx.stroke();
   };
-  circle(haloWidth, "white");
-  circle(strokeWidth, OUTLET_COLOUR);
+  glyph(haloWidth, "white", false);
+  glyph(strokeWidth, OUTLET_COLOUR, pending);
   if (selected) {
     ctx.beginPath();
     ctx.arc(x, y, circleRadius * 0.7, 0, Math.PI * 2);
