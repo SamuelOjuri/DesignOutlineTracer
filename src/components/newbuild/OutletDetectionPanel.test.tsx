@@ -82,6 +82,23 @@ describe("outlet review controls", () => {
     expect(screen.queryByRole("button", { name: "Use symbol centre", hidden: true })).not.toBeInTheDocument();
   });
 
+  it("counts manual outlets alongside detections and shows accepted outlets as accepted", () => {
+    const callbacks = props();
+    callbacks.page.drawing.outlets.push({ id: "manual-1", page_id: "page-1", x: 400, y: 200, diameter: 0.15, outline_id: "outline-1" });
+    const { rerender } = render(<OutletDetectionPanel {...callbacks} />);
+    expect(screen.getByText("0 of 1 detected outlet accepted · 1 manual outlet", { exact: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept outlet" })).toBeEnabled();
+    Object.assign(callbacks.page.annotations[1], { review_status: "accepted", scope_signature: outletScopeSignature(callbacks.page) });
+    rerender(<OutletDetectionPanel {...callbacks} />);
+    expect(screen.getByText("1 of 1 detected outlet accepted · 1 manual outlet", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept outlet" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accepted" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+    callbacks.page.annotations.splice(1, 1);
+    rerender(<OutletDetectionPanel {...callbacks} selectedId={null} />);
+    expect(screen.getByText("1 manual outlet", { exact: true })).toBeInTheDocument();
+  });
+
   it("excludes stale accepted geometry from the project summary", () => {
     const page = outletPage();
     page.annotations.push({ ...outletResponse().annotations[0], review_status: "accepted", scope_signature: "stale-scope" });

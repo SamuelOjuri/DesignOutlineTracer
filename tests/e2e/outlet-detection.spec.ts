@@ -86,7 +86,7 @@ test("detects, reviews and preserves outlet anchors with contained and boundary-
   await expect(page.getByRole("button", { name: "Accept eligible (2)", exact: true })).toBeVisible();
   expect(requests[0].scopes[0].polygons[0].outer).toHaveLength(6);
   await page.getByRole("button", { name: "Accept eligible (2)", exact: true }).click();
-  await expect(page.getByText("2 accepted / 3 reviewed or suggested", { exact: true })).toBeVisible();
+  await expect(page.getByText("2 of 3 detected outlets accepted · 0 manual outlets", { exact: true })).toBeVisible();
   const canvas = page.getByLabel("Roof outlet placement", { exact: true });
   const ink = () => canvas.evaluate((element: HTMLCanvasElement) => {
     const ctx = element.getContext("2d")!;

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2, Undo2, WandSparkles } from "lucide-react";
+import { Check, Loader2, Undo2, WandSparkles } from "lucide-react";
 import type { PageSession, RoiAnnotation } from "@/types/roi";
 import { outletSubtypes } from "@/types/outlet";
 import type { RoiSessionAction } from "@/utils/roiSession";
@@ -146,7 +146,15 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
   const warnings = [...new Set([...(selected?.warnings ?? []), ...(association?.warnings ?? [])].map(describe))]
     .filter(warning => warning !== associationError);
   const feedback = detection.feedback;
-  const accepted = activePageOutlets(page).filter(outlet => outlet.annotation_id).length;
+  const active = activePageOutlets(page);
+  const acceptedIds = new Set(active.flatMap(outlet => outlet.annotation_id ? [outlet.annotation_id] : []));
+  const manual = active.length - acceptedIds.size;
+  const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+  const outletCounts = [
+    ...(annotations.length ? [`${acceptedIds.size} of ${plural(annotations.length, "detected outlet")} accepted`] : []),
+    plural(manual, "manual outlet"),
+  ].join(" · ");
+  const selectedAccepted = selected ? acceptedIds.has(selected.id) : false;
 
   return <section aria-label="Automatic outlets" className="mb-5 space-y-3 border-b border-border pb-5">
     <h3 className="text-base font-semibold">Automatic outlets</h3>
@@ -178,7 +186,7 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
         <Undo2 className="mr-1 h-4 w-4" />Undo outlet edit
       </Button>}
     </div>
-    {annotations.length > 0 && <p className="text-xs text-muted-foreground">{accepted} accepted / {annotations.length} reviewed or suggested</p>}
+    {(annotations.length > 0 || manual > 0) && <p className="text-xs text-muted-foreground">{outletCounts}</p>}
     {selected && <div className="space-y-2 rounded-md border border-border p-3">
       <p className="text-sm font-medium">{selected.label}</p>
       {selected.evidence && <p className="text-xs text-muted-foreground">{selected.evidence}</p>}
@@ -188,10 +196,12 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
         {warnings.map(warning => <li key={warning}>{warning}</li>)}
       </ul>}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={Boolean(association?.error) || detection.busy}
-          onClick={() => review(selected.id, "accepted")}>
-          {selected.review_status === "accepted" && selected.validity === "needs_review" ? "Confirm outlet" : "Accept outlet"}
-        </Button>
+        {selectedAccepted
+          ? <Button size="sm" disabled><Check className="mr-1 h-4 w-4" />Accepted</Button>
+          : <Button size="sm" disabled={Boolean(association?.error) || detection.busy}
+            onClick={() => review(selected.id, "accepted")}>
+            {selected.review_status === "accepted" && selected.validity === "needs_review" ? "Confirm outlet" : "Accept outlet"}
+          </Button>}
         <Button variant="outline" size="sm" onClick={() => review(selected.id, "rejected")}>Reject</Button>
         <Button variant="outline" size="sm" onClick={() => {
           dispatch({ type: "outlet-delete", page_id: page.source.page_id, id: selected.id }); onSelect(null);

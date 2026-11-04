@@ -14,7 +14,10 @@ and drainage-edge tools remain available.
 4. Review the suggested magenta inlet markers. Select a recommendation to see its
    evidence, type, assigned outline and any scope warnings. **Accept eligible**
    accepts current, geometrically valid suggestions without warnings. Other
-   candidates can be corrected and accepted individually.
+   candidates can be corrected and accepted individually. Once a detection is
+   included in the output, its review button reads **Accepted** and is disabled;
+   **Reject** and **Delete** remain available. The panel counts both sources, for
+   example "1 of 2 detected outlets accepted · 1 manual outlet".
 5. Drag a point or enter its original-page coordinates to correct the inlet.
    **Correct position, type or size > Use symbol centre** is available when the
    detected box centre is a different, valid position. Check that the box encloses
@@ -42,10 +45,11 @@ implemented and do not influence the marker.
   (including the halo), even when this overlaps a boundary. A display symbol must
   never disappear because its inlet is close to an edge. This applies to suggested,
   accepted and manual outlets without moving their anchors or relaxing validation.
-- Accepted and manual outlets on the same roof share the largest footprint that
-  fits their interior anchors, subject to that visible minimum. This keeps circles, crosshairs and strokes
+- Accepted and manual outlets share one footprint across every roof in the view:
+  the largest that fits all of their interior anchors, subject to that visible minimum.
+  This keeps circles, crosshairs and strokes
   uniform in the outlet editor, Project Details, saved-area previews and drawing
-  PNG exports. Other roofs and pending/stale/outside suggestions do not reduce
+  PNG exports. Pending/stale/outside suggestions do not reduce
   that size. Near-edge anchors participate in the shared size and remain visible.
 - For an inlet exactly on an exterior perimeter, allow the circle to overlap
   that perimeter with a compact 12 CSS-pixel footprint, using the same size as its

@@ -189,20 +189,24 @@ describe("uniform reviewed outlet markers", () => {
     expect(JSON.stringify(outlets)).toBe(original);
   });
 
-  it("keeps roofs independent and excludes pending, stale and outside points from sizing", () => {
+  it("shares one size across roofs and excludes pending, stale and outside points from sizing", () => {
     const other = rectangle(500, 0, 900, 400);
     const outlets = [accepted(10, 20), accepted(200, 200), accepted(700, 200, "roof-b"),
       { ...accepted(4, 20), review_status: "suggested" as const },
       { ...accepted(4, 40), validity: "needs_review" as const },
-      accepted(-10, 20)];
+      accepted(-10, 20), { x: 700, y: 300 }];
     const markers = outletMarkerGeometries(outlets, [roof, other], [], 1, ["roof-a", "roof-b"]);
     expect(markers[0].outerRadius).toBe(7.5);
     expect(markers[1].outerRadius).toBe(7.5);
-    expect(markers[2].outerRadius).toBe(12);
+    expect(markers[2].outerRadius).toBe(7.5);
+    expect(markers[2].strokeWidth).toBeCloseTo(markers[0].strokeWidth);
+    expect(markers[6].outerRadius).toBe(7.5);
     expect(markers[3].outerRadius).toBe(6);
     expect(markers[4].outerRadius).toBe(6);
     expect(markers[5].status).toBe("outside");
     expect(markers[5].outerRadius).toBe(6);
+    const isolated = outletMarkerGeometries([accepted(700, 200, "roof-b")], [roof, other], [], 1, ["roof-a", "roof-b"]);
+    expect(isolated[0].outerRadius).toBe(12);
   });
 
   it("groups manual and accepted boundary anchors without changing their positions or physical diameters", () => {

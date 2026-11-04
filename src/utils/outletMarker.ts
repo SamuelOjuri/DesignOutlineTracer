@@ -101,7 +101,7 @@ export function outletMarkerGeometry(outlet: MarkerOutlet, outlines: Point[][], 
     hitRadius: OUTLET_HIT_RADIUS / scale, status, clearance };
 }
 
-/** Reviewed outlets on the same roof share a size, bounded by the visible minimum.
+/** Reviewed outlets share one size across every roof in the view, bounded by the visible minimum.
  * Pending/invalid suggestions cannot resize accepted markers. Keep the source
  * anchors, physical diameters and screen-sized hit targets independent of ink.
  */
@@ -109,21 +109,11 @@ export function outletMarkerGeometries(outlets: readonly MarkerOutlet[], outline
   displayScale: number, outlineIds: string[] = [], boundaryStrokeWidth = 3): OutletMarkerGeometry[] {
   const geometries = outlets.map(outlet => outletMarkerGeometry(outlet, outlines, holes,
     displayScale, outlineIds, boundaryStrokeWidth));
-  const groups = outlets.map((outlet, index) => {
-    const geometry = geometries[index];
-    if ((outlet.review_status && outlet.review_status !== "accepted") || outlet.validity === "needs_review"
-      || geometry.status === "outside") return -1;
-    return outlet.outline_id ? outlineIds.indexOf(outlet.outline_id)
-      : outlines.findIndex(ring => ring.length >= 3 && (inRing(outlet, ring)
-        || ringDistance(outlet, ring) <= BOUNDARY_EPSILON));
-  });
-  const radii = new Map<number, number>();
-  groups.forEach((group, index) => {
-    if (group >= 0) radii.set(group, Math.min(radii.get(group) ?? Infinity, geometries[index].outerRadius));
-  });
+  const reviewed = outlets.map((outlet, index) => !(outlet.review_status && outlet.review_status !== "accepted")
+    && outlet.validity !== "needs_review" && geometries[index].status !== "outside");
+  const radius = Math.min(...geometries.filter((_, index) => reviewed[index]).map(geometry => geometry.outerRadius));
   return geometries.map((geometry, index) => {
-    const radius = radii.get(groups[index]);
-    if (radius === undefined) return geometry;
+    if (!reviewed[index]) return geometry;
     const ratio = radius / geometry.outerRadius;
     return { ...geometry, outerRadius: radius, circleRadius: geometry.circleRadius * ratio,
       crosshairRadius: geometry.crosshairRadius * ratio, strokeWidth: geometry.strokeWidth * ratio,
