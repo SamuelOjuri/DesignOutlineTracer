@@ -123,12 +123,22 @@ initial crops, so the remaining areas need manual completion. Calls are not
 silently added beyond the configured budget. Cancellation prevents applying
 late results; already sent provider work may still consume its call budget.
 
+All crops of a request are sent to the model at once. Their first calls are
+reserved in crop order and committed together before any provider traffic;
+retries reserve separately. Results are merged in crop order, so duplicate
+removal, the annotation limit and output order do not depend on which reply
+arrives first. Because crops run together, every budgeted crop is called even
+when an earlier crop already reaches the annotation limit. Each call has its own
+deadline (`ROI_OUTLET_CALL_TIMEOUT_SECONDS`, default 120 seconds); a stalled call
+is abandoned and retried once, still within the overall `ROI_TIMEOUT_SECONDS`.
+A crop that fails after its retries fails the request and cancels the others.
+
 The request is bounded to 512 KiB, 25 scopes and 8,192 total vertices. The
-configured annotation limit also applies. No new dependencies or environment
-variables are required. Existing `VITE_ROI_ENABLED`, provider configuration and
-`ROI_ALLOW_LIVE` control availability. Restart/rebuild the frontend and restart
-the backend to load the new endpoint; do not restart a live pilot to bypass its
-call limits.
+configured annotation limit also applies. No new dependencies are required;
+`ROI_OUTLET_CALL_TIMEOUT_SECONDS` is optional. Existing `VITE_ROI_ENABLED`,
+provider configuration and `ROI_ALLOW_LIVE` control availability. Restart/rebuild
+the frontend and restart the backend to load the new endpoint; do not restart a
+live pilot to bypass its call limits.
 
 ## State and output
 

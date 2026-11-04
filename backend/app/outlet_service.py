@@ -1,5 +1,6 @@
 """Rainwater inlet proposals, sharing the ROI ownership, limits and call ledger."""
 import asyncio
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 import logging
@@ -13,9 +14,9 @@ from .errors import OutputDiagnostic, RoiError, output_category
 from .gemini import OUTLET_SYSTEM_PROMPT
 from .outlet_geometry import (ALGORITHM_VERSION, MAX_CROPS, duplicate_anchor, page_box, plan_crops,
                               scope_in_crop, scope_location, source_anchor, validate_scopes)
-from .outlet_models import CachedOutlets, ModelOutlet, OutletAnnotation, OutletInput, OutletResponse
+from .outlet_models import CachedOutlets, ModelOutlet, OutletAnnotation, OutletInput, OutletResponse, OutletScope
 from .outlet_symbols import refine_outlet_symbols
-from .outline_geometry import prepare_outline_crop
+from .outline_geometry import PreparedOutlineCrop, prepare_outline_crop
 from .outline_service import bounded_cpu
 from .parsing import decode_model_json, validation_detail
 from .service import PageRecord, RoiService, Session, digest
@@ -56,6 +57,14 @@ def parse_outlets(text: str, maximum_bytes: int, maximum_objects: int):
         raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.OUTLET_FIELDS) from None
 
 
+@dataclass
+class CropScan:
+    attempts: int
+    # None when the call budget ran out before this crop produced a usable reply.
+    candidates: list[OutletAnnotation] | None
+    truncated: bool = False
+
+
 class OutletService:
     def __init__(self, service: RoiService):
         self.service = service
@@ -84,6 +93,7 @@ class OutletService:
             "max_attempts": service.settings.max_attempts,
             "max_annotations": service.settings.max_annotations,
             "timeout_seconds": service.settings.timeout_seconds,
+            "call_timeout_seconds": service.settings.outlet_call_timeout_seconds,
             "scope_geometry_hash": digest(data["scopes"]),
             "system_prompt_version": "outlet-system-v1",
             "prompt_hash": sha256((OUTLET_SYSTEM_PROMPT + OUTLET_PROMPT).encode()).hexdigest(),
@@ -113,7 +123,6 @@ class OutletService:
                       settings: dict, cached: CachedOutlets | None):
         service = self.service
         started = time.monotonic()
-        attempts = 0
         try:
             if cached is not None:
                 response = cached.response.model_copy(deep=True)
@@ -121,94 +130,52 @@ class OutletService:
                 response.run.update(cached=True, provider_attempts=0, duration_ms=(time.monotonic() - started) * 1000)
                 return response
             annotations, warnings, crop_records = [], [], []
-            completed = 0
             async with asyncio.timeout(service.settings.timeout_seconds):
                 crops, limited = plan_crops(request, page.image.width, page.image.height)
                 if limited:
                     warnings.append("outlet_crop_limit_reached")
+                # Reserve every first call in crop order and commit them together before
+                # any provider traffic, so all crops can then be sent at once.
+                budgeted: list[tuple[OutletScope, PreparedOutlineCrop]] = []
                 for scope, crop_box in crops:
-                    if not service.budget_available(session):
-                        if not completed:
-                            raise RoiError("call_budget_exceeded", 429)
-                        warnings.append("outlet_call_budget_reached")
-                        break
                     prepared = await bounded_cpu(prepare_outline_crop, page.image.original, crop_box)
-                    crop = prepared.crop
-                    prompt = (OUTLET_PROMPT + f"\nReturn at most {service.settings.max_annotations} objects."
-                              + "\nScope geometry in normalized FIRST-CROP coordinates; vertices outside 0-1000"
-                              " describe continuation beyond the crop, but return only visible symbols: "
-                              + json.dumps(scope_in_crop(scope, crop), separators=(",", ":")))
-                    crop_attempts = 0
-                    raw = proposals = None
-                    while True:
-                        if not service.budget_available(session):
-                            if completed:
-                                warnings.append("outlet_call_budget_reached")
-                                break
-                            raise RoiError("call_budget_exceeded", 429)
-                        service.reserve_call(session)
-                        await service.flush()
-                        attempts += 1
-                        crop_attempts += 1
-                        finish_reason, response_chars = "unavailable", None
-                        try:
-                            with_context = getattr(service.provider, "generate_outlets_with_context", None)
-                            if callable(with_context):
-                                raw = await with_context(prepared.png, prompt, model_schema(service.settings.max_annotations), page.image.png)
-                            else:
-                                raw = await service.provider.generate(prepared.png, prompt, model_schema(service.settings.max_annotations))
-                            finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
-                            response_chars = len(raw.text)
-                            if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:
-                                raise RoiError("provider_refusal", 502)
-                            try:
-                                proposals = parse_outlets(raw.text, service.settings.max_response_bytes, service.settings.max_annotations)
-                            except RoiError as error:
-                                if raw.finish_reason == "MAX_TOKENS" and error.code == "malformed_output":
-                                    raise RoiError("truncated_output", 502, diagnostic=error.diagnostic,
-                                                   detail=error.detail) from None
-                                raise
-                            break
-                        except RoiError as error:
-                            if error.code in {"malformed_output", "truncated_output"}:
-                                logger.warning("outlet_output_rejected request_id=%s code=%s category=%s finish=%s "
-                                               "response_chars=%s attempt=%s detail=%s", request.request_id, error.code,
-                                               output_category(error), finish_reason, response_chars, crop_attempts,
-                                               error.detail or "none")
-                            if not service.retry_allowed(session, error, crop_attempts):
-                                raise
-                            await asyncio.sleep(.1 * crop_attempts)
-                    if proposals is None:
+                    if not service.budget_available(session):
                         break
-                    completed += 1
-                    crop_records.append({"roi_id": scope.roi_id, "outline_id": scope.outline_id, **crop})
-                    if raw.finish_reason == "MAX_TOKENS" or len(proposals) == service.settings.max_annotations:
-                        warnings.append("possible_truncation")
-                    candidates = []
-                    for proposal in proposals:
-                        anchor = source_anchor(proposal.anchor, crop)
-                        box = page_box(proposal.box_2d, crop, page.image.width, page.image.height)
-                        candidate = OutletAnnotation(id=f"outlet_{uuid4().hex}", page_id=request.page_id,
-                                                     label=proposal.label, subtype=proposal.subtype,
-                                                     box_2d=box, proposed_box_2d=box,
-                                                     anchor=anchor, proposed_anchor=anchor,
-                                                     roi_id=scope.roi_id, outline_id=scope.outline_id,
-                                                     evidence=proposal.evidence)
-                        candidates.append(candidate)
-                    candidates = await bounded_cpu(refine_outlet_symbols, page.image.original, candidates, scope)
-                    for candidate in candidates:
-                        location = scope_location(candidate.anchor, scope)
-                        if location != "inside":
-                            candidate.validity = "needs_review"
-                            candidate.warnings = ["outlet_in_opening" if location == "opening" else "outlet_outside_scope"]
-                        if not duplicate_anchor(candidate, annotations, page.image.width, page.image.height):
-                            annotations.append(candidate)
-                    if len(annotations) >= service.settings.max_annotations:
-                        excess = len(annotations) > service.settings.max_annotations
-                        annotations = annotations[:service.settings.max_annotations]
-                        if excess or completed < len(crops):
-                            warnings.append("outlet_annotation_limit_reached")
-                        break
+                    service.reserve_call(session)
+                    budgeted.append((scope, prepared))
+                if not budgeted:
+                    raise RoiError("call_budget_exceeded", 429)
+                if len(budgeted) < len(crops):
+                    warnings.append("outlet_call_budget_reached")
+                await service.flush()
+                try:
+                    async with asyncio.TaskGroup() as group:
+                        tasks = [group.create_task(self.scan_crop(session, page, request, scope, prepared))
+                                 for scope, prepared in budgeted]
+                except BaseExceptionGroup as failures:
+                    raise next((error for error in failures.exceptions if isinstance(error, RoiError)),
+                               failures.exceptions[0]) from None
+            scans = [task.result() for task in tasks]
+            attempts = sum(scan.attempts for scan in scans)
+            if all(scan.candidates is None for scan in scans):
+                raise RoiError("call_budget_exceeded", 429)
+            # Merge in crop order so duplicates, limits and ordering do not depend on reply timing.
+            for index, ((scope, prepared), scan) in enumerate(zip(budgeted, scans)):
+                if scan.candidates is None:
+                    warnings.append("outlet_call_budget_reached")
+                    continue
+                crop_records.append({"roi_id": scope.roi_id, "outline_id": scope.outline_id, **prepared.crop})
+                if scan.truncated:
+                    warnings.append("possible_truncation")
+                for candidate in scan.candidates:
+                    if not duplicate_anchor(candidate, annotations, page.image.width, page.image.height):
+                        annotations.append(candidate)
+                if len(annotations) >= service.settings.max_annotations:
+                    excess = len(annotations) > service.settings.max_annotations
+                    annotations = annotations[:service.settings.max_annotations]
+                    if excess or index + 1 < len(crops):
+                        warnings.append("outlet_annotation_limit_reached")
+                    break
             if session.pages.get(request.page_id) is not page or page.expires <= service.clock():
                 raise RoiError("page_not_found", 404)
             response = OutletResponse(
@@ -233,3 +200,75 @@ class OutletService:
             raise
         except Exception:
             raise RoiError("outlet_detection_failed", 502) from None
+
+    async def scan_crop(self, session: Session, page: PageRecord, request: OutletInput,
+                        scope: OutletScope, prepared: PreparedOutlineCrop) -> CropScan:
+        """Run one crop's attempts; its first call was reserved and committed by execute()."""
+        service = self.service
+        crop = prepared.crop
+        prompt = (OUTLET_PROMPT + f"\nReturn at most {service.settings.max_annotations} objects."
+                  + "\nScope geometry in normalized FIRST-CROP coordinates; vertices outside 0-1000"
+                  " describe continuation beyond the crop, but return only visible symbols: "
+                  + json.dumps(scope_in_crop(scope, crop), separators=(",", ":")))
+        schema = model_schema(service.settings.max_annotations)
+        call_timeout = service.settings.outlet_call_timeout_seconds
+        attempts = 0
+        while True:
+            if attempts:
+                if not service.budget_available(session):
+                    return CropScan(attempts, None)
+                service.reserve_call(session)
+                await service.flush()
+            attempts += 1
+            finish_reason, response_chars = "unavailable", None
+            try:
+                try:
+                    async with asyncio.timeout(call_timeout):
+                        with_context = getattr(service.provider, "generate_outlets_with_context", None)
+                        if callable(with_context):
+                            raw = await with_context(prepared.png, prompt, schema, page.image.png)
+                        else:
+                            raw = await service.provider.generate(prepared.png, prompt, schema)
+                except TimeoutError:
+                    logger.warning("outlet_call_timeout request_id=%s attempt=%s timeout_seconds=%s",
+                                   request.request_id, attempts, call_timeout)
+                    raise RoiError("provider_timeout", 504, True) from None
+                finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
+                response_chars = len(raw.text)
+                if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:
+                    raise RoiError("provider_refusal", 502)
+                try:
+                    proposals = parse_outlets(raw.text, service.settings.max_response_bytes, service.settings.max_annotations)
+                except RoiError as error:
+                    if raw.finish_reason == "MAX_TOKENS" and error.code == "malformed_output":
+                        raise RoiError("truncated_output", 502, diagnostic=error.diagnostic,
+                                       detail=error.detail) from None
+                    raise
+                break
+            except RoiError as error:
+                if error.code in {"malformed_output", "truncated_output"}:
+                    logger.warning("outlet_output_rejected request_id=%s code=%s category=%s finish=%s "
+                                   "response_chars=%s attempt=%s detail=%s", request.request_id, error.code,
+                                   output_category(error), finish_reason, response_chars, attempts,
+                                   error.detail or "none")
+                if not service.retry_allowed(session, error, attempts):
+                    raise
+                await asyncio.sleep(.1 * attempts)
+        candidates = []
+        for proposal in proposals:
+            anchor = source_anchor(proposal.anchor, crop)
+            box = page_box(proposal.box_2d, crop, page.image.width, page.image.height)
+            candidates.append(OutletAnnotation(id=f"outlet_{uuid4().hex}", page_id=request.page_id,
+                                               label=proposal.label, subtype=proposal.subtype,
+                                               box_2d=box, proposed_box_2d=box,
+                                               anchor=anchor, proposed_anchor=anchor,
+                                               roi_id=scope.roi_id, outline_id=scope.outline_id,
+                                               evidence=proposal.evidence))
+        candidates = await bounded_cpu(refine_outlet_symbols, page.image.original, candidates, scope)
+        for candidate in candidates:
+            location = scope_location(candidate.anchor, scope)
+            if location != "inside":
+                candidate.validity = "needs_review"
+                candidate.warnings = ["outlet_in_opening" if location == "opening" else "outlet_outside_scope"]
+        truncated = raw.finish_reason == "MAX_TOKENS" or len(proposals) == service.settings.max_annotations
+        return CropScan(attempts, candidates, truncated)

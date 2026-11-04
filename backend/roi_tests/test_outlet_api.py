@@ -245,6 +245,57 @@ class OutletApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result["annotations"]), 3)
         self.assertIn("outlet_annotation_limit_reached", result["warnings"])
 
+    async def test_crops_are_sent_concurrently_and_merged_in_crop_order(self):
+        scopes = self.request()["scopes"]
+        second = deepcopy(scopes[0])
+        second["outline_id"] = "second-outline"
+        second["polygons"][0]["outer"] = rectangle(20, 30, 180, 160)
+        active, peak, delays = 0, 0, [.1, .01]
+        async def with_context(image, prompt, schema, overview):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            # The first crop replies last; the result must still follow crop order.
+            await asyncio.sleep(delays.pop(0))
+            active -= 1
+            return self.provider.result
+        self.provider.generate_outlets_with_context = with_context
+        response = await self.generate(scopes=[*scopes, second])
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(peak, 2)
+        self.assertEqual([item["outline_id"] for item in result["annotations"]], ["outline", "second-outline"])
+        self.assertEqual([crop["outline_id"] for crop in result["run"]["crops"]], ["outline", "second-outline"])
+        self.assertEqual(result["run"]["provider_attempts"], 2)
+        self.assertEqual(self.service.total_calls, 2)
+
+    async def test_stalled_crop_call_times_out_and_is_retried_within_the_run(self):
+        self.service.settings = Settings(outlet_call_timeout_seconds=.05)
+        plan, cancelled = ["stall", "reply"], []
+        async def with_context(image, prompt, schema, overview):
+            if plan.pop(0) == "stall":
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    cancelled.append(True)
+                    raise
+            return self.provider.result
+        self.provider.generate_outlets_with_context = with_context
+        with self.assertLogs("roi_app.outlets", level="WARNING") as logs:
+            response = await self.generate()
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual((result["status"], result["run"]["provider_attempts"]), ("complete", 2))
+        self.assertEqual(result["run"]["settings"]["call_timeout_seconds"], .05)
+        self.assertEqual(cancelled, [True])
+        self.assertIn("outlet_call_timeout request_id=outlet-request attempt=1 timeout_seconds=0.05", logs.output[0])
+        plan[:] = ["stall", "stall"]
+        failed = await self.generate(request_id="stalled", scope_signature="v2")
+        self.assertEqual((failed.status_code, failed.json()["error"]["code"]), (504, "provider_timeout"))
+        self.assertEqual(len(cancelled), 3)
+        self.assertEqual(self.service.total_calls, 4)
+        self.assertEqual(self.service.active_calls, 0)
+
     async def test_invalid_or_truncated_output_is_not_applied_or_cached(self):
         cases = [ProviderResult("private bad output"), ProviderResult("[", "MAX_TOKENS"),
                  ProviderResult(json.dumps([inlet(anchor={"x": 600, "y": 500})])),

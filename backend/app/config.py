@@ -54,6 +54,8 @@ class Settings(BaseModel):
     max_response_bytes: Annotated[int, Field(gt=0, le=1024 * 1024)] = 256 * 1024
     max_output_tokens: Annotated[int, Field(ge=256, le=65536)] = 32768
     timeout_seconds: Annotated[float, Field(gt=0, le=900)] = 900
+    # Each outlet crop call; a stalled call is abandoned and retried within timeout_seconds.
+    outlet_call_timeout_seconds: Annotated[float, Field(gt=0, le=900)] = 120
     upload_timeout_seconds: Annotated[float, Field(gt=0, le=120)] = 30
     max_attempts: Annotated[int, Field(ge=1, le=2)] = 2
     max_concurrent_requests: Annotated[int, Field(gt=0, le=8)] = 2

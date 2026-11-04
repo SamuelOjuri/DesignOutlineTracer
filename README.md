@@ -116,6 +116,7 @@ If either port changes, update the corresponding setting. `localhost` and
 | `ROI_TEMPERATURE` | Backend | Flash sampling temperature, from `0` to `2`; defaults to `0.5`. Omitted for Argon. |
 | `ROI_MAX_OUTPUT_TOKENS` | Backend | Thinking and output token budget; defaults to `32768`, with a maximum of `65536`. |
 | `ROI_TIMEOUT_SECONDS` | Backend | Overall detection deadline, including retries; defaults to `900`, with a maximum of `900`. |
+| `ROI_OUTLET_CALL_TIMEOUT_SECONDS` | Backend | Deadline for each outlet-detection model call; a stalled call is abandoned and retried once within `ROI_TIMEOUT_SECONDS`. Defaults to `120`, with a maximum of `900`. |
 | `ROI_PAGE_TTL_SECONDS` | Backend | Uploaded-page lifetime; defaults to `1800` seconds to allow room for long detections. |
 | `ROI_ALLOW_LIVE` | Backend | Set to `true` to permit model requests; defaults to `false` in code. |
 | `GOOGLE_API_KEY` | Backend | Server-side credential required for live detection. |
