@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { syntheticAnnotation, syntheticPage } from "@/test/roi";
 import { emptyDrawing, initialRoiState, roiSessionReducer } from "./roiSession";
-import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "./roiDrawing";
+import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftPageOffset } from "./roiDrawing";
 
 const scale = { paperSize: "A1", scaleRatio: 100 };
 const points = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }];
@@ -28,17 +28,23 @@ describe("manual editor boundary", () => {
     expect(editorDrainage(session)).toEqual([{ outlineIndex: 1, edgeIndex: 1 }]);
   });
 
-  it("keeps source pages unchanged when combining, rescaling and moving illustration objects", () => {
+  it("keeps source pages unchanged when combining, rescaling and moving whole pages", () => {
     const pages = [page("first"), page("second", 2)];
     const original = JSON.stringify(pages);
     const combined = combinePageDrawings(pages);
     expect(combined.roofOutlines[1][0]).toEqual({ x: 440, y: 50 });
+    expect(combined.interiorHoles[1][0]).toEqual({ x: 465, y: 75 });
     expect(combined.outlets[1]).toMatchObject({ x: 490, y: 100, diameter: 0.15 });
     expect(combined.drainageEdges).toEqual([{ outlineIndex: 0, edgeIndex: 1 }, { outlineIndex: 1, edgeIndex: 1 }]);
     expect(combined.outlineRefs[1]).toEqual({ id: "outline-second", page_id: "second", roi_id: "roi" });
-    const before = combined.roofOutlines.map((polygon) => polygon[0]);
-    const offsets = shiftedOffsets({}, combined.outlineRefs, before, [before[0], { x: 455.5, y: 70.25 }]);
-    expect(combinePageDrawings(pages, offsets).roofOutlines[1][0]).toEqual({ x: 455.5, y: 70.25 });
+    const offsets = shiftPageOffset(shiftPageOffset({}, "second", { x: 10, y: 20.25 }), "second", { x: 5.5, y: 0 });
+    expect(offsets).toEqual({ second: { x: 15.5, y: 20.25 } });
+    const moved = combinePageDrawings(pages, offsets);
+    expect(moved.roofOutlines[1][0]).toEqual({ x: 455.5, y: 70.25 });
+    expect(moved.interiorHoles[1][0]).toEqual({ x: 480.5, y: 95.25 });
+    expect(moved.outlets[1]).toMatchObject({ x: 505.5, y: 120.25 });
+    expect(moved.roofOutlines[0]).toEqual(combined.roofOutlines[0]);
+    expect(moved.outlets[0]).toEqual(combined.outlets[0]);
     expect(JSON.stringify(pages)).toBe(original);
     expect(combinePageDrawings(pages)).toEqual(combined);
   });

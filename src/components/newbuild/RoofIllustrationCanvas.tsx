@@ -1,46 +1,40 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { Point, Outlet, DrainageEdge } from "@/types/roof";
 import { Button } from "@/components/ui/button";
-import { ZoomIn, ZoomOut, Maximize } from "lucide-react";
-import { outletMarkerGeometry } from "@/utils/outletMarker";
+import { ZoomIn, ZoomOut, Maximize, RotateCcw } from "lucide-react";
 import { drawRoofIllustration, illustrationBounds, ILLUSTRATION_PADDING as PADDING } from "@/utils/roofRender";
 
 interface RoofIllustrationCanvasProps {
   roofOutlines: Point[][];
   outlineIds?: string[];
+  /** Layout group (source page) of each outline; dragging an outline moves every outline in its group. */
+  outlineGroups?: string[];
   interiorHoles?: Point[][];
   outlets: Outlet[];
   drainageEdges: DrainageEdge[];
-  onOutlinesChange?: (outlines: Point[][]) => void;
-  onHolesChange?: (holes: Point[][]) => void;
-  onOutletsChange?: (outlets: Outlet[]) => void;
+  /** Enables dragging; receives the dragged group and its movement since the previous call, in drawing units. */
+  onMoveGroup?: (group: string, delta: Point) => void;
+  /** Shown as Reset layout while dragging is enabled; the button is disabled when this is omitted. */
+  onResetLayout?: () => void;
 }
 
 export const RoofIllustrationCanvas = ({
   roofOutlines,
   outlineIds = [],
+  outlineGroups = [],
   interiorHoles = [],
   outlets,
   drainageEdges,
-  onOutlinesChange,
-  onHolesChange,
-  onOutletsChange,
+  onMoveGroup,
+  onResetLayout,
 }: RoofIllustrationCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [displayScale, setDisplayScale] = useState(1);
   const [fitScale, setFitScale] = useState(1);
-  const [hoveredOutline, setHoveredOutline] = useState<number | null>(null);
-  const [dragging, setDragging] = useState<{
-    outlineIndex: number;
-    startX: number;
-    startY: number;
-    originalOutline: Point[];
-    associatedOutletIds: string[];
-    associatedHoleIndices: number[];
-    originalOutlets: Outlet[];
-    originalHoles: Point[][];
-  } | null>(null);
+  const [hoveredGroup, setHoveredGroup] = useState<string | null>(null);
+  const [draggingGroup, setDraggingGroup] = useState<string | null>(null);
+  const lastPointer = useRef<Point | null>(null);
 
   const ZOOM_STEP = 0.15;
   const MIN_ZOOM = 0.3;
@@ -132,105 +126,52 @@ export const RoofIllustrationCanvas = ({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d")!;
+    const activeGroup = draggingGroup ?? hoveredGroup;
+    const hoveredOutlines = activeGroup === null ? []
+      : outlineGroups.flatMap((group, index) => group === activeGroup ? [index] : []);
     drawRoofIllustration(ctx, { roofOutlines, outlineIds, interiorHoles, outlets, drainageEdges },
-      { offset: getOffset(), width: canvas.width, height: canvas.height, displayScale, hoveredOutline });
-  }, [roofOutlines, outlineIds, outlets, drainageEdges, getOffset, hoveredOutline, interiorHoles, displayScale]);
+      { offset: getOffset(), width: canvas.width, height: canvas.height, displayScale, hoveredOutlines });
+  }, [roofOutlines, outlineIds, outlineGroups, outlets, drainageEdges, getOffset, hoveredGroup, draggingGroup, interiorHoles, displayScale]);
+
+  const groupAt = useCallback((e: React.MouseEvent<HTMLCanvasElement>): string | null => {
+    const pos = getCanvasPos(e);
+    const index = pos ? findOutlineAtPos(pos) : null;
+    return index === null ? null : outlineGroups[index] ?? null;
+  }, [getCanvasPos, findOutlineAtPos, outlineGroups]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!onOutlinesChange || e.button !== 0) return;
-    const pos = getCanvasPos(e);
-    if (!pos) return;
-    const oi = findOutlineAtPos(pos);
-    if (oi === null) return;
-
-    const outline = roofOutlines[oi];
-    // Explicit ownership also moves perimeter outlets whose centres are not strictly interior.
-    const associatedOutletIds = outlets.filter(o => o.outline_id
-      ? o.outline_id === outlineIds[oi]
-      : outletMarkerGeometry(o, [outline], [], 1).status !== "outside"
-    ).map(o => o.id);
-    // Find holes inside this outline
-    const associatedHoleIndices = interiorHoles.map((hole, idx) => {
-      if (hole.length < 1) return -1;
-      const cx = hole.reduce((s, p) => s + p.x, 0) / hole.length;
-      const cy = hole.reduce((s, p) => s + p.y, 0) / hole.length;
-      return isPointInPolygon(cx, cy, outline, 0, 0) ? idx : -1;
-    }).filter(i => i >= 0);
-
-    setDragging({
-      outlineIndex: oi,
-      startX: pos.x,
-      startY: pos.y,
-      originalOutline: outline.map(p => ({ ...p })),
-      associatedOutletIds,
-      associatedHoleIndices,
-      originalOutlets: outlets.filter(o => associatedOutletIds.includes(o.id)).map(o => ({ ...o })),
-      originalHoles: associatedHoleIndices.map(i => interiorHoles[i].map(p => ({ ...p }))),
-    });
-  }, [getCanvasPos, findOutlineAtPos, roofOutlines, outlineIds, onOutlinesChange, outlets, interiorHoles]);
+    if (!onMoveGroup || e.button !== 0) return;
+    const group = groupAt(e);
+    if (group === null) return;
+    lastPointer.current = { x: e.clientX, y: e.clientY };
+    setDraggingGroup(group);
+  }, [onMoveGroup, groupAt]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    const pos = getCanvasPos(e);
-    if (!pos) return;
-
-    if (dragging && onOutlinesChange) {
-      const dx = pos.x - dragging.startX;
-      const dy = pos.y - dragging.startY;
-      const newOutlines = roofOutlines.map((o, i) => {
-        if (i === dragging.outlineIndex) {
-          return dragging.originalOutline.map(p => ({
-            x: p.x + dx,
-            y: p.y + dy,
-          }));
-        }
-        return o;
-      });
-      onOutlinesChange(newOutlines);
-
-      // Move associated outlets
-      if (onOutletsChange && dragging.associatedOutletIds.length > 0) {
-        const newOutlets = outlets.map(o => {
-          const origIdx = dragging.originalOutlets.findIndex(oo => oo.id === o.id);
-          if (origIdx >= 0) {
-            const orig = dragging.originalOutlets[origIdx];
-            return { ...o, x: orig.x + dx, y: orig.y + dy };
-          }
-          return o;
-        });
-        onOutletsChange(newOutlets);
-      }
-
-      // Move associated holes
-      if (onHolesChange && dragging.associatedHoleIndices.length > 0) {
-        const newHoles = interiorHoles.map((h, idx) => {
-          const dragIdx = dragging.associatedHoleIndices.indexOf(idx);
-          if (dragIdx >= 0) {
-            return dragging.originalHoles[dragIdx].map(p => ({
-              x: p.x + dx,
-              y: p.y + dy,
-            }));
-          }
-          return h;
-        });
-        onHolesChange(newHoles);
-      }
+    if (!onMoveGroup) return;
+    const canvas = canvasRef.current;
+    if (draggingGroup !== null && lastPointer.current && canvas) {
+      // Screen movement at the current zoom stays correct while the canvas re-fits around the moved page.
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const delta = { x: (e.clientX - lastPointer.current.x) * canvas.width / rect.width,
+        y: (e.clientY - lastPointer.current.y) * canvas.height / rect.height };
+      lastPointer.current = { x: e.clientX, y: e.clientY };
+      if (delta.x || delta.y) onMoveGroup(draggingGroup, delta);
       return;
     }
-
-    // Hover detection
-    if (onOutlinesChange) {
-      const oi = findOutlineAtPos(pos);
-      setHoveredOutline(oi);
-    }
-  }, [getCanvasPos, dragging, roofOutlines, onOutlinesChange, findOutlineAtPos, outlets, onOutletsChange, interiorHoles, onHolesChange]);
+    setHoveredGroup(groupAt(e));
+  }, [onMoveGroup, draggingGroup, groupAt]);
 
   const handleMouseUp = useCallback(() => {
-    setDragging(null);
+    lastPointer.current = null;
+    setDraggingGroup(null);
   }, []);
 
   const handleMouseLeave = useCallback(() => {
-    setDragging(null);
-    setHoveredOutline(null);
+    lastPointer.current = null;
+    setDraggingGroup(null);
+    setHoveredGroup(null);
   }, []);
 
   const handleZoomIn = () => setDisplayScale((s) => Math.min(s + ZOOM_STEP, MAX_ZOOM));
@@ -261,6 +202,13 @@ export const RoofIllustrationCanvas = ({
         <Button variant="outline" size="sm" onClick={handleFitToScreen} title="Fit to screen" aria-label="Fit to screen">
           <Maximize className="w-4 h-4" />
         </Button>
+        {onMoveGroup && (
+          <Button variant="outline" size="sm" className="ml-auto" onClick={onResetLayout} disabled={!onResetLayout}
+            title="Restore the automatic side-by-side page layout">
+            <RotateCcw className="w-4 h-4 mr-1" />
+            Reset layout
+          </Button>
+        )}
       </div>
 
       <div
@@ -271,7 +219,7 @@ export const RoofIllustrationCanvas = ({
         <div className="min-w-fit min-h-fit p-2">
           <canvas
             ref={canvasRef}
-            className={`block mx-auto ${onOutlinesChange ? (hoveredOutline !== null || dragging ? "cursor-move" : "cursor-default") : ""}`}
+            className={`block mx-auto ${onMoveGroup ? (hoveredGroup !== null || draggingGroup !== null ? "cursor-move" : "cursor-default") : ""}`}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
@@ -281,9 +229,9 @@ export const RoofIllustrationCanvas = ({
       </div>
 
       <p className="text-xs text-muted-foreground mt-1 text-center">
-        {onOutlinesChange
-          ? "Drag roof areas to reposition them • Ctrl + scroll to zoom"
-          : "Roof layout summary • Ctrl + scroll to zoom"}
+        {onMoveGroup
+          ? "Drag to arrange pages in the downloaded drawing (each page's roof areas move together) • Ctrl/⌘ + scroll to zoom"
+          : "Roof areas keep their positions from the plan • Ctrl/⌘ + scroll to zoom"}
       </p>
     </div>
   );

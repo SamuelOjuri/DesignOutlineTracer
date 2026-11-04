@@ -20,7 +20,7 @@ export interface IllustrationOptions {
   height: number;
   /** CSS zoom of the drawing; outlet glyphs are sized in screen pixels. */
   displayScale: number;
-  hoveredOutline?: number | null;
+  hoveredOutlines?: readonly number[];
   grid?: boolean;
 }
 
@@ -116,7 +116,7 @@ function drawLegend(ctx: CanvasRenderingContext2D, canvasWidth: number, hasDrain
 /** Shared by the Project Details canvas and the package PNG so both show the same drawing. */
 export function drawRoofIllustration(ctx: CanvasRenderingContext2D, data: IllustrationData, options: IllustrationOptions) {
   const { roofOutlines, outlineIds = [], interiorHoles, outlets, drainageEdges } = data;
-  const { offset, width, height, displayScale, hoveredOutline = null, grid = true } = options;
+  const { offset, width, height, displayScale, hoveredOutlines = [], grid = true } = options;
   const isDrainageEdge = (outlineIndex: number, edgeIndex: number) =>
     drainageEdges.some((edge) => edge.outlineIndex === outlineIndex && edge.edgeIndex === edgeIndex);
 
@@ -139,7 +139,7 @@ export function drawRoofIllustration(ctx: CanvasRenderingContext2D, data: Illust
   for (let oi = 0; oi < roofOutlines.length; oi++) {
     const outline = roofOutlines[oi];
     if (outline.length < 3) continue;
-    const isHovered = hoveredOutline === oi;
+    const isHovered = hoveredOutlines.includes(oi);
 
     ctx.fillStyle = isHovered ? "hsla(210, 80%, 90%, 0.6)" : "hsla(0, 0%, 95%, 0.8)";
     ctx.beginPath();

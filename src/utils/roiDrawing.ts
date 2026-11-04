@@ -42,7 +42,8 @@ export interface CombinedDrawing {
   mmPerPixel: number;
 }
 
-export function combinePageDrawings(pages: PageSession[], offsets: Record<string, Point> = {}): CombinedDrawing {
+/** `pageOffsets` (keyed by page_id) move every object on a page together, on top of the side-by-side layout. */
+export function combinePageDrawings(pages: PageSession[], pageOffsets: Record<string, Point> = {}): CombinedDrawing {
   const result: CombinedDrawing = { roofOutlines: [], interiorHoles: [], outlets: [], penetrations: [], drainageEdges: [],
     outlineRefs: [], holeRefs: [], outletRefs: [], mmPerPixel: 0 };
   const populated = pages.filter((page) => page.drawing.outlines.some((outline) => outline.points.length > 0));
@@ -54,21 +55,22 @@ export function combinePageDrawings(pages: PageSession[], offsets: Record<string
     const factor = mmPerPixel(page) / mmPerPixel(base);
     const sourceX = page.drawing.outlines.flatMap((outline) => outline.points.map((point) => point.x * factor));
     const offsetX = Number.isFinite(right) ? right - Math.min(...sourceX) + 40 : 0;
-    const transform = (point: Point, id: string): Point => ({
-      x: point.x * factor + offsetX + (offsets[id]?.x ?? 0),
-      y: point.y * factor + (offsets[id]?.y ?? 0),
+    const shift = pageOffsets[page.source.page_id] ?? { x: 0, y: 0 };
+    const transform = (point: Point): Point => ({
+      x: point.x * factor + offsetX + shift.x,
+      y: point.y * factor + shift.y,
     });
     const outlineOffset = result.roofOutlines.length;
     for (const outline of page.drawing.outlines) {
-      result.roofOutlines.push(outline.points.map((point) => transform(point, outline.id)));
+      result.roofOutlines.push(outline.points.map(transform));
       result.outlineRefs.push({ id: outline.id, page_id: outline.page_id, roi_id: outline.roi_id });
     }
     for (const hole of page.drawing.holes) {
-      result.interiorHoles.push(hole.points.map((point) => transform(point, hole.id)));
+      result.interiorHoles.push(hole.points.map(transform));
       result.holeRefs.push({ id: hole.id, page_id: hole.page_id, roi_id: hole.roi_id });
     }
     for (const opening of penetrationOpenings(page)) {
-      const points = opening.points.map(point => transform(point, opening.id));
+      const points = opening.points.map(transform);
       result.interiorHoles.push(points);
       result.holeRefs.push({ id: opening.id, page_id: opening.page_id, roi_id: opening.roi_id });
       const left = Math.min(...points.map(point => point.x)), right = Math.max(...points.map(point => point.x));
@@ -78,7 +80,7 @@ export function combinePageDrawings(pages: PageSession[], offsets: Record<string
         polygonPoints: points });
     }
     for (const outlet of activePageOutlets(page)) {
-      result.outlets.push({ ...outlet, ...transform(outlet, outlet.id) });
+      result.outlets.push({ ...outlet, ...transform(outlet) });
       result.outletRefs.push({ id: outlet.id, page_id: outlet.page_id,
         roi_id: page.annotations.find((annotation) => annotation.id === outlet.annotation_id)?.roi_id ?? null });
     }
@@ -88,12 +90,7 @@ export function combinePageDrawings(pages: PageSession[], offsets: Record<string
   return result;
 }
 
-export function shiftedOffsets(previous: Record<string, Point>, refs: DrawingObjectRef[], before: Point[], after: Point[]): Record<string, Point> {
-  const next = { ...previous };
-  refs.forEach((reference, index) => {
-    if (!before[index] || !after[index]) return;
-    next[reference.id] = { x: (previous[reference.id]?.x ?? 0) + after[index].x - before[index].x,
-      y: (previous[reference.id]?.y ?? 0) + after[index].y - before[index].y };
-  });
-  return next;
+export function shiftPageOffset(previous: Record<string, Point>, pageId: string, delta: Point): Record<string, Point> {
+  const current = previous[pageId] ?? { x: 0, y: 0 };
+  return { ...previous, [pageId]: { x: current.x + delta.x, y: current.y + delta.y } };
 }

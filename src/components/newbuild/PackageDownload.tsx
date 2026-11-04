@@ -17,6 +17,7 @@ interface PackageDownloadProps {
   /** Original roof plan PDFs keyed by document_id. */
   roofPlanFiles: Record<string, File>;
   pages: PageSession[];
+  /** Layout offsets keyed by page_id, as arranged on Project Details. */
   illustrationOffsets: Record<string, Point>;
 }
 

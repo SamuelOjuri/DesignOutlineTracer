@@ -80,16 +80,20 @@ package (`tpid-package-v1`), drawing (`tpid-drawing-v1`) and prompt
 
 ## Geometry Contract
 
-The drawing files use the same combined layout shown on Project Details,
-including any roof areas dragged on that page.
+The drawing files use the same combined layout shown on Project Details. When
+roof areas come from more than one PDF page, each page can be dragged there as
+one unit (its roof areas, openings and outlets move together) and Reset layout
+restores the automatic side-by-side arrangement. Roof areas from a single page
+cannot be dragged, so they keep their relative positions from the plan.
 
 - Units are millimetres, x to the right and y up, with the origin at the
   bottom-left of the exported bounds. The SVG keeps the screen's y-down
   convention with 1 user unit = 1 mm.
 - Millimetres come from the paper size and drawing scale chosen at upload,
   assuming the page's long edge equals the paper's long edge. Roof areas from
-  different pages are arranged side by side; their relative positions are
-  illustrative. Both points are recorded in `notes`.
+  different pages are placed side by side or as arranged on Project Details;
+  their relative positions are illustrative. Both points are recorded in
+  `notes`.
 - DXF: AutoCAD R12 ASCII (`AC1009`) with `$INSUNITS = 4`. Layers are
   `ROOF_OUTLINE`, `CUTOUTS`, `PENETRATIONS`, `DRAINAGE_EDGES`, `OUTLETS`,
   `OUTLETS_UNCONFIRMED` and `LABELS`. Outlets are circles at their diameter;

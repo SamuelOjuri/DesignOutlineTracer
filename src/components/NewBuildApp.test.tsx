@@ -75,10 +75,11 @@ vi.mock("./newbuild/NewBuildOutletCanvas", () => ({
 vi.mock("./newbuild/NewBuildSidebar", () => ({ NewBuildSidebar: () => null }));
 
 vi.mock("./newbuild/RoofIllustrationCanvas", () => ({
-  RoofIllustrationCanvas: ({ roofOutlines, interiorHoles, outlets, drainageEdges, onOutlinesChange }: ComponentProps<typeof RoofIllustrationCanvas>) => (
+  RoofIllustrationCanvas: ({ roofOutlines, outlineGroups, interiorHoles, outlets, drainageEdges, onMoveGroup, onResetLayout }: ComponentProps<typeof RoofIllustrationCanvas>) => (
     <>
       <output data-testid="illustration">{JSON.stringify({ roofOutlines, interiorHoles, outlets, drainageEdges })}</output>
-      <button onClick={() => onOutlinesChange?.(roofOutlines.map((polygon) => polygon.map((point) => ({ ...point, x: point.x + 20.5 }))))}>Move illustration</button>
+      {onMoveGroup && <button onClick={() => onMoveGroup(outlineGroups![1], { x: 20.5, y: 0 })}>Move illustration</button>}
+      {onMoveGroup && <button disabled={!onResetLayout} onClick={onResetLayout}>Reset layout</button>}
     </>
   ),
 }));
@@ -238,6 +239,7 @@ describe("manual New Build state", () => {
       outlets: [expect.objectContaining({ x: 220, y: 240, diameter: 0.15 })],
       drainageEdges: [{ outlineIndex: 0, edgeIndex: 1 }],
     });
+    expect(screen.queryByRole("button", { name: "Move illustration" })).not.toBeInTheDocument();
     expect(screen.getByTestId("penetrations")).toHaveTextContent("[]");
     await user.type(screen.getByRole("textbox", { name: "Project name" }), "Manual baseline");
     await user.click(previous());
@@ -286,9 +288,14 @@ describe("manual New Build state", () => {
     ]);
     await next();
     expect(screen.getByTestId("illustration").textContent).toBe(merged);
+    expect(screen.getByRole("button", { name: "Reset layout" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Move illustration" }));
     const moved = screen.getByTestId("illustration").textContent!;
-    expect(JSON.parse(moved).roofOutlines[1][0]).toEqual({ x: 460.5, y: 50 });
+    expect(JSON.parse(moved)).toMatchObject({
+      roofOutlines: [outline, [{ x: 460.5, y: 50 }, { x: 610.5, y: 50 }, { x: 610.5, y: 150 }, { x: 460.5, y: 150 }]],
+      interiorHoles: [hole, [{ x: 485.5, y: 75 }, { x: 500.5, y: 75 }, { x: 500.5, y: 90 }]],
+      outlets: [{ x: 200, y: 200 }, { x: 510.5, y: 100 }],
+    });
     await user.click(screen.getByRole("button", { name: "Previous" }));
     await user.click(screen.getByRole("button", { name: "Previous" }));
     expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
@@ -303,6 +310,9 @@ describe("manual New Build state", () => {
     ]);
     await next();
     expect(screen.getByTestId("illustration").textContent).toBe(moved);
+    await user.click(screen.getByRole("button", { name: "Reset layout" }));
+    expect(screen.getByTestId("illustration").textContent).toBe(merged);
+    expect(screen.getByRole("button", { name: "Reset layout" })).toBeDisabled();
   });
 
   it("isolates a new page and restores the previous page when an additional upload is cancelled", async () => {

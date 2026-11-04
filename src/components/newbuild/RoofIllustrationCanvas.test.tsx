@@ -37,24 +37,60 @@ it("redraws holes and drainage legend changes without resetting zoom", () => {
   expect(canvas.style.width).toBe(zoomedWidth);
 });
 
-it("moves a boundary outlet with its assigned roof, without taking the neighbouring roof's outlet", () => {
+const square = (left: number) => [{ x: left, y: 100 }, { x: left + 200, y: 100 }, { x: left + 200, y: 300 }, { x: left, y: 300 }];
+
+it("drags every roof area on the grabbed page as one group, converting screen movement at the current zoom", () => {
+  const context = mockCanvasContext();
+  const onMoveGroup = vi.fn();
+  const { container } = render(<RoofIllustrationCanvas roofOutlines={[square(100), square(400), square(700)]}
+    outlineGroups={["page-1", "page-1", "page-2"]} outlets={[]} drainageEdges={[]}
+    onMoveGroup={onMoveGroup} onResetLayout={vi.fn()} />);
+  const canvas = container.querySelector("canvas")!;
+  // Displayed at half size, so one screen pixel is two drawing units.
+  vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: canvas.width / 2,
+    height: canvas.height / 2, right: canvas.width / 2, bottom: canvas.height / 2, x: 0, y: 0, toJSON: () => ({}) });
+  const hoverDashes = () => context.setLineDash.mock.calls.filter(([dash]) => (dash as number[]).length > 0).length;
+
+  context.setLineDash.mockClear();
+  fireEvent.mouseMove(canvas, { clientX: 80, clientY: 80 });
+  expect(hoverDashes()).toBe(2);
+  expect(canvas).toHaveClass("cursor-move");
+
+  fireEvent.mouseDown(canvas, { button: 0, clientX: 230, clientY: 80 });
+  fireEvent.mouseMove(canvas, { clientX: 240, clientY: 95 });
+  fireEvent.mouseMove(canvas, { clientX: 242.5, clientY: 90 });
+  expect(onMoveGroup.mock.calls).toEqual([["page-1", { x: 20, y: 30 }], ["page-1", { x: 5, y: -10 }]]);
+
+  fireEvent.mouseUp(canvas);
+  fireEvent.mouseMove(canvas, { clientX: 260, clientY: 100 });
+  fireEvent.mouseDown(canvas, { button: 0, clientX: 380, clientY: 80 });
+  fireEvent.mouseMove(canvas, { clientX: 390, clientY: 80 });
+  expect(onMoveGroup).toHaveBeenLastCalledWith("page-2", { x: 20, y: 0 });
+  expect(onMoveGroup).toHaveBeenCalledTimes(3);
+});
+
+it("offers Reset layout only while arranging is enabled, and is read-only otherwise", () => {
   mockCanvasContext();
-  const roofA = [{ x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 400 }, { x: 100, y: 400 }];
-  const roofB = [{ x: 500, y: 100 }, { x: 800, y: 100 }, { x: 800, y: 400 }, { x: 500, y: 400 }];
-  const outlets = [{ id: "a", x: 500, y: 200, diameter: 0.15, outline_id: "roof-a" },
-    { id: "b", x: 500, y: 200, diameter: 0.15, outline_id: "roof-b" }];
-  const onOutletsChange = vi.fn();
-  const { container } = render(<RoofIllustrationCanvas roofOutlines={[roofA, roofB]}
-    outlineIds={["roof-a", "roof-b"]} outlets={outlets} drainageEdges={[]}
-    onOutlinesChange={vi.fn()} onOutletsChange={onOutletsChange} />);
+  const onResetLayout = vi.fn();
+  const props: ComponentProps<typeof RoofIllustrationCanvas> = {
+    roofOutlines: [square(100), square(400)], outlineGroups: ["page-1", "page-2"], outlets: [], drainageEdges: [],
+  };
+  const { container, rerender } = render(<RoofIllustrationCanvas {...props} />);
   const canvas = container.querySelector("canvas")!;
   vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: canvas.width,
     height: canvas.height, right: canvas.width, bottom: canvas.height, x: 0, y: 0, toJSON: () => ({}) });
-  fireEvent.mouseDown(canvas, { button: 0, clientX: 260, clientY: 160 });
-  fireEvent.mouseMove(canvas, { clientX: 280, clientY: 190 });
-  expect(onOutletsChange).toHaveBeenLastCalledWith([
-    { ...outlets[0], x: 520, y: 230 }, outlets[1],
-  ]);
+  fireEvent.mouseMove(canvas, { clientX: 160, clientY: 160 });
+  expect(canvas).not.toHaveClass("cursor-move");
+  expect(screen.queryByRole("button", { name: "Reset layout" })).not.toBeInTheDocument();
+  expect(screen.getByText(/Roof areas keep their positions from the plan/)).toBeInTheDocument();
+
+  rerender(<RoofIllustrationCanvas {...props} onMoveGroup={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Reset layout" })).toBeDisabled();
+  expect(screen.getByText(/Drag to arrange pages in the downloaded drawing/)).toBeInTheDocument();
+
+  rerender(<RoofIllustrationCanvas {...props} onMoveGroup={vi.fn()} onResetLayout={onResetLayout} />);
+  fireEvent.click(screen.getByRole("button", { name: "Reset layout" }));
+  expect(onResetLayout).toHaveBeenCalledOnce();
 });
 
 it("uses the same screen-sized outlet glyph in the final illustration", () => {
@@ -69,28 +105,4 @@ it("uses the same screen-sized outlet glyph in the final illustration", () => {
   fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
   scale = Number.parseFloat(canvas.style.width) / canvas.width;
   expect(context.arc).toHaveBeenCalledWith(260, 160, expect.closeTo(10 / scale), 0, Math.PI * 2);
-});
-
-it("preserves fractional anchors on angled edges when translating a roof and its openings", () => {
-  mockCanvasContext();
-  const roof = [{ x: 100.25, y: 100.5 }, { x: 500.25, y: 100.5 }, { x: 500.25, y: 400.5 }];
-  const hole = [{ x: 350.125, y: 150.25 }, { x: 370.125, y: 150.25 }, { x: 370.125, y: 170.25 }];
-  const outlet = { id: "a", x: 300.25, y: 250.5, diameter: 0.15, outline_id: "roof-a" };
-  const onOutlinesChange = vi.fn(), onHolesChange = vi.fn(), onOutletsChange = vi.fn();
-  const { container } = render(<RoofIllustrationCanvas roofOutlines={[roof]} outlineIds={["roof-a"]}
-    outlets={[outlet]} interiorHoles={[hole]} drainageEdges={[]} onOutlinesChange={onOutlinesChange}
-    onHolesChange={onHolesChange} onOutletsChange={onOutletsChange} />);
-  const canvas = container.querySelector("canvas")!;
-  vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({ left: 0, top: 0, width: canvas.width,
-    height: canvas.height, right: canvas.width, bottom: canvas.height, x: 0, y: 0, toJSON: () => ({}) });
-  fireEvent.mouseDown(canvas, { button: 0, clientX: 360, clientY: 160 });
-  fireEvent.mouseMove(canvas, { clientX: 380.125, clientY: 190.375 });
-  const translate = (point: { x: number; y: number }) => ({ x: point.x + 20.125, y: point.y + 30.375 });
-  expect(onOutlinesChange).toHaveBeenLastCalledWith([roof.map(translate)]);
-  expect(onHolesChange).toHaveBeenLastCalledWith([hole.map(translate)]);
-  expect(onOutletsChange).toHaveBeenLastCalledWith([{ ...outlet, ...translate(outlet) }]);
-  const moved = onOutletsChange.mock.lastCall![0][0];
-  const edge = onOutlinesChange.mock.lastCall![0][0];
-  expect((moved.x - edge[0].x) * (edge[2].y - edge[0].y)
-    - (moved.y - edge[0].y) * (edge[2].x - edge[0].x)).toBeCloseTo(0);
 });

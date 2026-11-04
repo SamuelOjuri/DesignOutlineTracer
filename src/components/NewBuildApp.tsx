@@ -28,7 +28,7 @@ import { roiClient } from "@/integrations/roi/client";
 import { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
 import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
 import { PenetrationSummary } from "./newbuild/PenetrationSummary";
-import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftedOffsets } from "@/utils/roiDrawing";
+import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftPageOffset } from "@/utils/roiDrawing";
 import { penetrationOpenings } from "@/utils/penetrationOpenings";
 import { outletFromAnnotation, pointInOutletRing, reviewPageOutlets } from "@/utils/outletScope";
 import { useOutletDetection } from "@/hooks/useOutletDetection";
@@ -82,6 +82,10 @@ export const NewBuildApp = () => {
   const drainageEdges = activePage ? editorDrainage(activePage) : [];
   const drawingScale = activePage?.drawing.drawing_scale ?? uploadScale;
   const combined = combinePageDrawings(Object.values(state.pages), illustrationOffsets);
+  // Only whole pages are arranged: roof areas on one page keep their true relative positions.
+  const layoutPageIds = [...new Set(combined.outlineRefs.map((reference) => reference.page_id))];
+  const canArrangePages = layoutPageIds.length > 1;
+  const layoutMoved = layoutPageIds.some((pageId) => Boolean(illustrationOffsets[pageId]?.x || illustrationOffsets[pageId]?.y));
   const saved = combinePageDrawings(Object.values(state.pages).filter((page) => page.source.page_id !== state.active_page_id));
   const [selectedOutletRecord, setSelectedOutlet] = useState<Outlet | null>(null);
   const selectedOutlet = outlets.find(outlet => outlet.id === selectedOutletRecord?.id) ?? null;
@@ -508,15 +512,14 @@ export const NewBuildApp = () => {
             <RoofIllustrationCanvas
               roofOutlines={combined.roofOutlines}
               outlineIds={combined.outlineRefs.map(outline => outline.id)}
+              outlineGroups={combined.outlineRefs.map(outline => outline.page_id)}
               interiorHoles={combined.interiorHoles}
               outlets={combined.outlets}
               drainageEdges={combined.drainageEdges}
-              onOutlinesChange={(points) => setIllustrationOffsets((previous) => shiftedOffsets(previous,
-                combined.outlineRefs, combined.roofOutlines.map((polygon) => polygon[0]), points.map((polygon) => polygon[0])))}
-              onHolesChange={(points) => setIllustrationOffsets((previous) => shiftedOffsets(previous,
-                combined.holeRefs, combined.interiorHoles.map((polygon) => polygon[0]), points.map((polygon) => polygon[0])))}
-              onOutletsChange={(points) => setIllustrationOffsets((previous) => shiftedOffsets(previous,
-                combined.outletRefs, combined.outlets, points))}
+              onMoveGroup={canArrangePages
+                ? (pageId, delta) => setIllustrationOffsets((previous) => shiftPageOffset(previous, pageId, delta))
+                : undefined}
+              onResetLayout={canArrangePages && layoutMoved ? () => setIllustrationOffsets({}) : undefined}
             />
           )}
         </div>

@@ -132,7 +132,7 @@ describe("outlet review lifecycle", () => {
   it("exports only current accepted detections with source ownership, transforms and unconfirmed diameter metadata", () => {
     const { page, receive, accept, dispatch } = setup();
     receive(); accept();
-    const result = combinePageDrawings([page()], { "outlet:outlet-1": { x: 20, y: 10 } });
+    const result = combinePageDrawings([page()], { "page-1": { x: 20, y: 10 } });
     expect(result.outlets[0]).toMatchObject({ x: 140, y: 130, outline_id: "outline-1", page_id: "page-1",
       annotation_id: "outlet-1", diameter: 0.15, diameter_confirmed: false });
     dispatch({ type: "outlet-move", page_id: "page-1", id: "outlet-1", anchor: { x: 200, y: 300 } });

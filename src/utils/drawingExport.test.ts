@@ -23,12 +23,14 @@ describe("roof drawing export", () => {
     expect(model.notes.join(" ")).toContain("unconfirmed 150 mm");
   });
 
-  it("follows the Project Details layout offsets and notes multi-page arrangement", () => {
+  it("follows the Project Details page offsets and notes multi-page arrangement", () => {
     const pages = [packagePage("page-1"), packagePage("page-2")];
     const plain = buildRoofExport(pages)!.model;
-    const moved = buildRoofExport(pages, { "outline-page-2": { x: 0, y: 50 } })!.model;
+    const moved = buildRoofExport(pages, { "page-2": { x: 0, y: 50 } })!.model;
     expect(plain.roof_areas).toHaveLength(2);
     expect(moved.height_mm).toBe(plain.height_mm + 5000);
+    expect(moved.openings.map(opening => opening.roof_area_id)).toEqual(["outline-page-1", "outline-page-2"]);
+    expect(moved.outlets.map(outlet => outlet.roof_area_id)).toEqual(["outline-page-1", "outline-page-2"]);
     expect(moved.notes.join(" ")).toContain("illustrative");
   });
 

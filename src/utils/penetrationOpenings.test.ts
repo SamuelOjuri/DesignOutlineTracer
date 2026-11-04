@@ -114,9 +114,10 @@ describe("penetration openings", () => {
     expect(first.penetrations[0]).toMatchObject({ x: 320, y: 195 });
     expect(first.penetrations[0].width).toBeCloseTo(80 * 841 * 100 / 800 / 1000);
     expect(first.penetrations[0].polygonPoints).toEqual(first.interiorHoles[1]);
-    const moved = combinePageDrawings([page()], { [first.penetrations[0].id]: { x: 20, y: -10 } });
+    const moved = combinePageDrawings([page()], { "page-1": { x: 20, y: -10 } });
     expect(moved.penetrations[0]).toMatchObject({ x: 340, y: 185, width: first.penetrations[0].width });
     expect(moved.penetrations[0].polygonPoints).toEqual(moved.interiorHoles[1]);
+    expect(moved.interiorHoles[0][0]).toEqual({ x: first.interiorHoles[0][0].x + 20, y: first.interiorHoles[0][0].y - 10 });
     expect(JSON.stringify(page())).toBe(original);
   });
 });

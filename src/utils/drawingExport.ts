@@ -150,8 +150,8 @@ function netArea(outline: Point[], holes: Point[][]): number {
 }
 
 /** Builds the exportable roof model from the same combined layout shown on Project Details. */
-export function buildRoofExport(pages: PageSession[], offsets: Record<string, Point> = {}): RoofExport | null {
-  const drawing = combinePageDrawings(pages, offsets);
+export function buildRoofExport(pages: PageSession[], pageOffsets: Record<string, Point> = {}): RoofExport | null {
+  const drawing = combinePageDrawings(pages, pageOffsets);
   const outlines = drawing.roofOutlines.filter(outline => outline.length >= 3);
   if (!outlines.length || !drawing.mmPerPixel) return null;
   const scale = drawing.mmPerPixel;
@@ -222,7 +222,7 @@ export function buildRoofExport(pages: PageSession[], offsets: Record<string, Po
     `Dimensions are derived from the paper size and drawing scale chosen at upload (${sources
       .map(source => `${source.paper_size} @ 1:${source.scale_ratio}`).join(", ")}); check against a known dimension.`,
   ];
-  if (sources.length > 1) notes.push("Roof areas from different PDF pages are arranged side by side; their relative positions are illustrative, not surveyed.");
+  if (sources.length > 1) notes.push("Roof areas from different PDF pages are placed side by side or as arranged on Project Details; their relative positions are illustrative, not surveyed.");
   if (unconfirmed) notes.push(`${unconfirmed} outlet diameter(s) use the unconfirmed 150 mm application default.`);
   const unassigned = outlets.filter(outlet => !outlet.roof_area_id).length;
   if (unassigned) notes.push(`${unassigned} outlet(s) are not inside a roof area.`);
