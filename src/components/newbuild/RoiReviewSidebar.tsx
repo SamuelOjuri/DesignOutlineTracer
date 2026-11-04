@@ -84,7 +84,7 @@ const errorMessages: Record<string, string> = {
   call_budget_exceeded: "The model-call budget has been used. Further detection requires an approved budget reset.",
   follow_up_expired: "The earlier upload expired. Start a new detection run.",
   follow_up_limit: "The follow-up limit for this upload has been reached.",
-  invalid_configuration: "The annotation service URL is not configured for localhost.",
+  invalid_configuration: "The annotation service URL or timeout is not configured correctly.",
   model_unavailable: "The configured model is unavailable.", provider_refusal: "The model declined this request.",
 };
 

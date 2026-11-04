@@ -15,7 +15,7 @@ from .gemini import OUTLINE_SYSTEM_PROMPT
 from .outline_geometry import ALGORITHM_VERSION, prepare_outline_crop, refine_outline_polygons
 from .outline_models import CachedOutline, ModelOutline, OutlineInput, OutlineResponse, OutlineRun
 from .parsing import decode_model_json, validation_detail
-from .service import Operation, PageRecord, RoiService, Session, digest
+from .service import PageRecord, RoiService, Session, digest
 
 
 PROMPT_VERSION = "roof-outline-v1"
@@ -105,9 +105,7 @@ class OutlineService:
         if existing is not None:
             if existing.fingerprint != fingerprint or existing.upload_id != page.upload_id:
                 raise RoiError("request_identity_conflict", 409)
-            if existing.task is None:
-                raise RoiError("page_not_found", 404)
-            return await service.wait_for(existing.task, session, page)
+            return await service.replay_operation(existing, session, page)
         if len(session.operations) >= service.settings.max_requests_per_session:
             raise RoiError("request_limit_exceeded", 429)
         settings = {
@@ -141,21 +139,12 @@ class OutlineService:
                 raise RoiError("provider_not_configured", 503)
             if service.active_calls >= service.settings.max_concurrent_requests:
                 raise RoiError("concurrency_limit_exceeded", 429)
-            if session.calls >= service.settings.max_calls_per_session or service.total_calls >= service.settings.max_total_calls:
+            if not service.budget_available(session):
                 raise RoiError("call_budget_exceeded", 429)
             service.active_calls += 1
-        task = asyncio.create_task(self.execute(session, page, request.model_copy(deep=True), key, settings, cached))
-        service.tasks.add(task)
-
-        def release_slot(finished):
-            service.tasks.discard(finished)
-            if cached is None:
-                service.active_calls -= 1
-            if not finished.cancelled():
-                finished.exception()
-
-        task.add_done_callback(release_slot)
-        session.operations[request.request_id] = Operation(fingerprint, key, page.upload_id, task)
+        task = service.start_operation(session, page, request.request_id, fingerprint, key,
+                                       lambda: self.execute(session, page, request.model_copy(deep=True), key, settings, cached),
+                                       cached is None)
         return await service.wait_for(task, session, page)
 
     async def execute(self, session: Session, page: PageRecord, request: OutlineInput, key: str,
@@ -181,10 +170,7 @@ class OutlineService:
                 settings["inference_width"] = crop["inference_width"]
                 settings["inference_height"] = crop["inference_height"]
                 while True:
-                    if session.calls >= service.settings.max_calls_per_session or service.total_calls >= service.settings.max_total_calls:
-                        raise RoiError("call_budget_exceeded", 429)
-                    session.calls += 1
-                    service.total_calls += 1
+                    service.reserve_call(session)
                     attempts += 1
                     finish_reason, response_chars = "unavailable", None
                     try:

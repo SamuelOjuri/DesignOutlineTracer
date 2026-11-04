@@ -87,8 +87,11 @@ export function createRoiClient(options: ClientOptions = {}) {
     ensureEnabled();
     try {
       const url = new URL(baseUrl);
-      if (url.protocol !== "http:" || !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-        || url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+      const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+      // Hosted APIs use HTTPS; HTTP remains available for the local development service.
+      if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
+        || url.username || url.password || url.search || url.hash || url.pathname !== "/"
+        || !/^https?:\/\/[^/?#@\\\s]+\/?$/i.test(baseUrl)) {
         throw new Error("invalid_base_url");
       }
       return `${url.origin}/api/roi/v1${path}`;

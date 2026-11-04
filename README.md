@@ -11,9 +11,11 @@ application-backend work belongs in this package. It contains
 the ROI implementation; the former extraction backend has been retired and is
 not imported or called by the ROI workflow.
 
-The ROI service currently supports localhost use with one worker. Live model
-access and domain-quality evaluation remain separate from offline verification.
-Promoting this code to `main` does not enable a publicly hosted API.
+The ROI service defaults to localhost development. Public deployment supports
+a Netlify frontend and a single-worker Render API with persistent storage and
+anonymous page ownership, without a user login. See
+[production deployment](docs/Production-Deployment.md) for the required settings.
+Live model access and domain-quality evaluation remain separate from offline verification.
 
 ## Repository Layout
 
@@ -150,12 +152,16 @@ in [Google's migration guide](https://ai.google.dev/gemini-api/docs/latest-model
 The offline `backend/roi_reference` package retains its original Flash baseline;
 it does not configure the application service.
 
-The API checks loopback client addresses, hosts, and frontend origins, and the
-frontend accepts only loopback API URLs. Keep one API worker: sessions, images,
-and caches are stored in process memory and are lost on restart. Its session
-token represents ownership of uploaded pages, not authenticated user identity.
-Public deployment needs application changes for remote access, authentication,
-and shared state; changing the branch or bind address alone is insufficient.
+Local mode checks loopback client addresses, hosts, and frontend origins.
+Public mode accepts configured HTTPS frontend origins and configured API hosts;
+the browser calls the Render HTTPS API directly. Keep one API worker and one
+instance. Public mode requires `ROI_STATE_PATH` on a Render persistent disk to
+retain unexpired pages, completed operations and call budgets across restarts.
+The browser-generated session token represents anonymous ownership of uploaded
+pages, not authenticated user identity. There is no user login. An interrupted
+detection must be started again after a backend restart; completed results can
+be replayed without another provider call. See the
+[production deployment guide](docs/Production-Deployment.md).
 See the [annotation API runbook](docs/Phase-3-Annotation-API.md) for endpoint
 contracts, request limits, and lifecycle details.
 

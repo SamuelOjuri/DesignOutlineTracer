@@ -52,17 +52,22 @@ class BoundedRequests:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = {key.decode("latin1"): value.decode("latin1") for key, value in scope["headers"]}
+        is_health = scope["method"] == "GET" and scope["path"] == PREFIX + "/health"
         try:
-            if not scope.get("client") or scope["client"][0] not in {"127.0.0.1", "::1"}:
+            if (self.settings.deployment_mode == "localhost_only"
+                    and (not scope.get("client") or scope["client"][0] not in {"127.0.0.1", "::1"})):
                 raise RoiError("localhost_only", 403)
             if headers.get("origin") is not None and headers["origin"] not in self.settings.allowed_origins:
                 raise RoiError("origin_not_allowed", 403)
-            if self.active >= self.settings.max_http_requests:
+            if not is_health and self.active >= self.settings.max_http_requests:
                 raise RoiError("http_concurrency_limit_exceeded", 429)
             if scope["method"] in {"POST", "DELETE"}:
                 owner_from_headers(headers)
         except RoiError as error:
             return await error_response(error)(scope, receive, send)
+        # A busy detection service must remain healthy for Render's readiness checks.
+        if is_health:
+            return await self.app(scope, receive, send)
         self.active += 1
         try:
             bounded_receive = receive
@@ -134,10 +139,10 @@ def create_app(settings: Settings | None = None, provider: Provider | None = Non
             await asyncio.gather(cleanup_task, return_exceptions=True)
             await service.close()
 
-    application = FastAPI(title="Isolated ROI API", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    application = FastAPI(title="TaperedPlus ROI API", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     application.state.roi_service = service
     application.add_middleware(BoundedRequests, settings=settings)
-    application.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
+    application.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
     application.add_middleware(CORSMiddleware, allow_origins=list(settings.allowed_origins),
                                allow_methods=["GET", "POST", "DELETE"], allow_headers=["Authorization", "Content-Type"],
                                allow_credentials=False)
@@ -158,7 +163,7 @@ def create_app(settings: Settings | None = None, provider: Provider | None = Non
     @application.get(PREFIX + "/health")
     async def health():
         return JSONResponse({"status": "ready" if service.provider.ready else "not_configured",
-                             "model": settings.model, "mode": "localhost_only"}, headers={"Cache-Control": "no-store"})
+                             "model": settings.model, "mode": settings.deployment_mode}, headers={"Cache-Control": "no-store"})
 
     @application.post(PREFIX + "/pages")
     async def upload(request: Request):

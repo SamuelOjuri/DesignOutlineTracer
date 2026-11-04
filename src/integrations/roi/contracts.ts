@@ -56,5 +56,5 @@ export const detectionSchema = z.object({
 }).strict();
 
 export const healthSchema = z.object({
-  status: z.enum(["ready", "not_configured"]), model, mode: z.literal("localhost_only"),
+  status: z.enum(["ready", "not_configured"]), model, mode: z.enum(["localhost_only", "public"]),
 }).strict();

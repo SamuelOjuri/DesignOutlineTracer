@@ -1,0 +1,31 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+# Set the production branch to main in Netlify's Git settings.
+# Set VITE_ROI_API_BASE_URL to the Render HTTPS origin in the Netlify UI.
+# Call Render directly: do not proxy long detection requests through Netlify.
+[context.production.environment]
+  VITE_ROI_ENABLED = "true"
+  VITE_ROI_DETECTION_TIMEOUT_MS = "930000"
+
+# Previews stay usable for manual editing without sending data to production.
+[context.deploy-preview.environment]
+  VITE_ROI_ENABLED = "false"
+
+[context.branch-deploy.environment]
+  VITE_ROI_ENABLED = "false"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

@@ -1,0 +1,41 @@
+# Import as a Render Blueprint, or apply these settings to the existing API service.
+# Keep one instance and one Uvicorn worker: the persistent store has one writer.
+services:
+  - type: web
+    name: taperedplus-roi-api
+    runtime: python
+    plan: 1c-2g
+    branch: main
+    numInstances: 1
+    autoDeployTrigger: commit
+    buildCommand: python -m pip install --require-hashes -r backend/app/requirements.lock
+    startCommand: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT --workers 1 --no-access-log
+    healthCheckPath: /api/roi/v1/health
+    disk:
+      name: roi-state
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: ROI_DEPLOYMENT_MODE
+        value: public
+      - key: ROI_STATE_PATH
+        value: /var/data/roi.sqlite3
+      # Enter exact frontend origins, comma-separated and without trailing slashes.
+      - key: ROI_ALLOWED_ORIGINS
+        sync: false
+      # Render supplies RENDER_EXTERNAL_HOSTNAME; set ROI_ALLOWED_HOSTS manually
+      # as well if you add a custom API domain.
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: ROI_ALLOW_LIVE
+        value: "true"
+      - key: ROI_MODEL
+        value: gemini-4-argon
+      - key: ROI_TIMEOUT_SECONDS
+        value: "900"
+      - key: ROI_PAGE_TTL_SECONDS
+        value: "1800"
+      - key: ROI_MAX_TOTAL_CALLS
+        value: "100"
+      - key: ROI_CALL_BUDGET_WINDOW_SECONDS
+        value: "86400"

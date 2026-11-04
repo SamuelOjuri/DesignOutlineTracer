@@ -35,6 +35,62 @@ describe("isolated ROI client", () => {
     expect(result.run.model).toBe(model);
   });
 
+  it("uses the configured HTTPS API directly for hosted health, upload, detection and deletion", async () => {
+    vi.stubEnv("VITE_ROI_ENABLED", "true");
+    vi.stubEnv("VITE_ROI_API_BASE_URL", "https://roof-api.onrender.com/");
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createRoiClient({ fetch: fetcher });
+    const { source_blob, ...context } = page;
+    fetcher.mockResolvedValueOnce(jsonResponse({ status: "ready", model: "gemini-4-argon", mode: "public" }));
+    expect((await client.health()).mode).toBe("public");
+    fetcher.mockResolvedValueOnce(jsonResponse({ page: context, upload_id: "upload_1", expires_in_seconds: 900 }));
+    await client.uploadPage(page);
+    expect(((fetcher.mock.calls[1][1].body as FormData).get("image") as Blob).size).toBe(source_blob.size);
+    fetcher.mockResolvedValueOnce(jsonResponse(responseEnvelope()));
+    expect((await client.detect(request)).run).toMatchObject(request);
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await client.deletePage(page.page_id);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "https://roof-api.onrender.com/api/roi/v1/health",
+      "https://roof-api.onrender.com/api/roi/v1/pages",
+      `https://roof-api.onrender.com/api/roi/v1/pages/${page.page_id}/detections`,
+      `https://roof-api.onrender.com/api/roi/v1/pages/${page.page_id}`,
+    ]);
+    const authorizations = fetcher.mock.calls.map(([, init]) => (init.headers as Record<string, string>).Authorization);
+    expect(authorizations[0]).toMatch(/^Bearer [a-f0-9]{64}$/);
+    expect(new Set(authorizations).size).toBe(1);
+    expect(fetcher.mock.calls.every(([, init]) => init.credentials === "omit" && init.redirect === "error")).toBe(true);
+  });
+
+  it.each([
+    "https://roof-api.onrender.com", "https://api.example.com:8443/",
+    "http://localhost:8091", "http://127.0.0.1:8091/", "http://[::1]:8091",
+  ])("accepts the API origin %s", async (baseUrl) => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ status: "ready", model: "gemini-4-argon", mode: "public" }));
+    const client = createRoiClient({ enabled: true, baseUrl, fetch: fetcher });
+    await expect(client.health()).resolves.toMatchObject({ status: "ready" });
+    expect(fetcher).toHaveBeenCalledWith(`${new URL(baseUrl).origin}/api/roi/v1/health`, expect.anything());
+  });
+
+  it.each([
+    "http://roof-api.onrender.com", "http://127.0.0.2:8091", "ftp://api.example.com",
+    "https://user:password@api.example.com", "https://@api.example.com",
+    "https://api.example.com/api/roi/v1", "https://api.example.com/?key=value",
+    "https://api.example.com/#fragment", "https://api.example.com?", "https://api.example.com#",
+    "https://api.example.com/..", "https://api.example.com\\", "/api", "", "not-a-url",
+  ])("rejects insecure or non-origin API configuration %s before networking", async (baseUrl) => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = createRoiClient({ enabled: true, baseUrl, fetch: fetcher });
+    await expect(client.health()).rejects.toMatchObject({ code: "invalid_configuration" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown service mode in health responses", async () => {
+    const { client, fetcher } = setup();
+    fetcher.mockResolvedValueOnce(jsonResponse({ status: "ready", model: "gemini-4-argon", mode: "unknown" }));
+    await expect(client.health()).rejects.toMatchObject({ code: "invalid_contract" });
+  });
+
   it("rejects inconsistent models between a detection and its run", async () => {
     const { fetcher, client } = setup();
     const envelope = responseEnvelope();
@@ -162,7 +218,7 @@ describe("isolated ROI client", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("times out, deletes explicitly, and rejects remote configuration", async () => {
+  it("times out and deletes explicitly", async () => {
     vi.useFakeTimers();
     const fetcher = vi.fn<typeof fetch>().mockImplementation((_url, init) => new Promise((_resolve, reject) => {
       init.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
@@ -174,8 +230,6 @@ describe("isolated ROI client", () => {
     fetcher.mockResolvedValueOnce(new Response(null, { status: 204 }));
     await client.deletePage("page-1");
     expect(fetcher.mock.lastCall[1].method).toBe("DELETE");
-    const remote = createRoiClient({ enabled: true, baseUrl: "https://unreviewed.example", fetch: fetcher });
-    await expect(remote.health()).rejects.toMatchObject({ code: "invalid_configuration" });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 

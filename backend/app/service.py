@@ -16,6 +16,7 @@ from .models import Annotation, DetectionInput, DetectionResponse, DetectionRun,
 from .outline_models import CachedOutline, OutlineResponse
 from .outlet_models import CachedOutlets, OutletResponse
 from .parsing import parse_proposals
+from .storage import StateStore
 
 
 logger = logging.getLogger("roi_app.detections")
@@ -51,6 +52,9 @@ class Operation:
     key: str
     upload_id: str
     task: asyncio.Task[DetectionResponse | OutlineResponse | OutletResponse] | None
+    response: DetectionResponse | OutlineResponse | OutletResponse | None = None
+    error: tuple[str, int, bool] | None = None
+    interrupted: bool = False
 
 
 @dataclass
@@ -62,14 +66,176 @@ class Session:
 
 
 class RoiService:
-    def __init__(self, settings: Settings, provider: Provider, clock: Callable[[], float] = time.monotonic):
+    def __init__(self, settings: Settings, provider: Provider, clock: Callable[[], float] = time.monotonic,
+                 wall_clock: Callable[[], float] = time.time):
         self.settings = settings
         self.provider = provider
         self.clock = clock
+        self.wall_clock = wall_clock
         self.sessions: dict[str, Session] = {}
         self.active_calls = 0
         self.total_calls = 0
+        self.call_times: list[float] = []
         self.tasks: set[asyncio.Task] = set()
+        self.store = StateStore(settings.state_path) if settings.state_path else None
+        if self.store:
+            try:
+                self.restore()
+                self.cleanup()
+            except Exception:
+                self.store.close()
+                raise RuntimeError("ROI persistent state could not be loaded") from None
+
+    def persist(self) -> None:
+        if self.store is None:
+            return
+        offset = self.wall_clock() - self.clock()
+        images = {}
+        sessions = {}
+        for owner, session in self.sessions.items():
+            pages = {}
+            for page_id, page in session.pages.items():
+                images[page.upload_id] = (page.image.original, page.image.png)
+                pages[page_id] = {
+                    "context": page.context.model_dump(mode="json"), "expires": page.expires + offset,
+                    "upload_id": page.upload_id, "follow_ups": page.follow_ups,
+                    "image": {name: getattr(page.image, name) for name in (
+                        "source_hash", "width", "height", "inference_width", "inference_height")},
+                    "cache": {key: {"annotations": [item.model_dump(mode="json") for item in value.annotations],
+                                    "status": value.status, "warnings": value.warnings, "expires": value.expires + offset}
+                              for key, value in page.cache.items()},
+                    "outline_cache": {key: {"response": value.response.model_dump(mode="json"), "expires": value.expires + offset}
+                                      for key, value in page.outline_cache.items()},
+                    "outlet_cache": {key: {"response": value.response.model_dump(mode="json"), "expires": value.expires + offset}
+                                     for key, value in page.outlet_cache.items()},
+                }
+            operations = {}
+            for request_id, operation in session.operations.items():
+                response = operation.response
+                kind = ("detection" if isinstance(response, DetectionResponse) else "outline"
+                        if isinstance(response, OutlineResponse) else "outlet") if response is not None else None
+                operations[request_id] = {
+                    "fingerprint": operation.fingerprint, "key": operation.key, "upload_id": operation.upload_id,
+                    "response_kind": kind, "response": response.model_dump(mode="json") if response is not None else None,
+                    "error": operation.error, "interrupted": operation.interrupted or operation.task is not None
+                    and response is None and operation.error is None,
+                }
+            sessions[owner] = {"expires": session.expires + offset, "calls": session.calls,
+                               "pages": pages, "operations": operations}
+        self.store.save({"version": 1, "total_calls": self.total_calls,
+                         "call_times": [stamp + offset for stamp in self.call_times], "sessions": sessions}, images)
+
+    def restore(self) -> None:
+        payload, images = self.store.load()
+        if payload is None:
+            return
+        if payload["version"] != 1:
+            raise ValueError("unsupported_state_version")
+        offset = self.clock() - self.wall_clock()
+        self.call_times = [stamp + offset for stamp in payload["call_times"]]
+        self.total_calls = len(self.call_times)
+        response_types = {"detection": DetectionResponse, "outline": OutlineResponse, "outlet": OutletResponse}
+        for owner, stored_session in payload["sessions"].items():
+            session = Session(stored_session["expires"] + offset, calls=stored_session["calls"])
+            self.sessions[owner] = session
+            for page_id, stored in stored_session["pages"].items():
+                original, png = images[stored["upload_id"]]
+                page = PageRecord(PageContext.model_validate(stored["context"]), PreparedImage(original, png, **stored["image"]),
+                                  stored["expires"] + offset, upload_id=stored["upload_id"], follow_ups=stored["follow_ups"])
+                page.cache = {key: CachedProposals([Annotation.model_validate(item) for item in value["annotations"]],
+                                                  value["status"], value["warnings"], value["expires"] + offset)
+                              for key, value in stored["cache"].items()}
+                page.outline_cache = {key: CachedOutline(OutlineResponse.model_validate(value["response"]), value["expires"] + offset)
+                                      for key, value in stored["outline_cache"].items()}
+                page.outlet_cache = {key: CachedOutlets(OutletResponse.model_validate(value["response"]), value["expires"] + offset)
+                                     for key, value in stored["outlet_cache"].items()}
+                session.pages[page_id] = page
+            for request_id, stored in stored_session["operations"].items():
+                response = (response_types[stored["response_kind"]].model_validate(stored["response"])
+                            if stored["response"] is not None else None)
+                session.operations[request_id] = Operation(
+                    stored["fingerprint"], stored["key"], stored["upload_id"], None,
+                    response=response, error=tuple(stored["error"]) if stored["error"] else None,
+                    interrupted=stored["interrupted"],
+                )
+
+    def refresh_budget(self) -> bool:
+        cutoff = self.clock() - self.settings.call_budget_window_seconds
+        self.call_times = [stamp for stamp in self.call_times if stamp > cutoff]
+        changed = self.total_calls != len(self.call_times)
+        self.total_calls = len(self.call_times)
+        return changed
+
+    def budget_available(self, session: Session) -> bool:
+        self.refresh_budget()
+        return session.calls < self.settings.max_calls_per_session and self.total_calls < self.settings.max_total_calls
+
+    def reserve_call(self, session: Session) -> None:
+        if not self.budget_available(session):
+            raise RoiError("call_budget_exceeded", 429)
+        session.calls += 1
+        self.call_times.append(self.clock())
+        self.total_calls = len(self.call_times)
+        # Commit before sending provider traffic; crashes must not refund paid calls.
+        self.persist()
+
+    def completed_response(self, operation: Operation):
+        if operation.response is not None:
+            return operation.response
+        task = operation.task
+        if task is not None and task.done() and not task.cancelled() and task.exception() is None:
+            return task.result()
+        return None
+
+    async def replay_operation(self, operation: Operation, session: Session, page: PageRecord):
+        if operation.task is not None:
+            return await self.wait_for(operation.task, session, page)
+        if operation.response is not None:
+            return operation.response.model_copy(deep=True)
+        if operation.error is not None:
+            raise RoiError(*operation.error)
+        if operation.interrupted:
+            raise RoiError("request_interrupted", 409)
+        raise RoiError("page_not_found", 404)
+
+    def start_operation(self, session: Session, page: PageRecord, request_id: str, fingerprint: str,
+                        key: str, execute, uses_slot: bool):
+        operation = Operation(fingerprint, key, page.upload_id, None, interrupted=True)
+        session.operations[request_id] = operation
+        try:
+            self.persist()
+        except Exception:
+            del session.operations[request_id]
+            if uses_slot:
+                self.active_calls -= 1
+            raise
+
+        async def run():
+            try:
+                response = await execute()
+                operation.response = response.model_copy(deep=True)
+                operation.interrupted = False
+                return response
+            except RoiError as error:
+                operation.error = (error.code, error.status, error.retryable)
+                operation.interrupted = False
+                raise
+            finally:
+                self.persist()
+
+        task = asyncio.create_task(run())
+        operation.task = task
+        self.tasks.add(task)
+
+        def release_slot(finished):
+            self.tasks.discard(finished)
+            if uses_slot:
+                self.active_calls -= 1
+            if not finished.cancelled():
+                finished.exception()
+
+        task.add_done_callback(release_slot)
+        return task
 
     def remove_page(self, session: Session, page_id: str) -> None:
         page = session.pages.pop(page_id)
@@ -77,22 +243,33 @@ class RoiService:
         page.outline_cache.clear()
         page.outlet_cache.clear()
         for operation in session.operations.values():
-            if operation.upload_id == page.upload_id and operation.task is not None:
-                operation.task.cancel()
+            if operation.upload_id == page.upload_id:
+                if operation.task is not None:
+                    operation.task.cancel()
                 operation.task = None
+                operation.response = None
+                operation.error = None
+                operation.interrupted = False
 
     def cleanup(self) -> None:
         now = self.clock()
+        changed = self.refresh_budget()
         for owner, session in list(self.sessions.items()):
             for page_id, page in list(session.pages.items()):
                 if page.expires <= now or session.expires <= now:
                     self.remove_page(session, page_id)
+                    changed = True
                 else:
+                    count = len(page.cache) + len(page.outline_cache) + len(page.outlet_cache)
                     page.cache = {key: cached for key, cached in page.cache.items() if cached.expires > now}
                     page.outline_cache = {key: cached for key, cached in page.outline_cache.items() if cached.expires > now}
                     page.outlet_cache = {key: cached for key, cached in page.outlet_cache.items() if cached.expires > now}
+                    changed |= count != len(page.cache) + len(page.outline_cache) + len(page.outlet_cache)
             if session.expires <= now:
                 del self.sessions[owner]
+                changed = True
+        if changed:
+            self.persist()
 
     def upload(self, owner: str, context: PageContext, image: PreparedImage) -> dict:
         self.cleanup()
@@ -119,6 +296,7 @@ class RoiService:
         page = PageRecord(context.model_copy(deep=True), image,
                           min(session.expires, self.clock() + self.settings.page_ttl_seconds))
         session.pages[context.page_id] = page
+        self.persist()
         return self.receipt(page)
 
     def receipt(self, page: PageRecord) -> dict:
@@ -135,6 +313,7 @@ class RoiService:
     def delete(self, owner: str, page_id: str) -> None:
         session, _page = self.get_page(owner, page_id)
         self.remove_page(session, page_id)
+        self.persist()
 
     def inference_settings(self, page: PageRecord) -> dict:
         return {**self.settings.generation_settings, "max_image_side": 1024,
@@ -157,9 +336,7 @@ class RoiService:
         if existing is not None:
             if existing.fingerprint != fingerprint or existing.upload_id != page.upload_id:
                 raise RoiError("request_identity_conflict", 409)
-            if existing.task is None:
-                raise RoiError("page_not_found", 404)
-            return await self.wait_for(existing.task, session, page)
+            return await self.replay_operation(existing, session, page)
         if len(session.operations) >= self.settings.max_requests_per_session:
             raise RoiError("request_limit_exceeded", 429)
         prompt = make_prompt(request.task, request.accepted_rois, self.settings.max_annotations)
@@ -172,15 +349,15 @@ class RoiService:
         cached = page.cache.get(key)
         if request.follow_up_of is not None:
             previous = session.operations.get(request.follow_up_of)
+            previous_response = self.completed_response(previous) if previous is not None else None
             if (previous is None or previous.upload_id != page.upload_id or previous.key != key
-                    or previous.task is None or not previous.task.done() or previous.task.cancelled()
-                    or previous.task.exception() is not None or previous.task.result().status != "partial"):
+                    or previous_response is None or previous_response.status != "partial"):
                 raise RoiError("invalid_follow_up", 409)
             if page.follow_ups >= 1:
                 raise RoiError("follow_up_limit_exceeded", 429)
             prompt += "\nReturn additional missed objects only. Previously proposed objects: " + json.dumps([
                 {"label": annotation.label, "box_2d": annotation.box_2d, "roi_id": annotation.roi_id}
-                for annotation in previous.task.result().annotations
+                for annotation in previous_response.annotations
             ], separators=(",", ":"))
             settings["follow_up_of"] = request.follow_up_of
             settings["prompt_hash"] = sha256((SYSTEM_PROMPT + prompt).encode()).hexdigest()
@@ -190,23 +367,14 @@ class RoiService:
                 raise RoiError("provider_not_configured", 503)
             if self.active_calls >= self.settings.max_concurrent_requests:
                 raise RoiError("concurrency_limit_exceeded", 429)
-            if session.calls >= self.settings.max_calls_per_session or self.total_calls >= self.settings.max_total_calls:
+            if not self.budget_available(session):
                 raise RoiError("call_budget_exceeded", 429)
             self.active_calls += 1
         if request.follow_up_of is not None:
             page.follow_ups += 1
-        task = asyncio.create_task(self.execute(session, page, request.model_copy(deep=True), key, prompt, settings, cached))
-        self.tasks.add(task)
-
-        def release_slot(finished):
-            self.tasks.discard(finished)
-            if cached is None:
-                self.active_calls -= 1
-            if not finished.cancelled():
-                finished.exception()
-
-        task.add_done_callback(release_slot)
-        session.operations[request.request_id] = Operation(fingerprint, key, page.upload_id, task)
+        task = self.start_operation(session, page, request.request_id, fingerprint, key,
+                                    lambda: self.execute(session, page, request.model_copy(deep=True), key, prompt, settings, cached),
+                                    cached is None)
         return await self.wait_for(task, session, page)
 
     async def wait_for(self, task: asyncio.Task, session: Session, page: PageRecord) -> DetectionResponse | OutlineResponse | OutletResponse:
@@ -224,8 +392,7 @@ class RoiService:
         if error.retryable:
             return True
         # Malformed output is usually a sampling glitch; never trade it for a budget error.
-        return (error.code == "malformed_output" and session.calls < self.settings.max_calls_per_session
-                and self.total_calls < self.settings.max_total_calls)
+        return error.code == "malformed_output" and self.budget_available(session)
 
     async def execute(self, session: Session, page: PageRecord, request: DetectionInput, key: str,
                       prompt: str, settings: dict, cached: CachedProposals | None) -> DetectionResponse:
@@ -237,11 +404,7 @@ class RoiService:
             if result is None:
                 async with asyncio.timeout(self.settings.timeout_seconds):
                     while True:
-                        if (session.calls >= self.settings.max_calls_per_session
-                                or self.total_calls >= self.settings.max_total_calls):
-                            raise RoiError("call_budget_exceeded", 429)
-                        session.calls += 1
-                        self.total_calls += 1
+                        self.reserve_call(session)
                         attempts += 1
                         finish_reason, response_chars = "unavailable", None
                         try:
@@ -306,5 +469,11 @@ class RoiService:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        self.sessions.clear()
-        await self.provider.close()
+        try:
+            self.persist()
+        finally:
+            if self.store is not None:
+                self.store.close()
+                self.store = None
+            self.sessions.clear()
+            await self.provider.close()
