@@ -146,7 +146,7 @@ export const PaintBucketCanvas = ({
     const outlines = extractMultipleOutlines(mask, w, h, allowedMaskRef.current);
     const holes = onHolesExtracted || rectangleCutsRef.current.length
       ? extractInteriorHoles(mask, w, h, 200, allowedMaskRef.current) : [];
-    // Outline cleanup expands pixel masks. Reapply explicit rectangles to keep those cuts exact.
+    // Outline cleanup closes narrow gaps in pixel masks. Reapply explicit rectangles to keep those cuts exact.
     const result = subtractRectangles(outlines, holes, rectangleCutsRef.current);
     onOutlinesExtracted(result.outlines);
     interiorHolesRef.current = result.holes;

@@ -527,7 +527,7 @@ export function extractMultipleOutlines(mask: Uint8Array, width: number, height:
  */
 export function extractInteriorHoles(mask: Uint8Array, width: number, height: number, minHoleSize: number = 200,
   allowedMask?: Uint8Array): Point[][] {
-  // Use the same merged/dilated mask as outline extraction so thin gaps
+  // Use the same merged/closed mask as outline extraction so thin gaps
   // around penetrations are sealed and holes are properly detected as interior.
   const mergedMask = createOutlineMergeMask(mask, width, height, allowedMask);
   const size = width * height;
@@ -594,44 +594,13 @@ function createOutlineMergeMask(mask: Uint8Array, width: number, height: number,
   // Bridge thin gaps between adjacent filled areas
   bridgeThinGaps(merged, width, height, 10, "horizontal");
   bridgeThinGaps(merged, width, height, 10, "vertical");
-  // Dilate to merge nearby components more aggressively
-  dilate(merged, width, height, 5);
+  // Close rather than dilate: nearby components still merge, but the outer
+  // boundary stays on the fill edge instead of growing onto the drawn lines.
+  morphologicalCloseSeparable(merged, width, height, 5);
   // Fill small internal holes left by bridging
   fillSmallHoles(merged, width, height, 1500);
   restrictToMask(merged, allowedMask);
   return merged;
-}
-
-function dilate(mask: Uint8Array, width: number, height: number, radius: number): void {
-  const size = width * height;
-  const temp = new Uint8Array(size);
-
-  // Horizontal pass
-  for (let y = 0; y < height; y++) {
-    const row = y * width;
-    let count = 0;
-    for (let x = 0; x <= radius && x < width; x++) count += mask[row + x];
-    for (let x = 0; x < width; x++) {
-      temp[row + x] = count > 0 ? 1 : 0;
-      const rx = x + radius + 1;
-      if (rx < width) count += mask[row + rx];
-      const lx = x - radius;
-      if (lx >= 0) count -= mask[row + lx];
-    }
-  }
-
-  // Vertical pass
-  for (let x = 0; x < width; x++) {
-    let count = 0;
-    for (let y = 0; y <= radius && y < height; y++) count += temp[y * width + x];
-    for (let y = 0; y < height; y++) {
-      mask[y * width + x] = count > 0 ? 1 : 0;
-      const ry = y + radius + 1;
-      if (ry < height) count += temp[ry * width + x];
-      const ly = y - radius;
-      if (ly >= 0) count -= temp[ly * width + x];
-    }
-  }
 }
 
 function bridgeThinGaps(

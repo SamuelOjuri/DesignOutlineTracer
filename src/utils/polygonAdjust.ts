@@ -431,7 +431,7 @@ function lineLineIntersection(
 
 /**
  * Rasterize a polygon into a mask using scanline fill.
- * Sets mask[y * width + x] = 1 for all pixels inside the polygon.
+ * Sets mask[y * width + x] = 1 for all pixels whose centre lies inside the polygon.
  */
 export function rasterizePolygon(
   polygon: Point[],
@@ -453,25 +453,26 @@ export function rasterizePolygon(
   const n = polygon.length;
 
   for (let y = minY; y <= maxY; y++) {
-    // Find all x-intersections with polygon edges
+    // Sample pixel centres. Traced outlines lie on pixel edges, so this reproduces
+    // their pixels exactly instead of growing them on each re-rasterization.
+    const sampleY = y + 0.5;
     const intersections: number[] = [];
     for (let i = 0; i < n; i++) {
       const p1 = polygon[i];
       const p2 = polygon[(i + 1) % n];
       const y1 = p1.y, y2 = p2.y;
 
-      if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
-        const x = p1.x + ((y - y1) / (y2 - y1)) * (p2.x - p1.x);
+      if ((y1 <= sampleY && y2 > sampleY) || (y2 <= sampleY && y1 > sampleY)) {
+        const x = p1.x + ((sampleY - y1) / (y2 - y1)) * (p2.x - p1.x);
         intersections.push(x);
       }
     }
 
     intersections.sort((a, b) => a - b);
 
-    // Fill between pairs
     for (let i = 0; i < intersections.length - 1; i += 2) {
-      const xStart = Math.max(0, Math.ceil(intersections[i]));
-      const xEnd = Math.min(width - 1, Math.floor(intersections[i + 1]));
+      const xStart = Math.max(0, Math.ceil(intersections[i] - 0.5));
+      const xEnd = Math.min(width - 1, Math.ceil(intersections[i + 1] - 0.5) - 1);
       for (let x = xStart; x <= xEnd; x++) {
         mask[y * width + x] = 1;
       }

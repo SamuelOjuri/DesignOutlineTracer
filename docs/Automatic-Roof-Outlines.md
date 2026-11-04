@@ -21,7 +21,7 @@ separate from the editable drawing until **Use outline** is selected.
 4. Review the proposal. If replacing existing geometry, explicitly select the
    outlines to replace. Unselected roofs are preserved and overlapping additions
    are rejected. **Use outline** installs the polygons directly, without passing
-   them through the manual fill tool's dilation/contour cleanup.
+   them through the manual fill tool's gap-closing/contour cleanup.
 5. **Undo generated outline** restores the preceding drawing in one action,
    while that application remains the latest page edit. Further manual edits
    use the existing canvas Undo. Existing adjustment tools remain available.
