@@ -28,9 +28,9 @@ describe("TRICS prompt", () => {
     expect(prompt).not.toMatch(/conflict/i);
     expect(prompt).not.toContain("reconciled");
     expect(prompt).toContain("| Roof area 1 | 600 | 591 | 100 |");
-    expect(prompt).toContain("| Outlet 1 | Roof area 1 | 10000 | 10000 | 150 | no (application default) |");
+    expect(prompt).toContain("| Outlet 1 | Roof area 1 | 10000 | 10000 | 120 | no (application default) |");
     expect(prompt).toContain("Roof area 1, edge 2: (30000, 20000) to (30000, 0), 20 m.");
-    expect(prompt).toContain("unconfirmed 150 mm application default");
+    expect(prompt).toContain("unconfirmed 120 mm application default");
   });
 
   it("states when no specification document was supplied", () => {

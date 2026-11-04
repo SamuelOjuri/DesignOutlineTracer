@@ -12,6 +12,8 @@ interface RoofIllustrationCanvasProps {
   interiorHoles?: Point[][];
   outlets: Outlet[];
   drainageEdges: DrainageEdge[];
+  /** Real-world millimetres per drawing unit; outlets are drawn at their diameter when provided. */
+  mmPerPixel?: number;
   /** Enables dragging; receives the dragged group and its movement since the previous call, in drawing units. */
   onMoveGroup?: (group: string, delta: Point) => void;
   /** Shown as Reset layout while dragging is enabled; the button is disabled when this is omitted. */
@@ -25,6 +27,7 @@ export const RoofIllustrationCanvas = ({
   interiorHoles = [],
   outlets,
   drainageEdges,
+  mmPerPixel,
   onMoveGroup,
   onResetLayout,
 }: RoofIllustrationCanvasProps) => {
@@ -129,9 +132,9 @@ export const RoofIllustrationCanvas = ({
     const activeGroup = draggingGroup ?? hoveredGroup;
     const hoveredOutlines = activeGroup === null ? []
       : outlineGroups.flatMap((group, index) => group === activeGroup ? [index] : []);
-    drawRoofIllustration(ctx, { roofOutlines, outlineIds, interiorHoles, outlets, drainageEdges },
+    drawRoofIllustration(ctx, { roofOutlines, outlineIds, interiorHoles, outlets, drainageEdges, mmPerPixel },
       { offset: getOffset(), width: canvas.width, height: canvas.height, displayScale, hoveredOutlines });
-  }, [roofOutlines, outlineIds, outlineGroups, outlets, drainageEdges, getOffset, hoveredGroup, draggingGroup, interiorHoles, displayScale]);
+  }, [roofOutlines, outlineIds, outlineGroups, outlets, drainageEdges, mmPerPixel, getOffset, hoveredGroup, draggingGroup, interiorHoles, displayScale]);
 
   const groupAt = useCallback((e: React.MouseEvent<HTMLCanvasElement>): string | null => {
     const pos = getCanvasPos(e);

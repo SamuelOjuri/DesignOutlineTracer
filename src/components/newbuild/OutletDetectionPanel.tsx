@@ -6,6 +6,7 @@ import { outletSubtypes } from "@/types/outlet";
 import type { RoiSessionAction } from "@/utils/roiSession";
 import { activePageOutlets, outletAssociation, outletScopes } from "@/utils/outletScope";
 import { boxToSource } from "@/utils/roiCoordinates";
+import { DEFAULT_OUTLET_DIAMETER_M, DEFAULT_OUTLET_DIAMETER_MM } from "@/utils/outletDefaults";
 import type { useOutletDetection } from "@/hooks/useOutletDetection";
 import { SERVICE_RESTART_MESSAGE, SERVICE_RESTART_RETRYING } from "@/integrations/roi/serviceRestart";
 
@@ -59,7 +60,7 @@ function OutletCorrections({ page, annotation, dispatch }: {
 }) {
   const [x, setX] = useState(String(annotation.anchor?.x ?? ""));
   const [y, setY] = useState(String(annotation.anchor?.y ?? ""));
-  const [diameter, setDiameter] = useState(String(Math.round((annotation.diameter ?? 0.15) * 1000)));
+  const [diameter, setDiameter] = useState(String(Math.round((annotation.diameter ?? DEFAULT_OUTLET_DIAMETER_M) * 1000)));
   const [error, setError] = useState<string | null>(null);
   const review = (patch: Extract<RoiSessionAction, { type: "outlet-review" }>["patch"]) =>
     dispatch({ type: "outlet-review", page_id: page.source.page_id, id: annotation.id, patch });
@@ -121,8 +122,8 @@ function OutletCorrections({ page, annotation, dispatch }: {
           onChange={event => setDiameter(event.target.value)} className="mt-1 w-full rounded-md border border-input p-2" />
       </label>
       <p className="text-xs text-muted-foreground">{annotation.diameter_confirmed
-        ? "Size confirmed by you. Marker display size is independent of diameter."
-        : "150 mm is the application default, not a size measured from the drawing. Confirm or change it if known."}</p>
+        ? "Size confirmed by you. Project Details draws the outlet at this diameter; the review marker here keeps a fixed screen size."
+        : `${DEFAULT_OUTLET_DIAMETER_MM} mm is the application default, not a size measured from the drawing. Confirm or change it if known.`}</p>
       <Button variant="outline" size="sm" onClick={() => {
         const millimetres = Number(diameter);
         if (!diameter.trim() || !Number.isFinite(millimetres) || millimetres < 50 || millimetres > 1000) {
@@ -195,7 +196,7 @@ export function OutletDetectionPanel({ page, selectedId, onSelect, onModeChange,
     {selected && <div className="space-y-2 rounded-md border border-border p-3">
       <p className="text-sm font-medium">{selected.label}</p>
       {selected.evidence && <p className="text-xs text-muted-foreground">{selected.evidence}</p>}
-      <p className="text-xs text-muted-foreground">The magenta marker locates the inlet centre. Its display size is independent of the outlet diameter.</p>
+      <p className="text-xs text-muted-foreground">The magenta marker locates the inlet centre. Its display size is independent of the outlet diameter. Project Details draws each outlet at its diameter.</p>
       {associationError && <p role="alert" className="text-sm text-destructive">{associationError}</p>}
       {warnings.length > 0 && <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
         {warnings.map(warning => <li key={warning}>{warning}</li>)}

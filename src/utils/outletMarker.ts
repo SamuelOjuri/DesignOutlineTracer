@@ -121,6 +121,29 @@ export function outletMarkerGeometries(outlets: readonly MarkerOutlet[], outline
   });
 }
 
+/** Project Details and its drawing PNG: each circle is the outlet's real diameter at the plan scale.
+ * mmPerUnit converts drawing units to millimetres. A small outlet keeps the compact 12 CSS-pixel
+ * footprint so it never disappears; without a usable scale or diameter the review marker is used.
+ * Anchors and containment status are unchanged; strokes stay thin at every zoom.
+ */
+export function physicalOutletMarkerGeometries(outlets: readonly (MarkerOutlet & { diameter?: number })[],
+  outlines: Point[][], holes: Point[][], displayScale: number, mmPerUnit: number | undefined,
+  outlineIds: string[] = [], boundaryStrokeWidth = 3): OutletMarkerGeometry[] {
+  const review = outletMarkerGeometries(outlets, outlines, holes, displayScale, outlineIds, boundaryStrokeWidth);
+  if (!(typeof mmPerUnit === "number" && Number.isFinite(mmPerUnit) && mmPerUnit > 0)) return review;
+  const scale = Number.isFinite(displayScale) && displayScale > 0 ? displayScale : 1;
+  return review.map((geometry, index) => {
+    const diameter = outlets[index].diameter;
+    if (!(typeof diameter === "number" && Number.isFinite(diameter) && diameter > 0)) return geometry;
+    const radius = diameter * 1000 / mmPerUnit / 2;
+    const ratio = Math.min(1, Math.max(OUTLET_MIN_SCREEN_RADIUS, radius * scale) / OUTLET_SCREEN_RADIUS);
+    const haloWidth = 4 * ratio / scale;
+    const circleRadius = Math.max(radius, OUTLET_MIN_SCREEN_RADIUS / scale - haloWidth / 2);
+    return { ...geometry, outerRadius: circleRadius + haloWidth / 2, circleRadius,
+      crosshairRadius: circleRadius / 2, strokeWidth: 2 * ratio / scale, haloWidth };
+  });
+}
+
 /** Angular gap at each diagonal of a pending marker's broken ring. */
 export const PENDING_RING_GAP = Math.PI / 5;
 

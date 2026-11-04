@@ -7,6 +7,7 @@ import { OutletControls } from "./OutletControls";
 import { PenetrationControls } from "./PenetrationControls";
 import { ProjectDetailsForm } from "./ProjectDetailsForm";
 import { emptyProjectDetails } from "@/lib/projectDetailsFields";
+import { DEFAULT_OUTLET_DIAMETER_M } from "@/utils/outletDefaults";
 import {
   RoofOutline,
   Outlet,
@@ -34,7 +35,7 @@ export const RoofDrawingApp = () => {
       id: `outlet-${Date.now()}`,
       x,
       y,
-      diameter: 0.15, // 0.15m (150mm)
+      diameter: DEFAULT_OUTLET_DIAMETER_M,
     };
     setOutlets([...outlets, newOutlet]);
   };

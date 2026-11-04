@@ -46,10 +46,10 @@ describe("outlet review controls", () => {
     const callbacks = props();
     render(<OutletDetectionPanel {...callbacks} />);
     await user.click(screen.getByText("Correct position, type or size"));
-    expect(screen.getByText(/150 mm is the application default, not a size measured/)).toBeVisible();
+    expect(screen.getByText(/120 mm is the application default, not a size measured/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Confirm diameter" }));
     expect(callbacks.dispatch).toHaveBeenCalledWith({ type: "outlet-review", page_id: "page-1", id: "outlet-annotation-1",
-      patch: { diameter: 0.15, diameter_confirmed: true } });
+      patch: { diameter: 0.12, diameter_confirmed: true } });
     await user.click(screen.getByRole("button", { name: "Add manually" }));
     expect(callbacks.onModeChange).toHaveBeenCalledWith("add-outlets");
   });

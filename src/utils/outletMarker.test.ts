@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { drawOutletMarker, outletMarkerGeometry, outletMarkerGeometries, PENDING_RING_GAP } from "./outletMarker";
+import { drawOutletMarker, OUTLET_MIN_SCREEN_RADIUS, outletMarkerGeometry, outletMarkerGeometries, PENDING_RING_GAP,
+  physicalOutletMarkerGeometries } from "./outletMarker";
 import { mockCanvasContext } from "@/test/canvas";
 
 const rectangle = (left: number, top: number, right: number, bottom: number) => [
@@ -216,6 +217,38 @@ describe("uniform reviewed outlet markers", () => {
     const markers = outletMarkerGeometries(outlets, [roof], [], 1, ["roof-a"]);
     expect(markers.map(marker => marker.outerRadius)).toEqual([6, 6, 6]);
     expect(markers[2].status).toBe("boundary");
+    expect(JSON.stringify(outlets)).toBe(original);
+  });
+});
+
+describe("physical outlet markers (Project Details)", () => {
+  it("draws the real diameter at the plan scale, independent of zoom", () => {
+    const outlet = { x: 200, y: 200, diameter: 0.12 };
+    for (const scale of [1, 3]) {
+      const [marker] = physicalOutletMarkerGeometries([outlet], [roof], [], scale, 8.8);
+      expect(marker.circleRadius).toBeCloseTo(120 / 8.8 / 2);
+      expect(marker.crosshairRadius).toBeCloseTo(marker.circleRadius / 2);
+      expect(marker.outerRadius).toBeCloseTo(marker.circleRadius + marker.haloWidth / 2);
+      expect(marker.status).toBe("interior");
+    }
+  });
+
+  it("keeps the compact 12 CSS-pixel footprint for outlets too small to see", () => {
+    const [marker] = physicalOutletMarkerGeometries([{ x: 200, y: 200, diameter: 0.12 }], [roof], [], 0.5, 35);
+    expect(marker.outerRadius * 0.5).toBeCloseTo(OUTLET_MIN_SCREEN_RADIUS);
+  });
+
+  it("sizes each outlet by its own diameter and falls back to the review marker without a scale or size", () => {
+    const outlets = [{ x: 200, y: 200, diameter: 0.12 }, { x: 100, y: 100, diameter: 0.3 },
+      { x: 600, y: 600, diameter: 0.12 }, { x: 300, y: 300 }];
+    const original = JSON.stringify(outlets);
+    const review = outletMarkerGeometries(outlets, [roof], [], 1);
+    const markers = physicalOutletMarkerGeometries(outlets, [roof], [], 1, 10);
+    expect(markers[0].circleRadius).toBeCloseTo(6);
+    expect(markers[1].circleRadius).toBeCloseTo(15);
+    expect(markers[2]).toMatchObject({ status: "outside", circleRadius: 6 });
+    expect(markers[3]).toEqual(review[3]);
+    expect(physicalOutletMarkerGeometries(outlets, [roof], [], 1, 0)).toEqual(review);
     expect(JSON.stringify(outlets)).toBe(original);
   });
 });

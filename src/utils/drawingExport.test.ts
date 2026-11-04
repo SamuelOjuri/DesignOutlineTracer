@@ -12,7 +12,7 @@ describe("roof drawing export", () => {
       outline: [{ x: 0, y: 20000 }, { x: 30000, y: 20000 }, { x: 30000, y: 0 }, { x: 0, y: 0 }],
       gross_area_m2: 600, net_area_m2: 591, perimeter_m: 100 });
     expect(model.openings[0]).toMatchObject({ kind: "cutout", label: "Cutout 1", roof_area_id: "outline-page-1", area_m2: 9 });
-    expect(model.outlets[0]).toMatchObject({ label: "Outlet 1", position: { x: 10000, y: 10000 }, diameter_mm: 150,
+    expect(model.outlets[0]).toMatchObject({ label: "Outlet 1", position: { x: 10000, y: 10000 }, diameter_mm: 120,
       diameter_confirmed: false, origin: "manual", roof_area_id: "outline-page-1" });
     expect(model.drainage_edges[0]).toMatchObject({ roof_area_id: "outline-page-1", edge_index: 1,
       start: { x: 30000, y: 20000 }, end: { x: 30000, y: 0 }, length_m: 20 });
@@ -20,7 +20,7 @@ describe("roof drawing export", () => {
     expect(model.totals).toEqual({ roof_areas: 1, gross_area_m2: 600, net_area_m2: 591, penetrations: 0, cutouts: 1,
       outlets: 1, unconfirmed_outlet_diameters: 1, drainage_edges: 1 });
     expect(model.notes.join(" ")).toContain("A1 @ 1:100");
-    expect(model.notes.join(" ")).toContain("unconfirmed 150 mm");
+    expect(model.notes.join(" ")).toContain("unconfirmed 120 mm");
   });
 
   it("follows the Project Details page offsets and notes multi-page arrangement", () => {
@@ -72,7 +72,7 @@ describe("roof drawing export", () => {
     expect(values.filter(value => value === "VERTEX")).toHaveLength(8);
     expect(values.filter(value => value === "CIRCLE")).toHaveLength(1);
     expect(values.filter(value => value === "LINE")).toHaveLength(1);
-    expect(dxf).toContain("CIRCLE\r\n  8\r\nOUTLETS_UNCONFIRMED\r\n 10\r\n10000\r\n 20\r\n10000\r\n 30\r\n0\r\n 40\r\n75");
+    expect(dxf).toContain("CIRCLE\r\n  8\r\nOUTLETS_UNCONFIRMED\r\n 10\r\n10000\r\n 20\r\n10000\r\n 30\r\n0\r\n 40\r\n60");
     expect(values[values.length - 1]).toBe("EOF");
   });
 
@@ -81,7 +81,7 @@ describe("roof drawing export", () => {
     const svg = roofExportSvg(model);
     expect(svg).toContain('width="31800mm" height="21800mm" viewBox="-900 -900 31800 21800"');
     expect(svg).toContain('d="M 0,0 L 30000,0 L 30000,20000 L 0,20000 Z"');
-    expect(svg).toContain('<circle cx="10000" cy="10000" r="75" stroke-dasharray=');
+    expect(svg).toContain('<circle cx="10000" cy="10000" r="60" stroke-dasharray=');
     const geojson = JSON.parse(roofExportGeoJson(model));
     expect(geojson.tpid).toMatchObject({ units: "mm", crs: expect.stringContaining("not WGS84") });
     const roof = geojson.features.find((feature: { properties: { kind: string } }) => feature.properties.kind === "roof_area");

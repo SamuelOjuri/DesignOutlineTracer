@@ -31,6 +31,7 @@ import { PenetrationSummary } from "./newbuild/PenetrationSummary";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftPageOffset } from "@/utils/roiDrawing";
 import { penetrationOpenings } from "@/utils/penetrationOpenings";
 import { outletFromAnnotation, pointInOutletRing, reviewPageOutlets } from "@/utils/outletScope";
+import { DEFAULT_OUTLET_DIAMETER_M } from "@/utils/outletDefaults";
 import { useOutletDetection } from "@/hooks/useOutletDetection";
 import { OutletDetectionPanel, OutletSummary } from "./newbuild/OutletDetectionPanel";
 import { nextRegionToOutline, outlinedRegionIds, preferredOutlineTarget } from "@/utils/outlineCoverage";
@@ -177,7 +178,7 @@ export const NewBuildApp = () => {
   const handleAddOutlet = (x: number, y: number) => {
     const owners = activePage?.drawing.outlines.filter(outline => pointInOutletRing({ x, y }, outline.points)) ?? [];
     updateDrawing((drawing) => ({ ...drawing, outlets: [...drawing.outlets,
-      { id: crypto.randomUUID(), page_id: activePage!.source.page_id, x, y, diameter: 0.15,
+      { id: crypto.randomUUID(), page_id: activePage!.source.page_id, x, y, diameter: DEFAULT_OUTLET_DIAMETER_M,
         diameter_confirmed: false, ...(owners.length === 1 ? { outline_id: owners[0].id } : {}) }] }));
   };
 
@@ -579,6 +580,7 @@ export const NewBuildApp = () => {
               interiorHoles={combined.interiorHoles}
               outlets={combined.outlets}
               drainageEdges={combined.drainageEdges}
+              mmPerPixel={combined.mmPerPixel}
               onMoveGroup={canArrangePages
                 ? (pageId, delta) => setIllustrationOffsets((previous) => shiftPageOffset(previous, pageId, delta))
                 : undefined}

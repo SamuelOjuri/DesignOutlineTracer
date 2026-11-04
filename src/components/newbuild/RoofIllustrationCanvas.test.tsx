@@ -93,7 +93,7 @@ it("offers Reset layout only while arranging is enabled, and is read-only otherw
   expect(onResetLayout).toHaveBeenCalledOnce();
 });
 
-it("uses the same screen-sized outlet glyph in the final illustration", () => {
+it("falls back to the screen-sized outlet glyph without a drawing scale", () => {
   const context = mockCanvasContext();
   const { container } = render(<RoofIllustrationCanvas
     roofOutlines={[[{ x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 400 }, { x: 100, y: 400 }]]}
@@ -105,4 +105,24 @@ it("uses the same screen-sized outlet glyph in the final illustration", () => {
   fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
   scale = Number.parseFloat(canvas.style.width) / canvas.width;
   expect(context.arc).toHaveBeenCalledWith(260, 160, expect.closeTo(10 / scale), 0, Math.PI * 2);
+});
+
+it("draws outlets at their real diameter at the plan scale, keeping a visible minimum", () => {
+  const context = mockCanvasContext();
+  const props: ComponentProps<typeof RoofIllustrationCanvas> = {
+    roofOutlines: [[{ x: 100, y: 100 }, { x: 500, y: 100 }, { x: 500, y: 400 }, { x: 100, y: 400 }]],
+    outlets: [{ id: "a", x: 300, y: 200, diameter: 0.12 }], drainageEdges: [], mmPerPixel: 0.5,
+  };
+  const { container, rerender } = render(<RoofIllustrationCanvas {...props} />);
+  const canvas = container.querySelector("canvas")!;
+  const scale = () => Number.parseFloat(canvas.style.width) / canvas.width;
+  // 120 mm at 0.5 mm per drawing unit is a 120-unit radius, whatever the zoom.
+  expect(context.arc).toHaveBeenCalledWith(260, 160, expect.closeTo(120), 0, Math.PI * 2);
+  context.arc.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+  expect(context.arc).toHaveBeenCalledWith(260, 160, expect.closeTo(120), 0, Math.PI * 2);
+  context.arc.mockClear();
+  // At a very coarse plan scale the outlet keeps the compact 12 CSS-pixel footprint (circle radius 5).
+  rerender(<RoofIllustrationCanvas {...props} mmPerPixel={1000} />);
+  expect(context.arc).toHaveBeenCalledWith(260, 160, expect.closeTo(5 / scale()), 0, Math.PI * 2);
 });

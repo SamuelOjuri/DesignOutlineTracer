@@ -30,7 +30,7 @@ and drainage-edge tools remain available.
    unconfirmed diameter defaults.
 
 Detection does not infer outlet diameter, falls, drainage edges or hydraulic
-design. The inherited 150 mm diameter is explicitly an unconfirmed application
+design. The 120 mm diameter is explicitly an unconfirmed application
 default; users can confirm/change a detected outlet's diameter. Sumps are not
 implemented and do not influence the marker.
 
@@ -48,8 +48,7 @@ implemented and do not influence the marker.
 - Accepted and manual outlets share one footprint across every roof in the view:
   the largest that fits all of their interior anchors, subject to that visible minimum.
   This keeps circles, crosshairs and strokes
-  uniform in the outlet editor, Project Details, saved-area previews and drawing
-  PNG exports. Pending/stale/outside suggestions do not reduce
+  uniform in the outlet editor and saved-area previews. Pending/stale/outside suggestions do not reduce
   that size. Near-edge anchors participate in the shared size and remain visible.
 - For an inlet exactly on an exterior perimeter, allow the circle to overlap
   that perimeter with a compact 12 CSS-pixel footprint, using the same size as its
@@ -66,8 +65,13 @@ implemented and do not influence the marker.
   ring, keeping its footprint within the same limit. Hit targets remain usable
   at a fixed screen size. **Zoom to outlet** and sidebar selection remain
   available for small markers.
-- The final illustration shares the same marker renderer. Explicit outline
-  ownership keeps a boundary outlet with its roof when the illustration moves.
+- Project Details and `roof_drawing.png` draw each outlet circle at its real
+  diameter (confirmed, or the 120 mm default), converted with the paper size and
+  drawing scale chosen at upload, so it scales with zoom like the roof. An outlet
+  smaller than the compact 12 CSS-pixel footprint keeps that minimum so it stays
+  visible; without a usable scale the review marker above is used. The glyph style,
+  broken ring for outside points and explicit outline ownership are shared, so a
+  boundary outlet stays with its roof when the illustration moves.
 - Confirmed opening boundaries use continuous strokes in review, the outlet
   editor, Project Details and PNG/SVG exports. Pending penetration suggestions
   retain dashed review boxes. CAD geometry and physical outlet diameters are

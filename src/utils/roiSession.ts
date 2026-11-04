@@ -6,6 +6,7 @@ import { penetrationFootprint } from "./penetrationOpenings";
 import type { OutlineResponse } from "@/types/outline";
 import { cloneOutlineDrawing, prepareOutlineApplication } from "./outlineSession";
 import { outletAssociation, outletScopeSignature, sameOutletSymbol } from "./outletScope";
+import { DEFAULT_OUTLET_DIAMETER_M } from "./outletDefaults";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
@@ -149,7 +150,7 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
         && (!outlet.outline_id || outlet.outline_id === candidate.outline_id))) continue;
       const proposal: RoiAnnotation = { ...cloneAnnotation(candidate), review_status: "suggested", origin: "gemini",
         editor_object_id: `outlet:${candidate.id}`, scope_signature: action.scope_signature,
-        diameter: 0.15, diameter_confirmed: false, revision: page.revision + 1, edits: [], deleted: false,
+        diameter: DEFAULT_OUTLET_DIAMETER_M, diameter_confirmed: false, revision: page.revision + 1, edits: [], deleted: false,
         proposed_anchor: { ...(candidate.proposed_anchor ?? candidate.anchor) } };
       const association = outletAssociation(page, proposal);
       if (association.error || association.warnings.length) proposal.validity = "needs_review";

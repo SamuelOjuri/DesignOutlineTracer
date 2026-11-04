@@ -5,6 +5,7 @@ import type { OutletScope } from "@/types/outlet";
 import { acceptedRoofRegions } from "./penetrationAssociation";
 import { penetrationOpenings } from "./penetrationOpenings";
 import { boxToSource } from "./roiCoordinates";
+import { DEFAULT_OUTLET_DIAMETER_M } from "./outletDefaults";
 
 const polygon = (points: Point[]): Polygon => [points.map(({ x, y }) => [x, y])];
 const EPSILON = 1e-6;
@@ -101,7 +102,7 @@ export function outletFromAnnotation(annotation: RoiAnnotation): PageOutlet | nu
   if (!annotation.anchor || annotation.deleted || annotation.review_status === "rejected") return null;
   return { id: annotation.editor_object_id ?? `outlet:${annotation.id}`, page_id: annotation.page_id,
     annotation_id: annotation.id, outline_id: annotation.outline_id, roi_id: annotation.roi_id,
-    x: annotation.anchor.x, y: annotation.anchor.y, diameter: annotation.diameter ?? 0.15,
+    x: annotation.anchor.x, y: annotation.anchor.y, diameter: annotation.diameter ?? DEFAULT_OUTLET_DIAMETER_M,
     diameter_confirmed: annotation.diameter_confirmed ?? false,
     subtype: annotation.subtype as Outlet["subtype"], evidence: annotation.evidence,
     review_status: annotation.review_status, validity: annotation.validity };

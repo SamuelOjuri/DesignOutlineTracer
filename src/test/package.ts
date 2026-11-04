@@ -13,7 +13,7 @@ export function packagePage(id = "page-1"): PageSession {
   return { ...state.pages[id], drawing: { ...emptyDrawing(packageScale),
     outlines: [{ id: `outline-${id}`, page_id: id, roi_id: null, points: roofRectangle }],
     holes: [{ id: `hole-${id}`, page_id: id, roi_id: null, points: roofCutout }],
-    outlets: [{ id: `outlet-${id}`, page_id: id, x: 200, y: 200, diameter: 0.15, diameter_confirmed: false }],
+    outlets: [{ id: `outlet-${id}`, page_id: id, x: 200, y: 200, diameter: 0.12, diameter_confirmed: false }],
     drainage_edges: [{ outline_id: `outline-${id}`, edge_index: 1 }] } };
 }
 

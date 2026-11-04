@@ -77,9 +77,10 @@ vi.mock("./newbuild/NewBuildOutletCanvas", () => ({
 vi.mock("./newbuild/NewBuildSidebar", () => ({ NewBuildSidebar: () => null }));
 
 vi.mock("./newbuild/RoofIllustrationCanvas", () => ({
-  RoofIllustrationCanvas: ({ roofOutlines, outlineGroups, interiorHoles, outlets, drainageEdges, onMoveGroup, onResetLayout }: ComponentProps<typeof RoofIllustrationCanvas>) => (
+  RoofIllustrationCanvas: ({ roofOutlines, outlineGroups, interiorHoles, outlets, drainageEdges, mmPerPixel, onMoveGroup, onResetLayout }: ComponentProps<typeof RoofIllustrationCanvas>) => (
     <>
       <output data-testid="illustration">{JSON.stringify({ roofOutlines, interiorHoles, outlets, drainageEdges })}</output>
+      <output data-testid="illustration-mm-per-pixel">{mmPerPixel}</output>
       {onMoveGroup && <button onClick={() => onMoveGroup(outlineGroups![1], { x: 20.5, y: 0 })}>Move illustration</button>}
       {onMoveGroup && <button disabled={!onResetLayout} onClick={onResetLayout}>Reset layout</button>}
     </>
@@ -297,14 +298,16 @@ describe("manual New Build state", () => {
     expect(JSON.parse(screen.getByTestId("paint-outlines").textContent!)).toEqual([outline]);
     await user.click(next());
     expect(JSON.parse(screen.getByTestId("editor-outlets").textContent!)).toEqual([
-      expect.objectContaining({ x: 220, y: 240, diameter: 0.15 }),
+      expect.objectContaining({ x: 220, y: 240, diameter: 0.12 }),
     ]);
     await user.click(next());
     expect(JSON.parse(screen.getByTestId("illustration").textContent!)).toEqual({
       roofOutlines: [outline], interiorHoles: [hole],
-      outlets: [expect.objectContaining({ x: 220, y: 240, diameter: 0.15 })],
+      outlets: [expect.objectContaining({ x: 220, y: 240, diameter: 0.12 })],
       drainageEdges: [{ outlineIndex: 0, edgeIndex: 1 }],
     });
+    // A 800 px page at the default A1 1:100 upload scale: outlets are drawn at their diameter.
+    expect(screen.getByTestId("illustration-mm-per-pixel")).toHaveTextContent("105.125");
     expect(screen.queryByRole("button", { name: "Move illustration" })).not.toBeInTheDocument();
     expect(screen.getByTestId("penetrations")).toHaveTextContent("[]");
     await user.type(screen.getByRole("textbox", { name: "Project name" }), "Manual baseline");

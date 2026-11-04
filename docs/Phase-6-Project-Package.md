@@ -97,7 +97,7 @@ cannot be dragged, so they keep their relative positions from the plan.
 - DXF: AutoCAD R12 ASCII (`AC1009`) with `$INSUNITS = 4`. Layers are
   `ROOF_OUTLINE`, `CUTOUTS`, `PENETRATIONS`, `DRAINAGE_EDGES`, `OUTLETS`,
   `OUTLETS_UNCONFIRMED` and `LABELS`. Outlets are circles at their diameter;
-  unconfirmed 150 mm defaults use the separate layer.
+  unconfirmed 120 mm defaults use the separate layer.
 - GeoJSON: local planar millimetres, not WGS84. Roof polygons carry their
   openings as holes, with counter-clockwise exteriors per RFC 7946. Openings,
   outlets and drainage edges are also separate features.
@@ -105,7 +105,7 @@ cannot be dragged, so they keep their relative positions from the plan.
   area, perimeter), openings, outlets, drainage edges, totals, notes, and the
   `mask_png` pixel-to-millimetre mapping.
 - Raster images: `roof_drawing.png` is the Project Details drawing without grid
-  or hover state. `roof_mask.png` is white roof on black with a 2% margin.
+  or hover state; outlets are drawn at their diameter at the upload scale. `roof_mask.png` is white roof on black with a 2% margin.
   `roof_plan_marked_up_p<page>.png` overlays the page's roof area (red),
   openings, blue drainage edges and magenta outlets on the original page image.
 

@@ -3,6 +3,7 @@ import type { Point } from "@/types/roof";
 import type { PageSession } from "@/types/roi";
 import { combinePageDrawings, mmPerPixel, type CombinedDrawing } from "./roiDrawing";
 import { OUTLET_COLOUR } from "./outletMarker";
+import { DEFAULT_OUTLET_DIAMETER_MM } from "./outletDefaults";
 
 export const DRAWING_EXPORT_VERSION = "tpid-drawing-v1";
 
@@ -223,7 +224,7 @@ export function buildRoofExport(pages: PageSession[], pageOffsets: Record<string
       .map(source => `${source.paper_size} @ 1:${source.scale_ratio}`).join(", ")}); check against a known dimension.`,
   ];
   if (sources.length > 1) notes.push("Roof areas from different PDF pages are placed side by side or as arranged on Project Details; their relative positions are illustrative, not surveyed.");
-  if (unconfirmed) notes.push(`${unconfirmed} outlet diameter(s) use the unconfirmed 150 mm application default.`);
+  if (unconfirmed) notes.push(`${unconfirmed} outlet diameter(s) use the unconfirmed ${DEFAULT_OUTLET_DIAMETER_MM} mm application default.`);
   const unassigned = outlets.filter(outlet => !outlet.roof_area_id).length;
   if (unassigned) notes.push(`${unassigned} outlet(s) are not inside a roof area.`);
 

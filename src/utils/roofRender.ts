@@ -1,6 +1,6 @@
 import type { DrainageEdge, Outlet, Point } from "@/types/roof";
 import type { PageSession } from "@/types/roi";
-import { drawOutletMarker, outletMarkerGeometries, OUTLET_COLOUR } from "./outletMarker";
+import { drawOutletMarker, physicalOutletMarkerGeometries, OUTLET_COLOUR } from "./outletMarker";
 import { penetrationOpenings } from "./penetrationOpenings";
 import { activePageOutlets } from "./outletScope";
 import { editorDrainage } from "./roiDrawing";
@@ -12,13 +12,15 @@ export interface IllustrationData {
   interiorHoles: Point[][];
   outlets: Outlet[];
   drainageEdges: DrainageEdge[];
+  /** Real-world millimetres per drawing unit; outlets are drawn at their diameter when known. */
+  mmPerPixel?: number;
 }
 
 export interface IllustrationOptions {
   offset: Point;
   width: number;
   height: number;
-  /** CSS zoom of the drawing; outlet glyphs are sized in screen pixels. */
+  /** CSS zoom of the drawing; outlet strokes and the minimum outlet size are in screen pixels. */
   displayScale: number;
   hoveredOutlines?: readonly number[];
   grid?: boolean;
@@ -115,7 +117,7 @@ function drawLegend(ctx: CanvasRenderingContext2D, canvasWidth: number, hasDrain
 
 /** Shared by the Project Details canvas and the package PNG so both show the same drawing. */
 export function drawRoofIllustration(ctx: CanvasRenderingContext2D, data: IllustrationData, options: IllustrationOptions) {
-  const { roofOutlines, outlineIds = [], interiorHoles, outlets, drainageEdges } = data;
+  const { roofOutlines, outlineIds = [], interiorHoles, outlets, drainageEdges, mmPerPixel } = data;
   const { offset, width, height, displayScale, hoveredOutlines = [], grid = true } = options;
   const isDrainageEdge = (outlineIndex: number, edgeIndex: number) =>
     drainageEdges.some((edge) => edge.outlineIndex === outlineIndex && edge.edgeIndex === edgeIndex);
@@ -205,7 +207,7 @@ export function drawRoofIllustration(ctx: CanvasRenderingContext2D, data: Illust
     ctx.setLineDash([]);
   }
 
-  const markers = outletMarkerGeometries(outlets, roofOutlines, interiorHoles, displayScale, outlineIds, 4);
+  const markers = physicalOutletMarkerGeometries(outlets, roofOutlines, interiorHoles, displayScale, mmPerPixel, outlineIds, 4);
   outlets.forEach((outlet, index) => {
     drawOutletMarker(ctx, outlet, markers[index], false, offset);
   });

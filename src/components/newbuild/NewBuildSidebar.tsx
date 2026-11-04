@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { NewBuildStep, Outlet, Point, DrainageEdge } from "@/types/roof";
 import { PaintBucket, MousePointerClick, Trash2, Droplets, Scissors, Move, Layers } from "lucide-react";
 import { drawOutletMarker, outletMarkerGeometries } from "@/utils/outletMarker";
+import { DEFAULT_OUTLET_DIAMETER_MM } from "@/utils/outletDefaults";
 
 interface NewBuildSidebarProps {
   currentStep: NewBuildStep;
@@ -249,7 +250,7 @@ export const NewBuildSidebar = ({
               <p className="text-xs text-muted-foreground">
                 Position: ({Math.round(selectedOutlet.x)}, {Math.round(selectedOutlet.y)})
               </p>
-              <p className="text-xs text-muted-foreground">150 mm application default; size has not been measured from the drawing.</p>
+              <p className="text-xs text-muted-foreground">{DEFAULT_OUTLET_DIAMETER_MM} mm application default; size has not been measured from the drawing.</p>
               <Button
                 variant="destructive"
                 size="sm"
