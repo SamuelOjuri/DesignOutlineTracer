@@ -87,28 +87,52 @@ export function prepareSideFit(outlines: Point[][], holes: Point[][], openings: 
   return { ...edit, holes, editedOutlineIndex: section.outlineIndex };
 }
 
-/** Rank finite source lines near the pointer, merging collinear fragments for support. */
+/** Distance from a point to the infinite line through a segment. */
+const lineDistance = (line: VectorSegment, point: Point) => Math.abs(cross(unit(line.start, line.end), subtract(point, line.start)));
+
+/** Whether two segments lie on the same drawn line. */
+export function sameLine(a: VectorSegment, b: VectorSegment, tolerance = 0.5): boolean {
+  if (distance(a.start, a.end) < 1e-6 || distance(b.start, b.end) < 1e-6) return false;
+  const axis = unit(a.start, a.end);
+  return Math.abs(dot(axis, unit(b.start, b.end))) > 0.9999 && Math.abs(cross(axis, subtract(b.start, a.start))) < tolerance;
+}
+
+/** Source segments within 20 degrees of a side. Filter once per side so pointer tracking scans fewer segments. */
+export function parallelSegments(segments: readonly VectorSegment[], side: VectorSegment): VectorSegment[] {
+  if (distance(side.start, side.end) < 1e-6) return [];
+  const direction = unit(side.start, side.end);
+  return segments.filter(segment => distance(segment.start, segment.end) >= 1e-6
+    && Math.abs(dot(unit(segment.start, segment.end), direction)) >= Math.cos(Math.PI / 9));
+}
+
+/**
+ * Rank source lines that run beside the side and pass within `radius` of the pointer, merging collinear
+ * fragments for support. Lines are matched by their offset from the side, so a gap in the drawn line under
+ * the pointer does not hide it. The pointer must stay alongside the side, not beyond its ends.
+ */
 export function vectorSideTargets(segments: readonly VectorSegment[], side: VectorSegment, pointer: Point, radius: number): SideTarget[] {
   const span = distance(side.start, side.end);
   if (span < 1e-6) return [];
   const direction = unit(side.start, side.end);
-  const candidates = segments.filter(segment => {
-    const length = distance(segment.start, segment.end);
-    if (length < 1e-6 || Math.abs(dot(unit(segment.start, segment.end), direction)) < Math.cos(Math.PI / 9)) return false;
-    const delta = subtract(segment.end, segment.start);
-    const t = Math.max(0, Math.min(1, dot(subtract(pointer, segment.start), delta) / (length * length)));
-    return distance(pointer, along(segment.start, delta, t)) <= radius;
-  }).sort((a, b) => Math.abs(cross(unit(a.start, a.end), subtract(pointer, a.start)))
-    - Math.abs(cross(unit(b.start, b.end), subtract(pointer, b.start)))).slice(0, 24);
+  const position = dot(subtract(pointer, side.start), direction);
+  if (position < -radius || position > span + radius) return [];
+  const parallel = parallelSegments(segments, side);
+  const nearby = parallel.filter(segment => {
+    const ends = [dot(subtract(segment.start, side.start), direction), dot(subtract(segment.end, side.start), direction)];
+    return Math.max(...ends) >= 0 && Math.min(...ends) <= span && lineDistance(segment, pointer) <= radius;
+  }).sort((a, b) => lineDistance(a, pointer) - lineDistance(b, pointer));
+  const candidates: VectorSegment[] = [];
+  for (const segment of nearby) {
+    if (candidates.some(line => sameLine(line, segment, 0.25))) continue;
+    candidates.push(segment);
+    if (candidates.length === 24) break;
+  }
   const result: SideTarget[] = [];
   for (const candidate of candidates) {
     const axis = unit(candidate.start, candidate.end);
-    if (result.some(line => Math.abs(dot(unit(line.start, line.end), axis)) > 0.9999
-      && Math.abs(cross(axis, subtract(line.start, candidate.start))) < 0.25)) continue;
     const limits = [dot(subtract(side.start, candidate.start), axis), dot(subtract(side.end, candidate.start), axis)].sort((a, b) => a - b);
-    const intervals = segments.flatMap(segment => {
-      if (distance(segment.start, segment.end) < 1e-6
-        || Math.abs(dot(unit(segment.start, segment.end), axis)) < 0.9999
+    const intervals = parallel.flatMap(segment => {
+      if (Math.abs(dot(unit(segment.start, segment.end), axis)) < 0.9999
         || [segment.start, segment.end].some(p => Math.abs(cross(axis, subtract(p, candidate.start))) > 0.25)) return [];
       const values = [dot(subtract(segment.start, candidate.start), axis), dot(subtract(segment.end, candidate.start), axis)].sort((a, b) => a - b);
       const start = Math.max(values[0], limits[0]), end = Math.min(values[1], limits[1]);
@@ -121,6 +145,17 @@ export function vectorSideTargets(segments: readonly VectorSegment[], side: Vect
     result.push({ start: along(candidate.start, axis, limits[0]), end: along(candidate.start, axis, limits[1]), source: "vector", support });
   }
   return result.slice(0, 6);
+}
+
+/**
+ * Index of the line to preview while the pointer is tracked. The previous line is kept until another line is
+ * closer to the pointer by more than `tolerance`, so the preview does not flicker between close parallel faces.
+ */
+export function stickyTargetIndex(targets: readonly VectorSegment[], previous: VectorSegment | undefined,
+  pointer: Point, tolerance: number): number {
+  if (!previous || targets.length < 2) return 0;
+  const index = targets.findIndex(target => sameLine(target, previous));
+  return index > 0 && lineDistance(targets[index], pointer) <= lineDistance(targets[0], pointer) + tolerance ? index : 0;
 }
 
 /** Local image fallback for scans. Only continuous, dark neutral strokes are candidates; red dimensions are excluded. */

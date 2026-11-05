@@ -218,6 +218,19 @@ to align it, including its intermediate vertices. The side is placed halfway
 between its endpoints on the aligned axis. It keeps the vertices and does not
 convert arbitrary roofs into rectangles. Clearly diagonal sides are rejected.
 
+**Snap to line** (also under Adjust) fits a side to a line on the plan. Hover a
+blue side to see the section that will be replaced (short steps along it are
+included), press it and drag towards the drawing line to follow. The nearest
+line running alongside is highlighted, other nearby lines show faintly, and a
+dashed outline previews the result. Release to apply it as one Undo step.
+Releasing away from a line, or on a line whose fit would touch another roof
+area, change a cutout or leave the page, changes nothing. Esc cancels a drag.
+The tool stays on so further sides can be snapped; Esc, **Exit snap** or the
+Snap to line button turns it off. To review before applying, click a side (or
+its two end corners) instead, click a line, optionally use **Next line** or
+**Other path**, then **Apply fit**. Lines come from the PDF's vector strokes, or
+from dark linework in the page image when the PDF has none nearby.
+
 Dragging an edge inward trims the area swept by that edge and its adjoining
 edges, then rebuilds the boundary. It can pass narrow returns and meet existing
 edges exactly without adding insulation area. Any separated fragments remain

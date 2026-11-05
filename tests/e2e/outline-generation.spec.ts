@@ -200,13 +200,35 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await expect(page.getByTestId("side-fit-preview")).toHaveAttribute("points", "390,40 510,40 510,100 390,100");
   await testInfo.attach("fit-side-preview", { body: await page.screenshot(), contentType: "image/png" });
   await page.getByRole("button", { name: "Apply fit", exact: true }).click();
-  await expect(fitSurface).toHaveCount(0);
+  // Snap to line stays on for the next side; only the finished selection is cleared.
+  await expect(page.getByTestId("side-fit-section")).toHaveCount(0);
+  await expect(fitSurface).toBeVisible();
   await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", "390,40 510,40 510,100 390,100");
   await expect(accepted.locator("[data-outline-vertex]")).toHaveCount(4);
   await testInfo.attach("fit-side-applied", { body: await page.screenshot(), contentType: "image/png" });
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", steppedSide.map(p => `${p.x},${p.y}`).join(" "));
-  await page.getByRole("button", { name: "Snap to line", exact: true }).click();
+  // Drag the stepped side onto the drawn edge: the preview follows the pointer and release applies it.
+  const fitPoint = async (x: number, y: number): Promise<[number, number]> => {
+    const box = (await fitSurface.boundingBox())!;
+    return [box.x + x / 600 * box.width, box.y + y / 400 * box.height];
+  };
+  await page.mouse.move(...await fitPoint(511.5, 58));
+  await expect(page.getByTestId("side-fit-grab")).toHaveAttribute("points", "512,46 511,70 510,100");
+  await page.mouse.down();
+  await page.mouse.move(...await fitPoint(530, 75), { steps: 4 });
+  await expect(page.getByTestId("side-fit-target")).toHaveCount(0);
+  await page.mouse.move(...await fitPoint(510, 75), { steps: 4 });
+  await expect(page.getByTestId("side-fit-target")).toHaveAttribute("data-source", "vector");
+  const draggedSide = "390,40 504,40 504,46 510,46 510,100 390,100";
+  await expect(page.getByTestId("side-fit-preview")).toHaveAttribute("points", draggedSide);
+  await testInfo.attach("fit-side-drag-preview", { body: await page.screenshot(), contentType: "image/png" });
+  await page.mouse.up();
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", draggedSide);
+  await expect(page.getByTestId("side-fit-section")).toHaveCount(0);
+  await expect(fitSurface).toBeVisible();
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(accepted.locator("[data-accepted-outline]")).toHaveAttribute("points", steppedSide.map(p => `${p.x},${p.y}`).join(" "));
   await clickFit(504, 40);
   await page.keyboard.press("Escape");
   await expect(fitSurface).toHaveCount(0);

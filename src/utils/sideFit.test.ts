@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Point } from "@/types/roof";
-import { imageSideTargets, prepareSideFit, shorterSide, sideIndices, suggestSide, vectorSideTargets } from "./sideFit";
+import { imageSideTargets, parallelSegments, prepareSideFit, sameLine, shorterSide, sideIndices, stickyTargetIndex, suggestSide,
+  vectorSideTargets } from "./sideFit";
 
 const roof = [{ x: 40, y: 40 }, { x: 190, y: 40 }, { x: 190, y: 48 }, { x: 202, y: 48 },
   { x: 202, y: 160 }, { x: 198, y: 260 }, { x: 40, y: 260 }];
@@ -103,6 +104,37 @@ describe("drawing line candidates", () => {
     expect(targets[0].support).toBeGreaterThan(0.95);
     expect(vectorSideTargets(segments, line, { x: 200, y: 350 }, 6)).toEqual([]);
     expect(vectorSideTargets([{ start: line.start, end: line.start }], line, line.start, 6)).toEqual([]);
+  });
+
+  it("finds a line by its offset beside the side, even where the drawing has a gap under the pointer", () => {
+    const opening = [{ start: { x: 210, y: 40 }, end: { x: 210, y: 120 } }, { start: { x: 210, y: 160 }, end: { x: 210, y: 260 } }];
+    const targets = vectorSideTargets(opening, line, { x: 211, y: 140 }, 6);
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({ start: { x: 210, y: 40 }, end: { x: 210, y: 260 }, source: "vector" });
+    expect(targets[0].support).toBeCloseTo(180 / 220);
+    expect(vectorSideTargets(opening, line, { x: 211, y: 36 }, 6)).toHaveLength(1);
+    expect(vectorSideTargets(opening, line, { x: 211, y: 20 }, 6)).toEqual([]);
+    expect(vectorSideTargets([{ start: { x: 210, y: 300 }, end: { x: 210, y: 500 } }], line, { x: 210, y: 140 }, 6)).toEqual([]);
+  });
+
+  it("pre-filters parallel segments once without changing the candidates", () => {
+    const segments = [{ start: { x: 200, y: 40 }, end: { x: 200, y: 260 } }, { start: { x: 100, y: 150 }, end: { x: 300, y: 150 } },
+      { start: { x: 204, y: 40 }, end: { x: 214, y: 260 } }, { start: { x: 50, y: 50 }, end: { x: 50, y: 50 } }];
+    const parallel = parallelSegments(segments, line);
+    expect(parallel).toEqual([segments[0], segments[2]]);
+    expect(vectorSideTargets(parallel, line, { x: 201, y: 150 }, 6)).toEqual(vectorSideTargets(segments, line, { x: 201, y: 150 }, 6));
+    expect(parallelSegments(segments, { start: line.start, end: line.start })).toEqual([]);
+  });
+
+  it("keeps the previewed line until another line is clearly closer", () => {
+    const faces = [195, 198].map(x => ({ start: { x, y: 40 }, end: { x, y: 260 } }));
+    const nearest = (x: number) => [...faces].sort((a, b) => Math.abs(a.start.x - x) - Math.abs(b.start.x - x));
+    expect(sameLine(faces[0], { start: { x: 195.2, y: 300 }, end: { x: 195.2, y: 0 } })).toBe(true);
+    expect(sameLine(faces[0], faces[1])).toBe(false);
+    expect(stickyTargetIndex(nearest(196), undefined, { x: 196, y: 150 }, 1)).toBe(0);
+    expect(stickyTargetIndex(nearest(196.4), faces[1], { x: 196.4, y: 150 }, 1)).toBe(1);
+    expect(stickyTargetIndex(nearest(195.2), faces[1], { x: 195.2, y: 150 }, 1)).toBe(0);
+    expect(stickyTargetIndex(nearest(196), { start: { x: 230, y: 40 }, end: { x: 230, y: 260 } }, { x: 196, y: 150 }, 1)).toBe(0);
   });
 
   it("finds a continuous scanned stroke and ignores red dimensions and dashed fragments", () => {

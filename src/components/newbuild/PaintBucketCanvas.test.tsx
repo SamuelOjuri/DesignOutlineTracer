@@ -101,7 +101,9 @@ it("previews a fitted side at zoom, cycles parallel targets and applies with a s
     width: parseFloat(canvas.style.width), height: parseFloat(canvas.style.height) } as DOMRect));
   const click = (x: number, y: number) => {
     const scale = parseFloat(canvas.style.width) / 400;
-    fireEvent.pointerDown(overlay, { button: 0, clientX: -80 + x * scale, clientY: -40 + y * scale });
+    const at = { button: 0, clientX: -80 + x * scale, clientY: -40 + y * scale };
+    fireEvent.pointerDown(overlay, at);
+    fireEvent.pointerUp(overlay, at);
   };
   click(201, 100);
   expect(screen.getByTestId("side-fit-section")).toHaveAttribute("points", "200,40 202,160 200,260");
@@ -115,11 +117,123 @@ it("previews a fitted side at zoom, cycles parallel targets and applies with a s
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
   expect(outlinesChanged).toHaveBeenLastCalledWith([[{ x: 40, y: 40 }, { x: 198, y: 40 }, { x: 198, y: 260 }, { x: 40, y: 260 }], otherRoof], 0);
   expect(holesChanged).not.toHaveBeenCalled();
-  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  // The tool stays on for the next side; only the finished selection is cleared.
+  expect(screen.getByTestId("side-fit-overlay")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Snap to line" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByTestId("side-fit-section")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("side-fit-preview")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Undo" }));
   expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
   expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+/** Pointer helpers for the Snap to line surface, in source-canvas coordinates. */
+function fitPointer(canvas: HTMLCanvasElement) {
+  const surface = screen.getByTestId("side-fit-overlay");
+  vi.spyOn(surface, "getBoundingClientRect").mockImplementation(() => ({ left: 0, top: 0,
+    width: parseFloat(canvas.style.width), height: parseFloat(canvas.style.height) } as DOMRect));
+  const at = (x: number, y: number) => {
+    const scale = parseFloat(canvas.style.width) / 400;
+    return { button: 0, clientX: x * scale, clientY: y * scale };
+  };
+  return {
+    surface,
+    down: (x: number, y: number) => fireEvent.pointerDown(surface, at(x, y)),
+    move: (x: number, y: number) => fireEvent.pointerMove(surface, at(x, y)),
+    up: (x: number, y: number) => fireEvent.pointerUp(surface, at(x, y)),
+  };
+}
+
+it("drags a side onto a drawing line, applies the previewed fit on release and stays on for the next side", async () => {
+  const vectors = [195, 198].map(x => ({ start: { x, y: 40 }, end: { x, y: 260 } }));
+  const { canvas, outlinesChanged, holesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  const pointer = fitPointer(canvas);
+  pointer.move(201, 100);
+  expect(screen.getByTestId("side-fit-grab")).toHaveAttribute("points", "200,40 202,160 200,260");
+  pointer.down(201, 100);
+  expect(screen.getByTestId("side-fit-section")).toHaveAttribute("points", "200,40 202,160 200,260");
+  expect(screen.queryByTestId("side-fit-target")).not.toBeInTheDocument();
+  pointer.move(195.5, 150);
+  expect(await screen.findByTestId("side-fit-target")).toHaveAttribute("x1", "195");
+  expect(screen.getByTestId("side-fit-candidate")).toHaveAttribute("x1", "198");
+  expect(screen.getByTestId("side-fit-preview")).toHaveAttribute("points", "40,40 195,40 195,260 40,260");
+  expect(screen.getByRole("status")).toHaveTextContent("Release to snap to the highlighted line.");
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  pointer.up(195.5, 150);
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([[{ x: 40, y: 40 }, { x: 195, y: 40 }, { x: 195, y: 260 }, { x: 40, y: 260 }], otherRoof], 0);
+  expect(holesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Snap to line" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByTestId("side-fit-overlay")).toBe(pointer.surface);
+  expect(screen.queryByTestId("side-fit-section")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Apply fit" })).not.toBeInTheDocument();
+  // The fitted side can be grabbed again straight away and moved to the outer face.
+  pointer.down(195, 120);
+  pointer.move(198.5, 120);
+  pointer.up(198.5, 120);
+  expect(outlinesChanged).toHaveBeenCalledTimes(2);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([[{ x: 40, y: 40 }, { x: 198, y: 40 }, { x: 198, y: 260 }, { x: 40, y: 260 }], otherRoof], 0);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([[{ x: 40, y: 40 }, { x: 195, y: 40 }, { x: 195, y: 260 }, { x: 40, y: 260 }], otherRoof], undefined);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("changes nothing when a drag is released away from a line, on a blocked fit, or cancelled", async () => {
+  const vectors = [{ start: { x: 195, y: 40 }, end: { x: 195, y: 260 } }, { start: { x: 285, y: 40 }, end: { x: 285, y: 260 } }];
+  const { canvas, outlinesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  const pointer = fitPointer(canvas);
+  pointer.down(201, 100);
+  pointer.move(240, 150);
+  expect(screen.queryByTestId("side-fit-target")).not.toBeInTheDocument();
+  pointer.up(240, 150);
+  expect(screen.getByRole("status")).toHaveTextContent("Released away from a drawing line. Nothing changed.");
+  expect(screen.queryByTestId("side-fit-section")).not.toBeInTheDocument();
+  // A blocked line previews in red and is not applied. Previews arrive on the trailing aim update.
+  pointer.down(201, 100);
+  pointer.move(285, 150);
+  expect(await screen.findByTestId("side-fit-target")).toHaveAttribute("stroke", "#dc2626");
+  expect(screen.queryByTestId("side-fit-preview")).not.toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent(/Fit blocked: /);
+  pointer.up(285, 150);
+  expect(screen.getByRole("status")).toHaveTextContent(/Fit blocked: .* Nothing changed\.$/);
+  pointer.down(201, 100);
+  pointer.move(195.5, 150);
+  expect(await screen.findByTestId("side-fit-preview")).toBeInTheDocument();
+  fireEvent.pointerCancel(pointer.surface);
+  pointer.up(195.5, 150);
+  expect(screen.queryByTestId("side-fit-preview")).not.toBeInTheDocument();
+  pointer.down(201, 100);
+  pointer.move(195.5, 150);
+  fireEvent.keyDown(window, { key: "Escape" });
+  expect(screen.queryByTestId("side-fit-overlay")).not.toBeInTheDocument();
+  pointer.up(195.5, 150);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("keeps a press without movement as a side selection for the click-to-review flow", async () => {
+  const vectors = [{ start: { x: 195, y: 40 }, end: { x: 195, y: 260 } }];
+  const { canvas, outlinesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  fireEvent.click(screen.getByRole("button", { name: "Snap to line" }));
+  const pointer = fitPointer(canvas);
+  pointer.down(201, 100);
+  pointer.up(201, 100);
+  expect(screen.getByTestId("side-fit-section")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Apply fit" })).toBeDisabled();
+  pointer.down(195.5, 150);
+  pointer.up(195.5, 150);
+  expect(screen.getByTestId("side-fit-preview")).toHaveAttribute("points", "40,40 195,40 195,260 40,260");
+  expect(screen.getByRole("button", { name: "Apply fit" })).toBeEnabled();
+  expect(outlinesChanged).not.toHaveBeenCalled();
 });
 
 it("cancels fitting without mutation on Escape, tool change and existing geometry changes", async () => {
@@ -155,6 +269,7 @@ it("groups both subtools under Adjust and discards previews when switching betwe
   const scale = parseFloat(canvas.style.width) / 400;
   for (const [x, y] of [[201, 100], [195, 150]]) {
     fireEvent.pointerDown(surface, { button: 0, clientX: x * scale, clientY: y * scale });
+    fireEvent.pointerUp(surface, { button: 0, clientX: x * scale, clientY: y * scale });
   }
   expect(screen.getByRole("button", { name: "Apply fit" })).toBeEnabled();
   fireEvent.click(straighten);
