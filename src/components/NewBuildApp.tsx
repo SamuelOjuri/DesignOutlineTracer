@@ -29,6 +29,7 @@ import { RoiReviewCanvas } from "./newbuild/RoiReviewCanvas";
 import { RoiReviewSidebar } from "./newbuild/RoiReviewSidebar";
 import { PenetrationSummary } from "./newbuild/PenetrationSummary";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftPageOffset } from "@/utils/roiDrawing";
+import { cloneOutlineDrawing } from "@/utils/outlineSession";
 import { penetrationOpenings } from "@/utils/penetrationOpenings";
 import { outletFromAnnotation, pointInOutletRing, reviewPageOutlets } from "@/utils/outletScope";
 import { DEFAULT_OUTLET_DIAMETER_M } from "@/utils/outletDefaults";
@@ -161,13 +162,27 @@ export const NewBuildApp = () => {
     updateDrawing((drawing) => ({ ...drawing, drawing_scale: scale }));
   };
 
-  const handleOutlinesExtracted = (outlines: Point[][], editedIndex?: number) => {
+  const captureDrawingHistory = () => {
+    const page = getActivePage();
+    if (!page) return undefined;
+    const before = cloneOutlineDrawing(page.drawing);
+    return () => dispatch({ type: "drawing", page_id: page.source.page_id, drawing: cloneOutlineDrawing(before) });
+  };
+
+  const handleOutlinesExtracted = (outlines: Point[][], editedIndex?: number, edgeRemap?: number[][]) => {
     updateDrawing((drawing) => {
       const next = reconcilePolygons(drawing.outlines, outlines, activePage!.source.page_id, editedIndex);
-      return { ...drawing, outlines: next, drainage_edges: drawing.drainage_edges.filter((edge) => {
+      const redrawId = edgeRemap && editedIndex !== undefined ? next[editedIndex]?.id : undefined;
+      return { ...drawing, outlines: next, drainage_edges: drawing.drainage_edges.flatMap((edge) => {
         const previous = drawing.outlines.find((outline) => outline.id === edge.outline_id);
         const current = next.find((outline) => outline.id === edge.outline_id);
-        return current && previous?.points.length === current.points.length;
+        if (!previous || !current) return [];
+        if (edgeRemap && edge.outline_id === redrawId) {
+          return [...new Set(edgeRemap[edge.edge_index] ?? [])]
+            .filter(index => Number.isInteger(index) && index >= 0 && index < current.points.length)
+            .map(edge_index => ({ ...edge, edge_index }));
+        }
+        return previous.points.length === current.points.length ? [edge] : [];
       }) };
     });
   };
@@ -337,6 +352,7 @@ export const NewBuildApp = () => {
             key={`${activePage?.source.page_id}:${paintGeneration}`}
             pdfCanvas={pdfCanvas}
             onOutlinesExtracted={handleOutlinesExtracted}
+            captureDrawingHistory={captureDrawingHistory}
             onHolesExtracted={handleHolesExtracted}
             roofOutlines={roofOutlines}
             interiorHoles={interiorHoles}

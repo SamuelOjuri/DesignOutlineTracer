@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { test, expect } from "./fixtures";
-import { createPenetrationPlanPdf } from "../fixtures/roofPlan";
+import { createPenetrationPlanPdf, createRedrawPlanPdf } from "../fixtures/roofPlan";
 import type { OutlineRequest, OutlineResponse } from "../../src/types/outline";
 import type { PageContext } from "../../src/types/roi";
 
@@ -233,4 +233,86 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await page.keyboard.press("Escape");
   await expect(fitSurface).toHaveCount(0);
   expect(requests).toHaveLength(3); // Fitting uses the uploaded drawing locally, without another model request.
+});
+
+test("redraws a missing rotated return using PDF vector snaps and restores it with one undo", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf();
+  const requests: OutlineRequest[] = [];
+  await page.route("http://127.0.0.1:4199/api/roi/v1/**", async route => {
+    const request = route.request();
+    const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type",
+      "access-control-allow-methods": "POST, OPTIONS" };
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers });
+    if (request.url().endsWith("/pages")) {
+      const form = await new Response(new Uint8Array(request.postDataBuffer()!), {
+        headers: { "content-type": request.headers()["content-type"] },
+      }).formData();
+      return route.fulfill({ headers, json: { page: JSON.parse(String(form.get("context"))), upload_id: "redraw-upload", expires_in_seconds: 900 } });
+    }
+    expect(request.url()).toMatch(/\/outlines$/);
+    const payload = request.postDataJSON() as OutlineRequest;
+    requests.push(payload);
+    const response: OutlineResponse = {
+      schema_version: "outline-1", page_id: payload.page_id, request_id: payload.request_id,
+      source_image_hash: payload.source_image_hash, roi_revision: payload.roi_revision,
+      geometry_revision: payload.geometry_revision, roi_id: payload.roi.id, roi_annotation_revision: payload.roi.revision,
+      boundary_policy: payload.boundary_policy, status: "needs_review",
+      proposals: [{ id: "missing-return", points: plan.original, proposed_points: plan.original, warnings: [],
+        edges: plan.original.map((_, index) => ({ index, support: 1, source: "vector", ambiguous: false })) }],
+      warnings: [], crop: { x: 0, y: 0, width: 600, height: 400, inference_width: 600, inference_height: 400 },
+      run: { model: "synthetic", prompt_version: "roof-outline-v1", algorithm_version: "redraw-fixture",
+        settings: {}, duration_ms: 1, cached: false, provider_attempts: 1 },
+    };
+    return route.fulfill({ headers, json: response });
+  });
+  await page.goto("/new-build");
+  await page.locator('input[type="file"]').setInputFiles(plan.file);
+  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: "Manual region", exact: true }).click();
+  const bounds = (await page.getByTestId("roi-source-canvas").boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width * 0.05, bounds.y + bounds.height * 0.05);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * 0.95, bounds.y + bounds.height * 0.95);
+  await page.mouse.up();
+  await page.getByLabel("Region label", { exact: true }).fill("roof_roi");
+  await page.getByRole("button", { name: "Apply correction", exact: true }).click();
+  await page.getByRole("button", { name: "Set Outlines", exact: true }).click();
+  await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
+  await page.getByRole("button", { name: "Use outline", exact: true }).click();
+  expect(requests).toHaveLength(1);
+  expect(requests[0].vector_segments.length).toBeGreaterThanOrEqual(6);
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await page.getByRole("button", { name: "Redraw", exact: true }).click();
+  const surface = page.getByTestId("polyline-redraw-overlay");
+  const accepted = page.getByTestId("accepted-outline-overlay").locator("[data-accepted-outline]");
+  const before = await accepted.getAttribute("points");
+  const screenPoint = async ({ x, y }: { x: number; y: number }) => {
+    const box = (await surface.boundingBox())!;
+    return { x: box.x + x / 600 * box.width, y: box.y + y / 400 * box.height };
+  };
+  const start = await screenPoint(plan.start);
+  await page.mouse.click(start.x, start.y);
+  const corner = await screenPoint(plan.corner);
+  await page.mouse.move(corner.x + 1, corner.y - 1);
+  await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
+  await page.mouse.click(corner.x + 1, corner.y - 1);
+  await page.getByRole("button", { name: "Finish on outline", exact: true }).click();
+  const end = await screenPoint(plan.end);
+  await page.mouse.click(end.x, end.y);
+  await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
+  await expect(accepted).toHaveAttribute("points", before!);
+  await testInfo.attach("rotated-return-redraw-preview", { body: await page.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: "Apply redraw", exact: true }).click();
+  const actual = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
+  expect(actual).toHaveLength(plan.corrected.length);
+  for (const point of plan.corrected) {
+    expect(actual.some(([x, y]) => Math.hypot(x - point.x, y - point.y) < 0.0001)).toBe(true);
+  }
+  await testInfo.attach("rotated-return-redraw-applied", { body: await page.screenshot(), contentType: "image/png" });
+  await page.getByRole("button", { name: "Undo", exact: true }).click();
+  await expect(accepted).toHaveAttribute("points", before!);
+  await expect(page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true })).toBeVisible();
+  expect(requests).toHaveLength(1); // Redrawing and undo never call a model or backend.
 });

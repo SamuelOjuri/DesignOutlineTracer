@@ -231,6 +231,22 @@ its two end corners) instead, click a line, optionally use **Next line** or
 **Other path**, then **Apply fit**. Lines come from the PDF's vector strokes, or
 from dark linework in the page image when the PDF has none nearby.
 
+**Redraw** (under Adjust) replaces a local section of an existing outline with
+a polyline. Click an outline edge or corner to start, then click each new corner.
+Nearby PDF vector endpoints, intersections and lines snap the cursor and are
+highlighted; hold Alt to place a point freely or connect close to an existing
+corner without snapping onto it. No vector lines are available on
+some scanned pages, where corners can still be placed manually. Click **Finish
+on outline**, then click another position on the same outline to reconnect.
+The orange path shows the section being replaced; **Other path** switches to the
+other route around the boundary. Review the dashed result and click **Apply
+redraw**. **Back** or Backspace removes the last draft point; **Clear** starts
+over, and Esc or **Exit redraw** cancels. Applying is one Undo action, including
+outline identity, roof-region links and drainage markings. Retained boundary
+portions keep their drainage marks; newly drawn sides need their drainage marks
+reviewed. Crossings, touching roofs, page overshoot and changes to cutouts or
+openings are blocked. The tool remains active after applying a redraw.
+
 Dragging an edge inward trims the area swept by that edge and its adjoining
 edges, then rebuilds the boundary. It can pass narrow returns and meet existing
 edges exactly without adding insulation area. Any separated fragments remain

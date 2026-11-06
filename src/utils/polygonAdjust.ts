@@ -73,6 +73,8 @@ export interface OutlineEditResult {
   outlines: Point[][];
   holes: Point[][];
   editedOutlineIndex?: number;
+  /** For a local redraw, old edge indices map only to retained boundary portions. */
+  edgeRemap?: number[][];
   error: string | null;
   repaired: boolean;
 }

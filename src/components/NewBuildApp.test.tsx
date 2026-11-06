@@ -15,7 +15,10 @@ import { drawingWithPenetrations } from "@/utils/penetrationOpenings";
 import { outlineResponse } from "@/test/outline";
 
 const outline = [{ x: 100, y: 100 }, { x: 400, y: 100 }, { x: 400, y: 300 }, { x: 100, y: 300 }];
+const redrawnOutline = [outline[0], outline[1], { x: 380, y: 180 }, { x: 360, y: 240 }, outline[2], outline[3]];
+const sameCountRedrawnOutline = [outline[0], { x: 420, y: 90 }, { x: 420, y: 310 }, outline[3]];
 const hole = [{ x: 150, y: 150 }, { x: 180, y: 150 }, { x: 180, y: 180 }];
+let restoreRedrawHistory: (() => void) | undefined;
 
 vi.mock("./newbuild/PdfUpload", () => ({
   PdfUpload: ({ onPdfRendered, onPageRendered, onPageSelectionStart, onDocumentLoaded, drawingScale, onDrawingScaleChange }: ComponentProps<typeof PdfUpload>) => (
@@ -39,7 +42,7 @@ vi.mock("./newbuild/PdfUpload", () => ({
 }));
 
 vi.mock("./newbuild/PaintBucketCanvas", () => ({
-  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, penetrationHoles, acceptedRegions }: ComponentProps<typeof PaintBucketCanvas>) => (
+  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, penetrationHoles, acceptedRegions, captureDrawingHistory }: ComponentProps<typeof PaintBucketCanvas>) => (
     <>
       <output data-testid="paint-outlines">{JSON.stringify(roofOutlines)}</output>
       <output data-testid="paint-regions">{JSON.stringify(acceptedRegions)}</output>
@@ -47,6 +50,15 @@ vi.mock("./newbuild/PaintBucketCanvas", () => ({
       <output data-testid="paint-openings">{JSON.stringify(penetrationHoles)}</output>
       <button onClick={() => onOutlinesExtracted([outline.slice(0, 2)])}>Select invalid outline</button>
       <button onClick={() => onOutlinesExtracted([outline])}>Select roof</button>
+      <button onClick={() => {
+        restoreRedrawHistory = captureDrawingHistory?.();
+        onOutlinesExtracted([redrawnOutline], 0, [[0], [], [4], [5]]);
+      }}>Redraw roof side</button>
+      <button onClick={() => {
+        restoreRedrawHistory = captureDrawingHistory?.();
+        onOutlinesExtracted([sameCountRedrawnOutline], 0, [[], [], [], [3]]);
+      }}>Redraw roof side without changing count</button>
+      <button onClick={() => restoreRedrawHistory?.()}>Undo redraw</button>
       <button onClick={() => onHolesExtracted([hole])}>Add cutout</button>
     </>
   ),
@@ -57,6 +69,7 @@ vi.mock("./newbuild/RoiReviewCanvas", () => ({
     <output data-testid="review-regions">{JSON.stringify(annotations)}</output>
     <output data-testid="review-drawing">{JSON.stringify(page && drawingWithPenetrations(page))}</output>
     <button onClick={() => onAdd([100.25, 200.5, 400.75, 600.5])}>Add test region</button>
+    <button onClick={() => onAdd([0, 0, 1000, 1000])}>Add full-page region</button>
     <button onClick={() => onAdd([700, 700, 900, 900])}>Add far test region</button>
     <button onClick={() => onEdit(annotations[0].id, [240, 300, 300, 350])}>Move test penetration</button>
   </>,
@@ -70,6 +83,7 @@ vi.mock("./newbuild/NewBuildOutletCanvas", () => ({
       <button onClick={() => onAddOutlet(200, 200)}>Add test outlet</button>
       <button onClick={() => onMoveOutlet(outlets[0].id, 220, 240)}>Move test outlet</button>
       <button onClick={() => onToggleDrainageEdge(0, 1)}>Toggle drainage</button>
+      <button onClick={() => onToggleDrainageEdge(0, 3)}>Toggle closing drainage</button>
     </>
   ),
 }));
@@ -100,6 +114,7 @@ vi.mock("./ProjectDetailsForm", () => ({
 
 beforeEach(() => {
   roiClient.enabled = false;
+  restoreRedrawHistory = undefined;
   vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,AA==");
 });
 
@@ -318,6 +333,55 @@ describe("manual New Build state", () => {
     expect(screen.getByLabelText("Performance specification PDF")).toBeInTheDocument();
     expect(screen.getByRole("list", { name: "Package contents" })).toHaveTextContent("page-1.pdf");
     expect(screen.getByRole("button", { name: "Download package (.zip)" })).toBeEnabled();
+  });
+
+  it.each([
+    { button: "Redraw roof side", points: redrawnOutline, closingEdge: 5 },
+    { button: "Redraw roof side without changing count", points: sameCountRedrawnOutline, closingEdge: 3 },
+  ])("remaps only retained drainage and restores the full drawing after $button", async ({ button, points, closingEdge }) => {
+    roiClient.enabled = true;
+    vi.spyOn(roiClient, "uploadPage").mockResolvedValue({ page: {
+      ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
+    }, upload_id: "upload", expires_in_seconds: 900 });
+    vi.spyOn(roiClient, "generateOutline").mockImplementation(async request => outlineResponse(request, outline));
+    const user = userEvent.setup();
+    render(<NewBuildApp />);
+    const next = () => user.click(screen.getByRole("button", { name: "Next" }));
+    const previous = () => user.click(screen.getByRole("button", { name: "Previous" }));
+    const drawing = () => JSON.parse(screen.getByTestId("review-drawing").textContent!);
+
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await next();
+    await user.click(screen.getByRole("button", { name: "Add full-page region" }));
+    await user.click(screen.getByRole("button", { name: "Set Outlines" }));
+    await user.click(screen.getByRole("button", { name: "Generate Roof area 1 outline" }));
+    await user.click(await screen.findByRole("button", { name: "Use outline" }));
+    await user.click(screen.getByRole("button", { name: "Add cutout" }));
+    await next();
+    await next();
+    await user.click(screen.getByRole("button", { name: "Add test outlet" }));
+    await user.click(screen.getByRole("button", { name: "Toggle drainage" }));
+    await user.click(screen.getByRole("button", { name: "Toggle closing drainage" }));
+    await previous();
+    const original = drawing();
+    const outlineId = original.outlines[0].id;
+    expect(original.outlines[0].roi_id).toEqual(expect.any(String));
+    expect(original.outlets[0].outline_id).toBe(outlineId);
+    expect(original.drainage_edges).toEqual([1, 3].map(edge_index => ({ outline_id: outlineId, edge_index })));
+
+    await previous();
+    await user.click(screen.getByRole("button", { name: button }));
+    await next();
+    const edited = drawing();
+    expect(edited.outlines[0]).toEqual({ ...original.outlines[0], points });
+    expect(edited.drainage_edges).toEqual([{ outline_id: outlineId, edge_index: closingEdge }]);
+    expect(edited.outlets).toEqual(original.outlets);
+    expect(edited.holes).toEqual(original.holes);
+
+    await previous();
+    await user.click(screen.getByRole("button", { name: "Undo redraw" }));
+    await next();
+    expect(drawing()).toEqual(original);
   });
 
   it("rescales and offsets an additional PDF once, preserving holes, outlets and drainage indices", async () => {

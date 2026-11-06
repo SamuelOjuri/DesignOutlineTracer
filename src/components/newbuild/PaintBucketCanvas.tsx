@@ -11,6 +11,7 @@ import type { OutlineProposal } from "@/types/outline";
 import { OutlineProposalOverlay } from "./OutlineProposalOverlay";
 import { AcceptedOutlineOverlay } from "./AcceptedOutlineOverlay";
 import { useSideFit } from "@/hooks/useSideFit";
+import { usePolylineRedraw } from "@/hooks/usePolylineRedraw";
 import type { VectorSegment } from "@/types/outline";
 import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler } from "lucide-react";
 
@@ -22,11 +23,14 @@ interface SelectionSnapshot {
   rectangles: CutoutRectangle[];
   outlines: Point[][];
   holes: Point[][];
+  restoreDrawing?: () => void;
 }
 
 interface PaintBucketCanvasProps {
   pdfCanvas: HTMLCanvasElement;
-  onOutlinesExtracted: (outlines: Point[][], editedOutlineIndex?: number) => void;
+  onOutlinesExtracted: (outlines: Point[][], editedOutlineIndex?: number, edgeRemap?: number[][]) => void;
+  /** Capture parent-owned IDs, scope links and drainage alongside the local geometry history. */
+  captureDrawingHistory?: () => (() => void) | undefined;
   onHolesExtracted?: (holes: Point[][]) => void;
   roofOutlines: Point[][];
   interiorHoles?: Point[][];
@@ -48,6 +52,7 @@ const DEFAULT_SELECTION_SENSITIVITY = 45;
 export const PaintBucketCanvas = ({
   pdfCanvas,
   onOutlinesExtracted,
+  captureDrawingHistory,
   onHolesExtracted,
   roofOutlines,
   interiorHoles = [],
@@ -139,8 +144,9 @@ export const PaintBucketCanvas = ({
       rectangles: [...rectangleCutsRef.current],
       outlines: sourceGeometry.current.roofOutlines.map(outline => outline.map(point => ({ ...point }))),
       holes: interiorHolesRef.current.map(hole => hole.map(point => ({ ...point }))),
+      restoreDrawing: captureDrawingHistory?.(),
     });
-  }, []);
+  }, [captureDrawingHistory]);
 
   const emitOutlinesAndHoles = useCallback((mask: Uint8Array, w: number, h: number) => {
     const outlines = extractMultipleOutlines(mask, w, h, allowedMaskRef.current);
@@ -623,7 +629,8 @@ export const PaintBucketCanvas = ({
       cutoutMaskRef.current = exclusions;
       interiorHolesRef.current = edit.holes;
     }
-    onOutlinesExtracted(edit.outlines, edit.editedOutlineIndex);
+    if (edit.edgeRemap) onOutlinesExtracted(edit.outlines, edit.editedOutlineIndex, edit.edgeRemap);
+    else onOutlinesExtracted(edit.outlines, edit.editedOutlineIndex);
     if (holesChanged) onHolesExtracted?.(edit.holes);
     setFillCount(count => count + 1);
     setSelectionMessage(edit.repaired ? "Existing boundary defects repaired." : null);
@@ -644,6 +651,19 @@ export const PaintBucketCanvas = ({
     source: pdfCanvas, scale: displayScale, onCommit: commitAdjustment,
     onActivate: () => {
       cancelAdjustment();
+      polylineRedraw.cancel();
+      setHoveredEdge(null);
+      setHoveredVertex(null);
+      setSelectionMessage(null);
+      setActiveTool("adjust");
+    } });
+
+  const polylineRedraw = usePolylineRedraw({ enabled: isAdjustMode && !isInitializing && roofOutlines.length > 0,
+    outlines: roofOutlines, holes: interiorHoles, openings: penetrationHoles, vectors: vectorSegments,
+    source: pdfCanvas, scale: displayScale, onCommit: commitAdjustment,
+    onActivate: () => {
+      cancelAdjustment();
+      sideFit.cancel();
       setHoveredEdge(null);
       setHoveredVertex(null);
       setSelectionMessage(null);
@@ -653,6 +673,7 @@ export const PaintBucketCanvas = ({
   const selectTool = (tool: PaintTool) => {
     cancelAdjustment();
     sideFit.cancel();
+    polylineRedraw.cancel();
     setHoveredEdge(null);
     setHoveredVertex(null);
     setSelectionMessage(null);
@@ -1023,8 +1044,11 @@ export const PaintBucketCanvas = ({
     rectangleCutsRef.current = previous.rectangles;
     interiorHolesRef.current = previous.holes;
     setFillCount(c => Math.max(0, c - 1));
-    onOutlinesExtracted(previous.outlines);
-    onHolesExtracted?.(previous.holes);
+    if (previous.restoreDrawing) previous.restoreDrawing();
+    else {
+      onOutlinesExtracted(previous.outlines);
+      onHolesExtracted?.(previous.holes);
+    }
     setSelectionMessage(null);
     clearPreview();
   }, [onOutlinesExtracted, onHolesExtracted, clearPreview]);
@@ -1203,9 +1227,11 @@ export const PaintBucketCanvas = ({
             aria-pressed={activeTool === "straighten"} disabled={isInitializing || !roofOutlines.length}>
             <Ruler className="w-4 h-4 mr-1" />Straighten
           </Button>
+          {polylineRedraw.button}
           {sideFit.controls}
+          {polylineRedraw.controls}
         </div>
-        {!sideFit.active && <p role="status" className="text-sm text-muted-foreground">
+        {!sideFit.active && !polylineRedraw.active && <p role="status" className="text-sm text-muted-foreground">
           {selectionMessage ?? (activeTool === "straighten" ? "Click a side to align it horizontally or vertically. Esc returns to dragging." : null)}
         </p>}
       </div> : selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
@@ -1257,10 +1283,14 @@ export const PaintBucketCanvas = ({
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
             {sideFit.overlay}
           </div>}
+          {polylineRedraw.active && <div className="absolute top-2 left-1/2 -translate-x-1/2"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            {polylineRedraw.overlay}
+          </div>}
         </div>
       </div>
 
-      {activeTool !== "straighten" && !sideFit.active && <div className="flex items-center justify-center gap-2 mt-2 px-4">
+      {activeTool !== "straighten" && !sideFit.active && !polylineRedraw.active && <div className="flex items-center justify-center gap-2 mt-2 px-4">
         <MousePointer className="w-3.5 h-3.5 text-muted-foreground" />
         <p className="text-xs text-muted-foreground">
           {activeTool === "rectangle-cutout"
