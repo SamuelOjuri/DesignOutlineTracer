@@ -53,21 +53,25 @@ export async function createOpenRoofPlanPdf() {
   return { name: "synthetic-open-roof.pdf", mimeType: "application/pdf", buffer: Buffer.from(await document.save()) };
 }
 
-/** Rotated boundary whose lower right side has a small inward return. Coordinates are in source pixels. */
-export async function createRedrawPlanPdf() {
+/** Rotated boundary with an inward return; optionally reconnect to an existing vertex despite PDF rounding. */
+export async function createRedrawPlanPdf(existingEndVertex = false) {
   const rotate = ({ x, y }: { x: number; y: number }) => {
     const angle = Math.PI / 9, dx = x - 300, dy = y - 200;
     return { x: 300 + dx * Math.cos(angle) - dy * Math.sin(angle),
       y: 200 + dx * Math.sin(angle) + dy * Math.cos(angle) };
   };
-  const original = [{ x: 160, y: 110 }, { x: 430, y: 110 }, { x: 430, y: 290 }, { x: 160, y: 290 }].map(rotate);
+  const corners = [{ x: 160, y: 110 }, { x: 430, y: 110 }, { x: 430, y: 290 }, { x: 160, y: 290 }].map(rotate);
   const start = rotate({ x: 430, y: 200 }), corner = rotate({ x: 405, y: 200 }), end = rotate({ x: 405, y: 290 });
-  const corrected = [original[0], original[1], start, corner, end, original[3]];
+  // Keep the blue vertex collinear with the original side while differing from the PDF endpoint by 0.00001 px.
+  const blueEnd = { x: end.x + Math.cos(Math.PI / 9) * 0.00001, y: end.y + Math.sin(Math.PI / 9) * 0.00001 };
+  const original = existingEndVertex ? [...corners.slice(0, 3), blueEnd, corners[3]] : corners;
+  const drawn = [corners[0], corners[1], start, corner, end, corners[3]];
+  const corrected = existingEndVertex ? [corners[0], corners[1], start, corner, blueEnd, corners[3]] : drawn;
   const document = await PDFDocument.create();
   const page = document.addPage([300, 200]);
   const pdfPoint = ({ x, y }: { x: number; y: number }) => ({ x: x / 2, y: 200 - y / 2 });
-  corrected.forEach((point, index) => page.drawLine({ start: pdfPoint(point),
-    end: pdfPoint(corrected[(index + 1) % corrected.length]), thickness: 0.5, color: rgb(0, 0, 0) }));
+  drawn.forEach((point, index) => page.drawLine({ start: pdfPoint(point),
+    end: pdfPoint(drawn[(index + 1) % drawn.length]), thickness: 0.5, color: rgb(0, 0, 0) }));
   return { file: { name: "synthetic-rotated-return.pdf", mimeType: "application/pdf", buffer: Buffer.from(await document.save()) },
     original, corrected, start, corner, end };
 }

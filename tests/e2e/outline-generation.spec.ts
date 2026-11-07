@@ -235,8 +235,11 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   expect(requests).toHaveLength(3); // Fitting uses the uploaded drawing locally, without another model request.
 });
 
-test("redraws a missing rotated return using PDF vector snaps and restores it with one undo", async ({ page }, testInfo) => {
-  const plan = await createRedrawPlanPdf();
+for (const automatic of [false, true]) {
+test(automatic
+  ? "finishes and applies a redraw on one click at a PDF endpoint matching an existing outline vertex"
+  : "redraws a missing rotated return using PDF vector snaps and restores it with one undo", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf(automatic);
   const requests: OutlineRequest[] = [];
   await page.route("http://127.0.0.1:4199/api/roi/v1/**", async route => {
     const request = route.request();
@@ -298,21 +301,39 @@ test("redraws a missing rotated return using PDF vector snaps and restores it wi
   await page.mouse.move(corner.x + 1, corner.y - 1);
   await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
   await page.mouse.click(corner.x + 1, corner.y - 1);
-  await page.getByRole("button", { name: "Finish on outline", exact: true }).click();
   const end = await screenPoint(plan.end);
-  await page.mouse.click(end.x, end.y);
-  await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
-  await expect(accepted).toHaveAttribute("points", before!);
-  await testInfo.attach("rotated-return-redraw-preview", { body: await page.screenshot(), contentType: "image/png" });
-  await page.getByRole("button", { name: "Apply redraw", exact: true }).click();
+  if (automatic) {
+    await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
+    await page.mouse.move(end.x + 1, end.y - 1);
+    await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+    await expect(page.getByText("Click to finish and apply", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
+    await expect(page.getByTestId("polyline-redraw-section")).toBeVisible();
+    await expect(accepted).toHaveAttribute("points", before!);
+    await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
+    await testInfo.attach("endpoint-match-before-click", { body: await page.screenshot(), contentType: "image/png" });
+    await page.mouse.click(end.x + 1, end.y - 1);
+    await expect(page.getByRole("button", { name: "Apply redraw", exact: true })).toHaveCount(0);
+  } else {
+    await page.getByRole("button", { name: "Finish on outline", exact: true }).click();
+    await page.mouse.click(end.x, end.y);
+    await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
+    await expect(accepted).toHaveAttribute("points", before!);
+    await testInfo.attach("rotated-return-redraw-preview", { body: await page.screenshot(), contentType: "image/png" });
+    await page.getByRole("button", { name: "Apply redraw", exact: true }).click();
+  }
+  await expect(accepted).not.toHaveAttribute("points", before!);
   const actual = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
   expect(actual).toHaveLength(plan.corrected.length);
+  if (automatic) expect(actual).toContainEqual([plan.original[3].x, plan.original[3].y]);
   for (const point of plan.corrected) {
     expect(actual.some(([x, y]) => Math.hypot(x - point.x, y - point.y) < 0.0001)).toBe(true);
   }
   await testInfo.attach("rotated-return-redraw-applied", { body: await page.screenshot(), contentType: "image/png" });
   await page.getByRole("button", { name: "Undo", exact: true }).click();
   await expect(accepted).toHaveAttribute("points", before!);
+  await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true })).toBeVisible();
   expect(requests).toHaveLength(1); // Redrawing and undo never call a model or backend.
 });
+}

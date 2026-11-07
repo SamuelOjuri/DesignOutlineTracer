@@ -236,7 +236,14 @@ a polyline. Click an outline edge or corner to start, then click each new corner
 Nearby PDF vector endpoints, intersections and lines snap the cursor and are
 highlighted; hold Alt to place a point freely or connect close to an existing
 corner without snapping onto it. No vector lines are available on
-some scanned pages, where corners can still be placed manually. Click **Finish
+some scanned pages, where corners can still be placed manually. When a snapped
+PDF endpoint coincides with one existing vertex on the same outline, the cursor
+shows **Click to finish and apply**. Hovering previews the result and the orange
+section being replaced; clicking completes and applies the valid redraw as one
+Undo action. The starting point, another roof's vertices and merely nearby points
+do not trigger this shortcut. Hold Alt to place that point and keep drawing.
+Invalid completions show a reason and keep the draft editable without saving it.
+For a connection midway along an edge or a separate review step, click **Finish
 on outline**, then click another position on the same outline to reconnect.
 The orange path shows the section being replaced; **Other path** switches to the
 other route around the boundary. Review the dashed result and click **Apply
