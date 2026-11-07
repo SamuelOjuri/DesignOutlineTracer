@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PdfUpload } from "./newbuild/PdfUpload";
@@ -42,12 +42,15 @@ vi.mock("./newbuild/PdfUpload", () => ({
 }));
 
 vi.mock("./newbuild/PaintBucketCanvas", () => ({
-  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, penetrationHoles, acceptedRegions, captureDrawingHistory }: ComponentProps<typeof PaintBucketCanvas>) => (
+  PaintBucketCanvas: ({ onOutlinesExtracted, onHolesExtracted, roofOutlines, interiorHoles, penetrationHoles, acceptedRegions, captureDrawingHistory,
+    outlineGeneration, unoutlinedRegions }: ComponentProps<typeof PaintBucketCanvas>) => (
     <>
       <output data-testid="paint-outlines">{JSON.stringify(roofOutlines)}</output>
       <output data-testid="paint-regions">{JSON.stringify(acceptedRegions)}</output>
       <output data-testid="paint-holes">{JSON.stringify(interiorHoles)}</output>
       <output data-testid="paint-openings">{JSON.stringify(penetrationHoles)}</output>
+      <output data-testid="paint-outline-generation">{outlineGeneration ?? "idle"}</output>
+      <output data-testid="paint-unoutlined">{JSON.stringify(unoutlinedRegions?.map(region => region.box_2d) ?? [])}</output>
       <button onClick={() => onOutlinesExtracted([outline.slice(0, 2)])}>Select invalid outline</button>
       <button onClick={() => onOutlinesExtracted([outline])}>Select roof</button>
       <button onClick={() => {
@@ -382,6 +385,52 @@ describe("manual New Build state", () => {
     await user.click(screen.getByRole("button", { name: "Undo redraw" }));
     await next();
     expect(drawing()).toEqual(original);
+  });
+
+  it("tells the editor while outline generation runs or awaits review, and which roof areas still need outlines", async () => {
+    roiClient.enabled = true;
+    vi.spyOn(roiClient, "uploadPage").mockResolvedValue({ page: {
+      ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
+    }, upload_id: "upload", expires_in_seconds: 900 });
+    let release: (() => void) | undefined;
+    vi.spyOn(roiClient, "generateOutline").mockImplementation(async (request) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      const [top, left, bottom, right] = request.roi.box_2d;
+      return outlineResponse(request, [{ x: left * 0.8 + 10, y: top * 0.6 + 10 }, { x: right * 0.8 - 10, y: top * 0.6 + 10 },
+        { x: right * 0.8 - 10, y: bottom * 0.6 - 10 }, { x: left * 0.8 + 10, y: bottom * 0.6 - 10 }]);
+    });
+    const user = userEvent.setup();
+    render(<NewBuildApp />);
+    const generation = () => screen.getByTestId("paint-outline-generation");
+    const unoutlined = () => JSON.parse(screen.getByTestId("paint-unoutlined").textContent!);
+    const generate = () => user.click(screen.getByRole("button", { name: "Generate Roof area 2 outline" }));
+    await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Add test region" }));
+    await user.click(screen.getByRole("button", { name: "Add far test region" }));
+    await user.click(screen.getByRole("button", { name: "Set Outlines" }));
+    expect(generation()).toHaveTextContent("idle");
+    expect(unoutlined()).toEqual([[100.25, 200.5, 400.75, 600.5], [700, 700, 900, 900]]);
+
+    await generate();
+    await waitFor(() => expect(generation()).toHaveTextContent("running"));
+    release!();
+    await screen.findByRole("button", { name: "Use outline" });
+    expect(generation()).toHaveTextContent("review");
+    await user.click(screen.getByRole("button", { name: "Discard proposal" }));
+    expect(generation()).toHaveTextContent("idle");
+
+    await generate();
+    await waitFor(() => expect(generation()).toHaveTextContent("running"));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(generation()).toHaveTextContent("idle");
+
+    await generate();
+    await waitFor(() => expect(generation()).toHaveTextContent("running"));
+    release!();
+    await user.click(await screen.findByRole("button", { name: "Use outline" }));
+    expect(generation()).toHaveTextContent("idle");
+    expect(unoutlined()).toEqual([[100.25, 200.5, 400.75, 600.5]]);
   });
 
   it("rescales and offsets an additional PDF once, preserving holes, outlets and drainage indices", async () => {

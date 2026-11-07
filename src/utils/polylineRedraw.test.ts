@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Point } from "@/types/roof";
 import type { VectorSegment } from "@/types/outline";
-import { findOutlineAnchor, matchRedrawEndpoint, preparePolylineRedraw, REDRAW_VERTEX_MATCH_TOLERANCE, redrawSection,
-  snapToVectors, type OutlineAnchor, type VectorSnap } from "./polylineRedraw";
+import { findOutlineAnchor, matchRedrawEndpoint, preparePolylineRedraw, REDRAW_VERTEX_MATCH_TOLERANCE, redrawRegionIntrusions,
+  redrawSection, snapToVectors, type OutlineAnchor, type RedrawRegion, type VectorSnap } from "./polylineRedraw";
 
 const roof = [{ x: 40, y: 40 }, { x: 200, y: 40 }, { x: 200, y: 260 }, { x: 40, y: 260 }];
 const bounds = { width: 2000, height: 2000 };
@@ -230,5 +230,34 @@ describe("local polyline replacement", () => {
       expect(edit.error).toMatch(/cutout, opening/);
       expect(edit.holes).toBe(holes);
     }
+  });
+});
+
+describe("redraw intrusions into roof areas that still need an outline", () => {
+  // roof spans x 40..200, y 40..260.
+  const region = (id: string, left: number, top: number, right: number, bottom: number): RedrawRegion =>
+    ({ id, label: `Roof area ${id}`, left, top, right, bottom });
+  const outward = [roof[0], roof[1], { x: 200, y: 100 }, { x: 260, y: 100 }, { x: 260, y: 200 }, { x: 200, y: 200 }, roof[2], roof[3]];
+
+  it("flags only regions that gain roof area beyond the original outline", () => {
+    const east = region("2", 230, 0, 400, 400), far = region("3", 500, 0, 600, 400);
+    expect(redrawRegionIntrusions(roof, outward, [east, far])).toEqual([east]);
+    // Area added by the redraw is reported even when the region box also overlaps the original roof.
+    const overlapping = region("4", 150, 0, 400, 400);
+    expect(redrawRegionIntrusions(roof, outward, [overlapping])).toEqual([overlapping]);
+  });
+
+  it("ignores pre-existing overlap, inward redraws, edge contact and sub-pixel slivers", () => {
+    const overlapping = region("2", 150, 0, 400, 400);
+    const inward = [roof[0], roof[1], { x: 200, y: 100 }, { x: 160, y: 100 }, { x: 160, y: 200 }, { x: 200, y: 200 }, roof[2], roof[3]];
+    expect(redrawRegionIntrusions(roof, inward, [overlapping])).toEqual([]);
+    // The added area spans y 100..200, entirely above a region box starting at y = 210.
+    const south = region("3", 0, 210, 400, 400);
+    expect(redrawRegionIntrusions(roof, outward, [south])).toEqual([]);
+    const touching = region("4", 260, 0, 400, 400);
+    expect(redrawRegionIntrusions(roof, outward, [touching])).toEqual([]);
+    const sliver = [roof[0], roof[1], { x: 200, y: 100 }, { x: 200.001, y: 100 }, { x: 200.001, y: 200 }, { x: 200, y: 200 }, roof[2], roof[3]];
+    expect(redrawRegionIntrusions(roof, sliver, [overlapping])).toEqual([]);
+    expect(redrawRegionIntrusions(roof, outward, [])).toEqual([]);
   });
 });

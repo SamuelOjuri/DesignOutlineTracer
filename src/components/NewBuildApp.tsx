@@ -91,6 +91,10 @@ export const NewBuildApp = () => {
     roiId: outlineRoiId, boundaryPolicy: outlinePolicy, boundaryNotes: outlineNotes,
     enabled: roiClient.enabled && currentStep === "paint",
   });
+  // Any geometry commit changes geometry_revision, which cancels this request or discards its proposal.
+  const outlineGeneration = outlineDetection.busy ? "running" as const
+    : outlineDetection.result?.proposals.length
+      && ["complete", "needs_review"].includes(outlineDetection.result.status) ? "review" as const : null;
   const canvases = useRef(new Map<string, HTMLCanvasElement>());
   const [uploadScale, setUploadScale] = useState<DrawingScale>({ paperSize: "A1", scaleRatio: 100 });
   const [selectionPending, setSelectionPending] = useState(false);
@@ -362,6 +366,8 @@ export const NewBuildApp = () => {
             outlineTargetId={roiClient.enabled ? outlineRoiId : undefined}
             outlineProposals={outlineDetection.result?.proposals}
             vectorSegments={activePage?.source.vector_segments}
+            outlineGeneration={outlineGeneration}
+            unoutlinedRegions={unoutlinedRegions}
           />
         ) : null;
       case "outlets":

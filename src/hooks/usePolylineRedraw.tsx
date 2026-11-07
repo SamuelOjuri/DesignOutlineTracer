@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import type { Point } from "@/types/roof";
 import type { VectorSegment } from "@/types/outline";
 import type { OutlineEditResult } from "@/utils/polygonAdjust";
-import { findOutlineAnchor, matchRedrawEndpoint, preparePolylineRedraw, redrawSection, snapToVectors, REDRAW_VERTEX_MATCH_TOLERANCE,
-  type OutlineAnchor, type VectorSnap } from "@/utils/polylineRedraw";
+import { findOutlineAnchor, matchRedrawEndpoint, preparePolylineRedraw, redrawRegionIntrusions, redrawSection, snapToVectors,
+  REDRAW_VERTEX_MATCH_TOLERANCE, type OutlineAnchor, type RedrawRegion, type VectorSnap } from "@/utils/polylineRedraw";
 
 interface RedrawSession {
   context: string;
@@ -43,11 +43,20 @@ interface PolylineRedrawOptions {
   scale: number;
   onCommit: (edit: OutlineEditResult) => void;
   onActivate: () => void;
+  /** While set, drafting continues but nothing is applied; the text explains what to finish first. */
+  commitBlocked?: string | null;
+  /** Accepted roof areas still without an outline. Adding area inside one is flagged before applying. */
+  pendingRegions?: readonly RedrawRegion[];
 }
 
 const blank = (context: string): RedrawSession => ({ context, start: null, via: [], end: null, otherPath: false, finishing: false });
 const distance = (first: Point, second: Point) => Math.hypot(first.x - second.x, first.y - second.y);
 const points = (ring: Point[]) => ring.map(point => `${point.x},${point.y}`).join(" ");
+const listLabels = (labels: string[]) => labels.length < 2 ? labels.join("")
+  : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+const intrusionWarning = (regions: readonly RedrawRegion[]) => !regions.length ? "" : regions.length === 1
+  ? `This redraw extends into ${regions[0].label}, which has not been outlined yet; its generated outline could then be rejected as overlapping.`
+  : `This redraw extends into ${listLabels(regions.map(region => region.label))}, which have not been outlined yet; their generated outlines could then be rejected as overlapping.`;
 const CLICK_TRAVEL = 4;
 const ANCHOR_RADIUS = 6;
 const VECTOR_RADIUS = 10;
@@ -60,7 +69,7 @@ function finishAt(session: RedrawSession, end: OutlineAnchor): RedrawSession {
 
 /** Replace a boundary path on explicit Apply or a deliberate click on a matching PDF endpoint. */
 export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors, source, scale,
-  onCommit, onActivate }: PolylineRedrawOptions) {
+  onCommit, onActivate, commitBlocked = null, pendingRegions = [] }: PolylineRedrawOptions) {
   const context = JSON.stringify([outlines, holes, openings]);
   const [armed, setArmed] = useState(false);
   const [hint, setHint] = useState<{ context: string; text: string } | null>(null);
@@ -126,6 +135,11 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
   };
   const evaluate = (session: RedrawSession): OutlineEditResult | null => session.start && session.end
     ? preparePolylineRedraw(outlines, holes, openings, session.start, session.end, session.via, session.otherPath, source) : null;
+  const intrusionsFor = (session: RedrawSession, edit: OutlineEditResult | null): RedrawRegion[] => {
+    const index = session.start?.outlineIndex;
+    if (index === undefined || !edit || edit.error || !pendingRegions.length) return [];
+    return redrawRegionIntrusions(outlines[index], edit.outlines[index], pendingRegions);
+  };
   const back = () => {
     const session = live();
     setHint(null);
@@ -142,6 +156,7 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
     onCommit(edit);
   };
   const apply = () => {
+    if (commitBlocked) { tell(commitBlocked); return; }
     const edit = evaluate(live());
     if (edit && !edit.error) commit(edit);
   };
@@ -170,9 +185,16 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
       return;
     }
     if (target.completion) {
-      const edit = evaluate(finishAt(session, target.completion));
+      const finished = finishAt(session, target.completion);
+      const edit = evaluate(finished);
       if (!edit || edit.error) {
         tell(edit?.error ?? "The redraw could not be completed. Keep drawing or choose Finish on outline.");
+        return;
+      }
+      if (commitBlocked || intrusionsFor(finished, edit).length) {
+        // A one-click finish never applies past a guard; keep it ready for an explicit Apply redraw.
+        update(finished);
+        setCursor(null);
         return;
       }
       commit(edit);
@@ -221,15 +243,26 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
   const removed = review?.start && review.end ? redrawSection(outlines, review.start, review.end, review.otherPath) : [];
   const draft = current?.start ? [current.start.point, ...current.via, ...(current.end ? [current.end.point] : [])] : [];
   const rubber = draft.length && !current?.end && hovered ? [draft[draft.length - 1], hovered.point] : [];
-  const label = hovered?.completion ? valid ? "Click to finish and apply" : "Cannot finish here"
+  const intrusions = review ? intrusionsFor(review, preview) : [];
+  const ready = valid && Boolean(review?.end);
+  // Guards apply only to a valid finished redraw; drafting itself is never restricted.
+  const notice = ready ? [commitBlocked, intrusionWarning(intrusions)].filter(Boolean).join(" ") : "";
+  const held = ready && Boolean(commitBlocked || intrusions.length);
+  const label = hovered?.completion ? valid ? held ? "Click to finish for review" : "Click to finish and apply" : "Cannot finish here"
     : hovered?.anchor ? current?.start ? "Finish on outline" : "Start on outline"
     : hovered?.snap ? `PDF ${hovered.snap.kind}` : "Free point";
-  const message = hint?.context === context ? hint.text : preview?.error ?? (!current ? ""
-    : current.end ? "Review the dashed outline and orange section, then Apply redraw. Other path changes the section replaced."
-    : hovered?.completion ? "Click to finish and apply. Review the orange section and dashed outline. Hold Alt to continue drawing, or use Other path to change the section."
+  const guidance = !current ? ""
+    : current.end ? commitBlocked
+      ? "Review the dashed outline and orange section; Apply redraw becomes available afterwards. Other path changes the section replaced."
+      : "Review the dashed outline and orange section, then Apply redraw. Other path changes the section replaced."
+    : hovered?.completion ? held
+      ? "Click to finish, then review before applying. Hold Alt to continue drawing, or use Other path to change the section."
+      : "Click to finish and apply. Review the orange section and dashed outline. Hold Alt to continue drawing, or use Other path to change the section."
     : current.finishing ? "Click the same blue outline where the redraw should reconnect. Hold Alt to connect along an edge near an existing corner. Keep drawing returns to placing corners."
     : current.start ? "Click each new corner. Click a matching PDF endpoint to finish and apply, or choose Finish on outline to review first. Hold Alt for a free point; Backspace removes the last point."
-    : "Click a blue outline edge or corner to start, then trace the missing boundary. Hold Alt to start along an edge near an existing corner.");
+    : "Click a blue outline edge or corner to start, then trace the missing boundary. Hold Alt to start along an edge near an existing corner.";
+  const message = hint?.context === context ? hint.text : preview?.error ?? [notice, guidance].filter(Boolean).join(" ");
+  const tone = preview?.error ? "text-destructive" : notice ? "text-amber-700" : "text-muted-foreground";
   const noVectors = !vectors.length ? " No PDF vector lines are available; place corners manually." : "";
 
   return {
@@ -260,10 +293,10 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
         update({ ...live(), finishing: !live().finishing }); setHint(null); setCursor(null);
       }}>{current.finishing ? "Keep drawing" : "Finish on outline"}</Button>}
       {current.end && <>
-        <Button size="sm" disabled={!valid} onClick={apply}>Apply redraw</Button>
+        <Button size="sm" disabled={!valid || Boolean(commitBlocked)} title={commitBlocked ?? undefined} onClick={apply}>Apply redraw</Button>
       </>}
       <Button size="sm" variant="ghost" title="Leave Redraw (Esc)" onClick={cancel}>Exit redraw</Button>
-      <span role="status" className={`text-xs ${preview?.error ? "text-destructive" : "text-muted-foreground"}`}>{message}{noVectors}</span>
+      <span role="status" className={`text-xs ${tone}`}>{message}{noVectors}</span>
     </> : null,
     overlay: current ? <svg viewBox={`0 0 ${source.width} ${source.height}`} width="100%" height="100%"
       data-testid="polyline-redraw-overlay" aria-label="Redraw outline: click the boundary, add corners, then choose Finish on outline"
@@ -288,7 +321,7 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
         strokeWidth={2} vectorEffect="non-scaling-stroke" data-testid="polyline-redraw-point" />)}
       {hovered && <>
         <circle cx={hovered.point.x} cy={hovered.point.y} r={6 / safeScale} fill="white"
-          stroke={hovered.completion ? valid ? "#15803d" : "#dc2626" : hovered.anchor ? "#15803d" : hovered.snap ? "#0f766e" : "#7c3aed"} strokeWidth={2}
+          stroke={hovered.completion ? valid ? held ? "#b45309" : "#15803d" : "#dc2626" : hovered.anchor ? "#15803d" : hovered.snap ? "#0f766e" : "#7c3aed"} strokeWidth={2}
           vectorEffect="non-scaling-stroke" data-testid="polyline-redraw-cursor" data-snap={hovered.completion ? "finish" : hovered.anchor ? "outline" : hovered.snap?.kind ?? "free"} />
         <text x={hovered.point.x + 10 / safeScale} y={hovered.point.y - 10 / safeScale} fontSize={12 / safeScale}
           fill="#134e4a" stroke="white" strokeWidth={3 / safeScale} paintOrder="stroke" fontWeight={600}>{label}</text>

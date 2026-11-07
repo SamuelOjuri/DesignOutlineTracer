@@ -254,6 +254,17 @@ portions keep their drainage marks; newly drawn sides need their drainage marks
 reviewed. Crossings, touching roofs, page overshoot and changes to cutouts or
 openings are blocked. The tool remains active after applying a redraw.
 
+Applying a redraw changes the drawing, which would cancel an outline that is
+still generating or discard a generated proposal awaiting review. While either
+is pending you can keep drafting, but a matching endpoint finishes the redraw
+for review instead of applying it, and **Apply redraw** stays disabled until
+the generation is cancelled or completes and its proposal is used or
+discarded. A redraw that adds roof area inside an accepted roof area that has
+not been outlined yet also stops for review, with a warning naming that area:
+its generated outline could later be rejected as overlapping. Area the outline
+already covered does not trigger the warning, and **Apply redraw** remains
+available for an intended extension.
+
 Dragging an edge inward trims the area swept by that edge and its adjoining
 edges, then rebuilds the boundary. It can pass narrow returns and meet existing
 edges exactly without adding insulation area. Any separated fragments remain

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { createPenetrationPlanPdf, createRedrawPlanPdf } from "../fixtures/roofPlan";
 import type { OutlineRequest, OutlineResponse } from "../../src/types/outline";
@@ -235,12 +236,11 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   expect(requests).toHaveLength(3); // Fitting uses the uploaded drawing locally, without another model request.
 });
 
-for (const automatic of [false, true]) {
-test(automatic
-  ? "finishes and applies a redraw on one click at a PDF endpoint matching an existing outline vertex"
-  : "redraws a missing rotated return using PDF vector snaps and restores it with one undo", async ({ page }, testInfo) => {
-  const plan = await createRedrawPlanPdf(automatic);
-  const requests: OutlineRequest[] = [];
+type RedrawPlan = Awaited<ReturnType<typeof createRedrawPlanPdf>>;
+
+/** Serve the fixture's outline for every request; `hold` can keep one request open until the test releases it. */
+async function routeRedrawOutline(page: Page, plan: RedrawPlan, requests: OutlineRequest[],
+  hold: (index: number) => Promise<void> | undefined = () => undefined) {
   await page.route("http://127.0.0.1:4199/api/roi/v1/**", async route => {
     const request = route.request();
     const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, content-type",
@@ -255,6 +255,12 @@ test(automatic
     expect(request.url()).toMatch(/\/outlines$/);
     const payload = request.postDataJSON() as OutlineRequest;
     requests.push(payload);
+    const held = hold(requests.length - 1);
+    if (held) {
+      await held;
+      // The browser has normally cancelled this request already.
+      return route.abort().catch(() => undefined);
+    }
     const response: OutlineResponse = {
       schema_version: "outline-1", page_id: payload.page_id, request_id: payload.request_id,
       source_image_hash: payload.source_image_hash, roi_revision: payload.roi_revision,
@@ -268,6 +274,10 @@ test(automatic
     };
     return route.fulfill({ headers, json: response });
   });
+}
+
+/** Upload the fixture, accept one manual roof area and apply its generated outline. */
+async function applyGeneratedRedrawOutline(page: Page, plan: RedrawPlan) {
   await page.goto("/new-build");
   await page.locator('input[type="file"]').setInputFiles(plan.file);
   await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled();
@@ -283,6 +293,16 @@ test(automatic
   await page.getByRole("button", { name: "Set Outlines", exact: true }).click();
   await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
   await page.getByRole("button", { name: "Use outline", exact: true }).click();
+}
+
+for (const automatic of [false, true]) {
+test(automatic
+  ? "finishes and applies a redraw on one click at a PDF endpoint matching an existing outline vertex"
+  : "redraws a missing rotated return using PDF vector snaps and restores it with one undo", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf(automatic);
+  const requests: OutlineRequest[] = [];
+  await routeRedrawOutline(page, plan, requests);
+  await applyGeneratedRedrawOutline(page, plan);
   expect(requests).toHaveLength(1);
   expect(requests[0].vector_segments.length).toBeGreaterThanOrEqual(6);
   await page.getByRole("button", { name: "Adjust", exact: true }).click();
@@ -337,3 +357,53 @@ test(automatic
   expect(requests).toHaveLength(1); // Redrawing and undo never call a model or backend.
 });
 }
+
+test("holds a one-click redraw while outline generation runs, then applies it after the generation is cancelled", async ({ page }) => {
+  const plan = await createRedrawPlanPdf(true);
+  const requests: OutlineRequest[] = [];
+  let release = () => {};
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await routeRedrawOutline(page, plan, requests, index => index === 1 ? held : undefined);
+  await applyGeneratedRedrawOutline(page, plan);
+  await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Generating outline...", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+  await page.getByRole("button", { name: "Redraw", exact: true }).click();
+  const surface = page.getByTestId("polyline-redraw-overlay");
+  const accepted = page.getByTestId("accepted-outline-overlay").locator("[data-accepted-outline]");
+  const before = await accepted.getAttribute("points");
+  const screenPoint = async ({ x, y }: { x: number; y: number }) => {
+    const box = (await surface.boundingBox())!;
+    return { x: box.x + x / 600 * box.width, y: box.y + y / 400 * box.height };
+  };
+  // Redraw controls appear after the first click and move the canvas, so map each point just before using it.
+  const start = await screenPoint(plan.start);
+  await page.mouse.click(start.x, start.y);
+  const corner = await screenPoint(plan.corner);
+  await page.mouse.move(corner.x + 1, corner.y - 1);
+  await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
+  await page.mouse.click(corner.x + 1, corner.y - 1);
+  const end = await screenPoint(plan.end);
+  await page.mouse.move(end.x + 1, end.y - 1);
+  await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  await expect(page.getByText("Click to finish for review", { exact: true })).toBeVisible();
+  await page.mouse.click(end.x + 1, end.y - 1);
+  const apply = page.getByRole("button", { name: "Apply redraw", exact: true });
+  await expect(apply).toBeDisabled();
+  await expect(page.getByText("Finish or cancel outline generation before applying this redraw.")).toBeVisible();
+  await expect(accepted).toHaveAttribute("points", before!);
+  await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByText("Generation cancelled. Your drawing is unchanged.")).toBeVisible();
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await expect(accepted).not.toHaveAttribute("points", before!);
+  const actual = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
+  for (const point of plan.corrected) {
+    expect(actual.some(([x, y]) => Math.hypot(x - point.x, y - point.y) < 0.0001)).toBe(true);
+  }
+  release();
+  expect(requests).toHaveLength(2);
+});

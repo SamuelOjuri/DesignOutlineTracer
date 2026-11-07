@@ -53,7 +53,10 @@ An ROI that cuts off the proposed scope must be corrected before use. Cropping
 supplies context and never turns the ROI rectangle into a roof perimeter.
 Generation failure, cancellation, navigation and stale responses leave existing
 geometry intact. Changing the region, policy, guidance, page or scope invalidates
-the pending proposal. Review and drawing state still live only in the open
+the pending proposal; any committed manual edit changes the scope, so it also
+cancels a running generation. **Redraw** keeps its finished draft for review
+instead of applying while a generation is running or a proposal awaits review.
+Review and drawing state still live only in the open
 New Build screen; this feature does not add persistence.
 
 ## Pipeline

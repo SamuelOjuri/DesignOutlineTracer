@@ -5,6 +5,8 @@ import { findClosestEdge, findClosestVertex, findVertexMergeTarget, mergePolygon
 import { Button } from "@/components/ui/button";
 import type { Box2D, RoiAnnotation } from "@/types/roi";
 import { buildRoiFillMask } from "@/utils/roiFillMask";
+import { boxToSource } from "@/utils/roiCoordinates";
+import type { RedrawRegion } from "@/utils/polylineRedraw";
 import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/utils/rectangleCutout";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import type { OutlineProposal } from "@/types/outline";
@@ -40,7 +42,16 @@ interface PaintBucketCanvasProps {
   outlineTargetId?: string | null;
   outlineProposals?: OutlineProposal[];
   vectorSegments?: readonly VectorSegment[];
+  /** Automatic outline work that committing a redraw would cancel ("running") or discard ("review"). */
+  outlineGeneration?: "running" | "review" | null;
+  /** Accepted roof areas without an outline yet; Redraw warns before adding roof area inside them. */
+  unoutlinedRegions?: RoiAnnotation[];
 }
+
+const REDRAW_BLOCKED: Record<"running" | "review", string> = {
+  running: "Finish or cancel outline generation before applying this redraw.",
+  review: "Use or discard the generated outline proposal before applying this redraw.",
+};
 
 const FILL_COLOR: [number, number, number, number] = [37, 99, 235, 15];
 const PREVIEW_FILL_COLOR = [50, 130, 220, 100] as const;
@@ -62,6 +73,8 @@ export const PaintBucketCanvas = ({
   outlineTargetId,
   outlineProposals = [],
   vectorSegments = [],
+  outlineGeneration = null,
+  unoutlinedRegions = [],
 }: PaintBucketCanvasProps) => {
   // Step 4 owns these openings. Display them without folding them into Step 3's
   // editable base geometry, which would leave stale cutouts after a later move.
@@ -658,9 +671,15 @@ export const PaintBucketCanvas = ({
       setActiveTool("adjust");
     } });
 
+  const pendingRedrawRegions: RedrawRegion[] = unoutlinedRegions.map(region => {
+    const rect = boxToSource(region.box_2d, pdfCanvas);
+    return { id: region.id, label: regionLabels?.[region.id] ?? region.label,
+      left: rect.x, top: rect.y, right: rect.x + rect.width, bottom: rect.y + rect.height };
+  });
   const polylineRedraw = usePolylineRedraw({ enabled: isAdjustMode && !isInitializing && roofOutlines.length > 0,
     outlines: roofOutlines, holes: interiorHoles, openings: penetrationHoles, vectors: vectorSegments,
     source: pdfCanvas, scale: displayScale, onCommit: commitAdjustment,
+    commitBlocked: outlineGeneration ? REDRAW_BLOCKED[outlineGeneration] : null, pendingRegions: pendingRedrawRegions,
     onActivate: () => {
       cancelAdjustment();
       sideFit.cancel();

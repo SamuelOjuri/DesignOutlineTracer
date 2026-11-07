@@ -1,7 +1,9 @@
 import { useState } from "react";
+import type { ComponentProps } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { mockCanvasContext } from "@/test/canvas";
+import { syntheticAnnotation } from "@/test/roi";
 import type { Point } from "@/types/roof";
 import type { VectorSegment } from "@/types/outline";
 import { PaintBucketCanvas } from "./PaintBucketCanvas";
@@ -26,7 +28,9 @@ const end = turn({ x: 210, y: 240 });
 const vectors: VectorSegment[] = [{ start, end: inset }, { start: inset, end }];
 const ringText = (points: Point[]) => points.map(point => `${point.x},${point.y}`).join(" ");
 
-async function editor(lines = vectors, holes: Point[][] = [hole], initialOutlines: Point[][] = [roof]) {
+type GuardProps = Pick<ComponentProps<typeof PaintBucketCanvas>, "outlineGeneration" | "unoutlinedRegions" | "regionLabels">;
+
+async function editor(lines = vectors, holes: Point[][] = [hole], initialOutlines: Point[][] = [roof], guards: GuardProps = {}) {
   const context = Object.assign(mockCanvasContext(), {
     getImageData: () => ({ data: new Uint8ClampedArray(width * height * 4), width, height }),
     putImageData: vi.fn(),
@@ -40,11 +44,14 @@ async function editor(lines = vectors, holes: Point[][] = [hole], initialOutline
   source.width = width; source.height = height;
   const outlinesChanged = vi.fn(), holesChanged = vi.fn();
   let externalEdit: (outlines: Point[][]) => void = () => {};
+  let updateGuards: (next: GuardProps) => void = () => {};
   function Editor() {
     const [outlines, setOutlines] = useState(initialOutlines);
     const [cutouts, setCutouts] = useState(holes);
+    const [guardProps, setGuardProps] = useState(guards);
     externalEdit = setOutlines;
-    return <PaintBucketCanvas pdfCanvas={source} roofOutlines={outlines} interiorHoles={cutouts} vectorSegments={lines}
+    updateGuards = setGuardProps;
+    return <PaintBucketCanvas {...guardProps} pdfCanvas={source} roofOutlines={outlines} interiorHoles={cutouts} vectorSegments={lines}
       onOutlinesExtracted={(next, index, remap) => { outlinesChanged(next, index, remap); setOutlines(next); }}
       onHolesExtracted={next => { holesChanged(next); setCutouts(next); }} />;
   }
@@ -69,7 +76,8 @@ async function editor(lines = vectors, holes: Point[][] = [hole], initialOutline
       up: (point: Point) => fireEvent.pointerUp(surface, at(point)),
     };
   };
-  return { pointer, outlinesChanged, holesChanged, externalEdit, source, context };
+  return { pointer, outlinesChanged, holesChanged, externalEdit, source, context,
+    setGuards: (next: GuardProps) => act(() => updateGuards(next)) };
 }
 
 const accepted = () => screen.getByTestId("accepted-outline-overlay").querySelector("[data-accepted-outline]")!;
@@ -354,4 +362,64 @@ it("never applies an endpoint completion from dragging or a cancelled pointer", 
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("keeps drafting but holds a one-click finish and Apply while outline generation is running or awaiting review", async () => {
+  const { pointer, outlinesChanged, setGuards } = await editor(endpointVectors, [hole], [roof], { outlineGeneration: "running" });
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  const p = pointer();
+  p.click(start); p.click(inset);
+  expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
+  p.move(roof[2]);
+  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  expect(screen.getByText("Click to finish for review")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Finish or cancel outline generation before applying this redraw.");
+  p.click(roof[2]);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(accepted()).toHaveAttribute("points", ringText(roof));
+  expect(screen.getByTestId("polyline-redraw-preview")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  setGuards({ outlineGeneration: "review" });
+  expect(screen.getByRole("status")).toHaveTextContent("Use or discard the generated outline proposal before applying this redraw.");
+  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeDisabled();
+  setGuards({ outlineGeneration: null });
+  expect(screen.getByRole("status")).not.toHaveTextContent(/outline generation|outline proposal/);
+  fireEvent.click(screen.getByRole("button", { name: "Apply redraw" }));
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(accepted()).not.toHaveAttribute("points", ringText(roof));
+});
+
+const outerStart = turn({ x: 270, y: 130 }), outerEnd = turn({ x: 270, y: 240 });
+const outwardVectors: VectorSegment[] = [{ start, end: outerStart }, { start: outerStart, end: outerEnd }, { start: outerEnd, end: roof[2] }];
+// Source x 300..500, y 200..400: it already overlaps the roof's right side before any redraw.
+const pendingArea = { unoutlinedRegions: [syntheticAnnotation("roi-east", { box_2d: [500, 600, 1000, 1000] })],
+  regionLabels: { "roi-east": "Roof area 2" } };
+
+it("warns before a redraw adds roof area inside a roof area that has not been outlined yet", async () => {
+  const { pointer, outlinesChanged } = await editor(outwardVectors, [hole], [roof], pendingArea);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  const p = pointer();
+  p.click(start); p.click(outerStart); p.click(outerEnd); p.move(roof[2]);
+  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  expect(screen.getByText("Click to finish for review")).toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("This redraw extends into Roof area 2, which has not been outlined yet");
+  p.click(roof[2]);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("status")).toHaveTextContent("Roof area 2");
+  // A warning, not a block: the user can still apply an intended extension.
+  fireEvent.click(screen.getByRole("button", { name: "Apply redraw" }));
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged.mock.lastCall![0][0]).toHaveLength(7);
+});
+
+it("applies an inward one-click redraw directly when its roof only already overlapped a pending roof area", async () => {
+  const { pointer, outlinesChanged } = await editor(endpointVectors, [hole], [roof], pendingArea);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  const p = pointer();
+  p.click(start); p.click(inset); p.move(roof[2]);
+  expect(screen.getByText("Click to finish and apply")).toBeInTheDocument();
+  expect(screen.getByRole("status")).not.toHaveTextContent("Roof area 2");
+  p.click(roof[2]);
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
 });

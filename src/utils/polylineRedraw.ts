@@ -1,9 +1,12 @@
+import polygonClipping, { type MultiPolygon, type Polygon } from "polygon-clipping";
 import type { Point } from "@/types/roof";
 import type { VectorSegment } from "@/types/outline";
 import { prepareOutlineEdit, type OutlineEditResult } from "./polygonAdjust";
 
 export interface OutlineAnchor { outlineIndex: number; edgeIndex: number; t: number; point: Point }
 export interface VectorSnap { point: Point; kind: "endpoint" | "intersection" | "line"; segments: VectorSegment[] }
+/** An accepted roof area box in source pixels. */
+export interface RedrawRegion { id: string; label: string; left: number; top: number; right: number; bottom: number }
 
 /** Source-pixel numeric noise only; independent of zoom and pointer hit targets. */
 export const REDRAW_VERTEX_MATCH_TOLERANCE = 1e-4;
@@ -233,4 +236,33 @@ export function preparePolylineRedraw(outlines: Point[][], holes: Point[][], ope
     return reject("the redraw would change a cutout, opening or roof component. Choose another path.");
   }
   return { ...edit, holes, editedOutlineIndex: selected.start.outlineIndex, edgeRemap };
+}
+
+/** Below a square source pixel, an overlap is treated as numeric contact rather than added roof area. */
+const MIN_INTRUSION_AREA = 1;
+const asPolygon = (ring: Point[]): Polygon => [ring.map(({ x, y }) => [x, y])];
+const ringArea = (ring: [number, number][]) => Math.abs(ring.reduce((sum, [x, y], index) => {
+  const [nextX, nextY] = ring[(index + 1) % ring.length];
+  return sum + x * nextY - nextX * y;
+}, 0)) / 2;
+const multiArea = (shape: MultiPolygon) => shape.reduce((total, [outer, ...holes]) =>
+  total + ringArea(outer) - holes.reduce((sum, hole) => sum + ringArea(hole), 0), 0);
+
+/**
+ * Regions whose box gains roof area from a redraw. Only area added beyond the original ring counts,
+ * so adjoining roof boxes that already overlapped the outline do not trigger a warning.
+ */
+export function redrawRegionIntrusions(original: Point[], redrawn: Point[], regions: readonly RedrawRegion[]): RedrawRegion[] {
+  if (!regions.length || original.length < 3 || redrawn.length < 3) return [];
+  try {
+    const added = polygonClipping.difference(asPolygon(redrawn), asPolygon(original));
+    if (multiArea(added) < MIN_INTRUSION_AREA) return [];
+    return regions.filter(region => region.right > region.left && region.bottom > region.top
+      && multiArea(polygonClipping.intersection(added, asPolygon([{ x: region.left, y: region.top },
+        { x: region.right, y: region.top }, { x: region.right, y: region.bottom }, { x: region.left, y: region.bottom }])))
+        >= MIN_INTRUSION_AREA);
+  } catch {
+    // The check only adds a warning; degenerate clipping input must not block a valid redraw.
+    return [];
+  }
 }
