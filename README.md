@@ -235,20 +235,20 @@ from dark linework in the page image when the PDF has none nearby.
 a polyline. Click an outline edge or corner to start, then click each new corner.
 Nearby PDF vector endpoints, intersections and lines snap the cursor and are
 highlighted; hold Alt to place a point freely or connect close to an existing
-corner without snapping onto it. No vector lines are available on
-some scanned pages, where corners can still be placed manually. When a snapped
-PDF endpoint coincides with one existing vertex on the same outline, the cursor
-shows **Click to finish and apply**. Hovering previews the result and the orange
-section being replaced; clicking completes and applies the valid redraw as one
-Undo action. The starting point, another roof's vertices and merely nearby points
-do not trigger this shortcut. Hold Alt to place that point and keep drawing.
-Invalid completions show a reason and keep the draft editable without saving it.
-For a connection midway along an edge or a separate review step, click **Finish
-on outline**, then click another position on the same outline to reconnect.
-The orange path shows the section being replaced; **Other path** switches to the
-other route around the boundary. Review the dashed result and click **Apply
-redraw**. **Back** or Backspace removes the last draft point; **Clear** starts
-over, and Esc or **Exit redraw** cancels. Applying is one Undo action, including
+corner without snapping onto it. On scanned pages without vector lines, corners
+can still be placed manually. Click near a different edge or vertex of the same
+blue outline to choose where to reconnect. The last clicked point supplies the
+reconnection; it does not have to match a PDF endpoint. Review the dashed result
+and orange section being replaced, then click **Finish redraw** to apply it.
+Moving the cursor to the button keeps the selected reconnection and preview.
+You can also continue placing corners: PDF-snapped and free draft points stay
+where you placed them, even near the blue boundary. Clicking an outline point
+never applies the redraw automatically. **Finish redraw** becomes available only
+when the last clicked point reconnects to the same outline and produces a valid
+boundary. Invalid completions show a reason and keep the draft editable.
+**Other path** switches to the other route around the boundary. **Back** or
+Backspace removes the last draft point; **Clear** starts over, and Esc or
+**Exit redraw** cancels. Applying is one Undo action, including
 outline identity, roof-region links and drainage markings. Retained boundary
 portions keep their drainage marks; newly drawn sides need their drainage marks
 reviewed. Crossings, touching roofs, page overshoot and changes to cutouts or
@@ -256,13 +256,12 @@ openings are blocked. The tool remains active after applying a redraw.
 
 Applying a redraw changes the drawing, which would cancel an outline that is
 still generating or discard a generated proposal awaiting review. While either
-is pending you can keep drafting, but a matching endpoint finishes the redraw
-for review instead of applying it, and **Apply redraw** stays disabled until
-the generation is cancelled or completes and its proposal is used or
-discarded. A redraw that adds roof area inside an accepted roof area that has
-not been outlined yet also stops for review, with a warning naming that area:
+is pending you can keep drafting and review a reconnection, but **Finish redraw**
+stays disabled until the generation is cancelled or completes and its proposal
+is used or discarded. A redraw that adds roof area inside an accepted roof area that has
+not been outlined yet shows a warning naming that area before applying:
 its generated outline could later be rejected as overlapping. Area the outline
-already covered does not trigger the warning, and **Apply redraw** remains
+already covered does not trigger the warning, and **Finish redraw** remains
 available for an intended extension.
 
 Dragging an edge inward trims the area swept by that edge and its adjoining

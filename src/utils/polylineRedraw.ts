@@ -8,9 +8,6 @@ export interface VectorSnap { point: Point; kind: "endpoint" | "intersection" | 
 /** An accepted roof area box in source pixels. */
 export interface RedrawRegion { id: string; label: string; left: number; top: number; right: number; bottom: number }
 
-/** Source-pixel numeric noise only; independent of zoom and pointer hit targets. */
-export const REDRAW_VERTEX_MATCH_TOLERANCE = 1e-4;
-
 const EPS = 1e-7;
 const finite = (point: Point) => Number.isFinite(point.x) && Number.isFinite(point.y);
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -125,18 +122,6 @@ function canonicalAnchor(outlines: Point[][], anchor: OutlineAnchor): OutlineAnc
   if (!finite(point) || distance(point, anchor.point) > EPS) return null;
   return { ...anchor, point, edgeIndex: anchor.t === 1 ? (anchor.edgeIndex + 1) % polygon.length : anchor.edgeIndex,
     t: anchor.t === 1 ? 0 : anchor.t };
-}
-
-/** Auto-finish only at a PDF endpoint coinciding with one actual vertex of the starting roof. */
-export function matchRedrawEndpoint(snap: VectorSnap | null, outlines: Point[][], start: OutlineAnchor): OutlineAnchor | null {
-  if (!snap || snap.kind !== "endpoint" || !finite(snap.point)) return null;
-  const anchoredStart = canonicalAnchor(outlines, start);
-  if (!anchoredStart || distance(snap.point, anchoredStart.point) <= REDRAW_VERTEX_MATCH_TOLERANCE) return null;
-  const polygon = outlines[anchoredStart.outlineIndex];
-  const matches = polygon.flatMap((point, edgeIndex) => finite(point)
-    && distance(point, snap.point) <= REDRAW_VERTEX_MATCH_TOLERANCE ? [{ point, edgeIndex }] : []);
-  if (matches.length !== 1) return null;
-  return { outlineIndex: anchoredStart.outlineIndex, edgeIndex: matches[0].edgeIndex, t: 0, point: matches[0].point };
 }
 
 function forwardArc(polygon: Point[], start: OutlineAnchor, end: OutlineAnchor): Point[] {

@@ -5,16 +5,20 @@ import { Button } from "@/components/ui/button";
 import type { Point } from "@/types/roof";
 import type { VectorSegment } from "@/types/outline";
 import type { OutlineEditResult } from "@/utils/polygonAdjust";
-import { findOutlineAnchor, matchRedrawEndpoint, preparePolylineRedraw, redrawRegionIntrusions, redrawSection, snapToVectors,
-  REDRAW_VERTEX_MATCH_TOLERANCE, type OutlineAnchor, type RedrawRegion, type VectorSnap } from "@/utils/polylineRedraw";
+import { findOutlineAnchor, preparePolylineRedraw, redrawRegionIntrusions, redrawSection, snapToVectors,
+  type OutlineAnchor, type RedrawRegion, type VectorSnap } from "@/utils/polylineRedraw";
+
+interface RedrawPoint {
+  point: Point;
+  /** A possible connection from this click; keep the PDF point intact if drawing continues. */
+  completion: OutlineAnchor | null;
+}
 
 interface RedrawSession {
   context: string;
   start: OutlineAnchor | null;
-  via: Point[];
-  end: OutlineAnchor | null;
+  via: RedrawPoint[];
   otherPath: boolean;
-  finishing: boolean;
 }
 
 interface Cursor {
@@ -49,7 +53,7 @@ interface PolylineRedrawOptions {
   pendingRegions?: readonly RedrawRegion[];
 }
 
-const blank = (context: string): RedrawSession => ({ context, start: null, via: [], end: null, otherPath: false, finishing: false });
+const blank = (context: string): RedrawSession => ({ context, start: null, via: [], otherPath: false });
 const distance = (first: Point, second: Point) => Math.hypot(first.x - second.x, first.y - second.y);
 const points = (ring: Point[]) => ring.map(point => `${point.x},${point.y}`).join(" ");
 const listLabels = (labels: string[]) => labels.length < 2 ? labels.join("")
@@ -61,13 +65,9 @@ const CLICK_TRAVEL = 4;
 const ANCHOR_RADIUS = 6;
 const VECTOR_RADIUS = 10;
 
-function finishAt(session: RedrawSession, end: OutlineAnchor): RedrawSession {
-  const last = session.via[session.via.length - 1];
-  const via = last && distance(last, end.point) <= REDRAW_VERTEX_MATCH_TOLERANCE ? session.via.slice(0, -1) : session.via;
-  return { ...session, via, end };
-}
+const endpoint = (session: RedrawSession) => session.via[session.via.length - 1]?.completion ?? null;
 
-/** Replace a boundary path on explicit Apply or a deliberate click on a matching PDF endpoint. */
+/** Preview the last clicked reconnection, and replace the boundary only on Finish redraw. */
 export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors, source, scale,
   onCommit, onActivate, commitBlocked = null, pendingRegions = [] }: PolylineRedrawOptions) {
   const context = JSON.stringify([outlines, holes, openings]);
@@ -125,16 +125,26 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
       y: (event.clientY - bounds.top) * source.height / bounds.height };
   };
   const aim = (point: Point, free: boolean, session: RedrawSession): Cursor => {
-    // Only an endpoint matching a real vertex can shortcut manual reconnection. Nearby returns stay draft points.
-    const anchoring = !session.start || session.finishing;
-    const anchor = anchoring ? findOutlineAnchor(point, outlines, ANCHOR_RADIUS / safeScale, !free) : null;
-    if (anchor) return { context, point: anchor.point, anchor, snap: null, completion: null };
-    const snap = free || anchoring ? null : snapToVectors(point, vectors, VECTOR_RADIUS / safeScale);
-    const completion = !free && !anchoring && session.start ? matchRedrawEndpoint(snap, outlines, session.start) : null;
-    return { context, point: completion?.point ?? snap?.point ?? point, anchor: null, snap, completion };
+    if (!session.start) {
+      const anchor = findOutlineAnchor(point, outlines, ANCHOR_RADIUS / safeScale, !free);
+      return { context, point: anchor?.point ?? point, anchor, snap: null, completion: null };
+    }
+    // Test the click itself against the starting roof, so a nearby PDF stroke cannot steal a connection.
+    const outlineIndex = session.start.outlineIndex;
+    const roof = [outlines[outlineIndex]];
+    const snap = free ? null : snapToVectors(point, vectors, VECTOR_RADIUS / safeScale);
+    const anchor = findOutlineAnchor(point, roof, ANCHOR_RADIUS / safeScale, !free)
+      // A PDF snap exactly on the boundary also connects when the cursor is just outside the outline hit radius.
+      ?? (snap ? findOutlineAnchor(snap.point, roof, 1e-6) : null);
+    const completion = anchor && distance(anchor.point, session.start.point) >= 1e-6 ? { ...anchor, outlineIndex } : null;
+    // Keep narrow PDF returns as draft corners. Only the final point is replaced by its connection on Finish.
+    return { context, point: snap?.point ?? (free ? point : completion?.point ?? point), anchor: null, snap, completion };
   };
-  const evaluate = (session: RedrawSession): OutlineEditResult | null => session.start && session.end
-    ? preparePolylineRedraw(outlines, holes, openings, session.start, session.end, session.via, session.otherPath, source) : null;
+  const evaluate = (session: RedrawSession): OutlineEditResult | null => {
+    const end = endpoint(session);
+    return session.start && end ? preparePolylineRedraw(outlines, holes, openings, session.start, end,
+      session.via.slice(0, -1).map(({ point }) => point), session.otherPath, source) : null;
+  };
   const intrusionsFor = (session: RedrawSession, edit: OutlineEditResult | null): RedrawRegion[] => {
     const index = session.start?.outlineIndex;
     if (index === undefined || !edit || edit.error || !pendingRegions.length) return [];
@@ -144,8 +154,7 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
     const session = live();
     setHint(null);
     setCursor(null);
-    if (session.end) update({ ...session, end: null, otherPath: false, finishing: false });
-    else if (session.via.length) update({ ...session, via: session.via.slice(0, -1), finishing: false });
+    if (session.via.length) update({ ...session, via: session.via.slice(0, -1) });
     else update(blank(context));
   };
   backAction.current = back;
@@ -163,7 +172,6 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
 
   const add = (point: Point, free: boolean) => {
     const session = live();
-    if (session.end) { tell("Review the dashed preview, or use Back to change the last point."); return; }
     const target = aim(point, free, session);
     setCursor(target);
     setHint(null);
@@ -172,40 +180,15 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
       update({ ...session, start: target.anchor });
       return;
     }
-    if (session.finishing) {
-      if (!target.anchor) { tell("Click the same blue outline to reconnect, or choose Keep drawing."); return; }
-      if (target.anchor.outlineIndex !== session.start.outlineIndex) {
-        tell("Reconnect to the same roof outline where you started."); return;
-      }
-      if (distance(target.anchor.point, session.start.point) < 1e-6) {
-        tell("Choose a different point on the outline to finish."); return;
-      }
-      update(finishAt(session, target.anchor));
-      setCursor(null);
-      return;
+    const previous = session.via[session.via.length - 1]?.point ?? session.start.point;
+    if (distance(previous, target.point) < 1e-6 && (!target.completion || distance(previous, target.completion.point) < 1e-6)) {
+      tell("Choose a different position for the next corner."); return;
     }
-    if (target.completion) {
-      const finished = finishAt(session, target.completion);
-      const edit = evaluate(finished);
-      if (!edit || edit.error) {
-        tell(edit?.error ?? "The redraw could not be completed. Keep drawing or choose Finish on outline.");
-        return;
-      }
-      if (commitBlocked || intrusionsFor(finished, edit).length) {
-        // A one-click finish never applies past a guard; keep it ready for an explicit Apply redraw.
-        update(finished);
-        setCursor(null);
-        return;
-      }
-      commit(edit);
-      return;
-    }
-    const previous = session.via[session.via.length - 1] ?? session.start.point;
-    if (distance(previous, target.point) < 1e-6) { tell("Choose a different position for the next corner."); return; }
     if (target.point.x < 0 || target.point.y < 0 || target.point.x > source.width || target.point.y > source.height) {
       tell("Place the corner inside the drawing page."); return;
     }
-    update({ ...session, via: [...session.via, target.point] });
+    update({ ...session, via: [...session.via, { point: target.point, completion: target.completion }] });
+    setCursor(null);
   };
   const down = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!current || event.button !== 0) return;
@@ -215,7 +198,7 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
     press.current = { pointerId: event.pointerId, element: event.currentTarget, context, origin: position(event), moved: false };
   };
   const move = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!current || current.end) return;
+    if (!current) return;
     const point = position(event);
     const pending = press.current;
     if (pending && pending.pointerId !== event.pointerId) return;
@@ -236,40 +219,37 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
   };
   const abandon = () => { endPress(); setCursor(null); };
 
-  const hovered = current && cursor?.context === context && !current.end ? cursor : null;
-  const review = current && hovered?.completion ? finishAt(current, hovered.completion) : current;
-  const preview = review ? evaluate(review) : null;
+  const hovered = current && cursor?.context === context ? cursor : null;
+  const end = current ? endpoint(current) : null;
+  const preview = current ? evaluate(current) : null;
   const valid = Boolean(preview && !preview.error);
-  const removed = review?.start && review.end ? redrawSection(outlines, review.start, review.end, review.otherPath) : [];
-  const draft = current?.start ? [current.start.point, ...current.via, ...(current.end ? [current.end.point] : [])] : [];
-  const rubber = draft.length && !current?.end && hovered ? [draft[draft.length - 1], hovered.point] : [];
-  const intrusions = review ? intrusionsFor(review, preview) : [];
-  const ready = valid && Boolean(review?.end);
+  const removed = current?.start && end ? redrawSection(outlines, current.start, end, current.otherPath) : [];
+  const draft = current?.start ? [current.start.point, ...current.via.map(({ point }, index) =>
+    end && index === current.via.length - 1 ? end.point : point)] : [];
+  const rubber = draft.length && hovered ? [draft[draft.length - 1], hovered.completion?.point ?? hovered.point] : [];
+  const intrusions = current ? intrusionsFor(current, preview) : [];
+  const ready = valid && Boolean(end);
   // Guards apply only to a valid finished redraw; drafting itself is never restricted.
   const notice = ready ? [commitBlocked, intrusionWarning(intrusions)].filter(Boolean).join(" ") : "";
-  const held = ready && Boolean(commitBlocked || intrusions.length);
-  const label = hovered?.completion ? valid ? held ? "Click to finish for review" : "Click to finish and apply" : "Cannot finish here"
-    : hovered?.anchor ? current?.start ? "Finish on outline" : "Start on outline"
+  const label = hovered?.completion ? "Reconnect to outline"
+    : hovered?.anchor ? "Start on outline"
     : hovered?.snap ? `PDF ${hovered.snap.kind}` : "Free point";
   const guidance = !current ? ""
-    : current.end ? commitBlocked
-      ? "Review the dashed outline and orange section; Apply redraw becomes available afterwards. Other path changes the section replaced."
-      : "Review the dashed outline and orange section, then Apply redraw. Other path changes the section replaced."
-    : hovered?.completion ? held
-      ? "Click to finish, then review before applying. Hold Alt to continue drawing, or use Other path to change the section."
-      : "Click to finish and apply. Review the orange section and dashed outline. Hold Alt to continue drawing, or use Other path to change the section."
-    : current.finishing ? "Click the same blue outline where the redraw should reconnect. Hold Alt to connect along an edge near an existing corner. Keep drawing returns to placing corners."
-    : current.start ? "Click each new corner. Click a matching PDF endpoint to finish and apply, or choose Finish on outline to review first. Hold Alt for a free point; Backspace removes the last point."
+    : end ? "Purple shows new outline to be applied; orange marks the boundary being replaced. Click Finish redraw to apply, or Other path to change which section is replaced. Keep clicking to add corners, or use Back to remove the last point."
+    : current.start ? "Click each new corner, then click the same blue outline to reconnect and choose Finish redraw. Hold Alt for free points or a precise edge connection; Backspace removes the last point."
     : "Click a blue outline edge or corner to start, then trace the missing boundary. Hold Alt to start along an edge near an existing corner.";
   const message = hint?.context === context ? hint.text : preview?.error ?? [notice, guidance].filter(Boolean).join(" ");
   const tone = preview?.error ? "text-destructive" : notice ? "text-amber-700" : "text-muted-foreground";
   const noVectors = !vectors.length ? " No PDF vector lines are available; place corners manually." : "";
+  const finishDisabled = !valid || Boolean(commitBlocked);
+  const finishReason = preview?.error ?? (ready ? commitBlocked : null)
+    ?? (!end ? "Click a different point on the same blue outline to reconnect first." : undefined);
 
   return {
     active,
     cancel,
     button: enabled ? <Button size="sm" variant="adjustTool" aria-pressed={active}
-      title="Trace new corners with PDF snapping. Click a matching outline vertex to finish and apply, or use Finish on outline to review first."
+      title="Trace new corners, click the blue outline to reconnect, then choose Finish redraw."
       onClick={() => {
         if (active) { cancel(); return; }
         onActivate();
@@ -287,22 +267,15 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
           update({ ...live(), otherPath: !live().otherPath }); setHint(null);
         }}>Other path</Button>
       </>}
-      {current.start && !current.end && <Button size="sm" variant="outline"
-        title="Connect to an existing outline edge or corner; hold Alt to connect along an edge near a corner."
-        onClick={() => {
-        update({ ...live(), finishing: !live().finishing }); setHint(null); setCursor(null);
-      }}>{current.finishing ? "Keep drawing" : "Finish on outline"}</Button>}
-      {current.end && <>
-        <Button size="sm" disabled={!valid || Boolean(commitBlocked)} title={commitBlocked ?? undefined} onClick={apply}>Apply redraw</Button>
-      </>}
+      {current.start && <Button size="sm" disabled={finishDisabled} title={finishReason || undefined} onClick={apply}>Finish redraw</Button>}
       <Button size="sm" variant="ghost" title="Leave Redraw (Esc)" onClick={cancel}>Exit redraw</Button>
       <span role="status" className={`text-xs ${tone}`}>{message}{noVectors}</span>
     </> : null,
     overlay: current ? <svg viewBox={`0 0 ${source.width} ${source.height}`} width="100%" height="100%"
-      data-testid="polyline-redraw-overlay" aria-label="Redraw outline: click the boundary, add corners, then choose Finish on outline"
+      data-testid="polyline-redraw-overlay" aria-label="Redraw outline: click the boundary, add corners, reconnect to the boundary, then choose Finish redraw"
       className="pointer-events-auto cursor-crosshair" style={{ touchAction: "none" }}
       onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={abandon}
-      onLostPointerCapture={abandon} onPointerLeave={() => { if (!press.current && !hovered?.completion) setCursor(null); }}>
+      onLostPointerCapture={abandon} onPointerLeave={() => { if (!press.current) setCursor(null); }}>
       <rect width={source.width} height={source.height} fill="transparent" />
       {removed.length > 0 && <polyline points={points(removed)} fill="none" stroke="#c2410c" strokeWidth={4}
         strokeDasharray="6 4" vectorEffect="non-scaling-stroke" data-testid="polyline-redraw-section" />}
@@ -317,13 +290,13 @@ export function usePolylineRedraw({ enabled, outlines, holes, openings, vectors,
       {rubber.length > 0 && <polyline points={points(rubber)} fill="none" stroke={preview?.error ? "#dc2626" : "#7c3aed"} strokeWidth={1.5}
         strokeDasharray="4 3" vectorEffect="non-scaling-stroke" data-testid="polyline-redraw-rubber" />}
       {draft.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r={4 / safeScale}
-        fill="white" stroke={index === 0 || current.end && index === draft.length - 1 ? "#c2410c" : "#7c3aed"}
+        fill="white" stroke={index === 0 || end && index === draft.length - 1 ? "#c2410c" : "#7c3aed"}
         strokeWidth={2} vectorEffect="non-scaling-stroke" data-testid="polyline-redraw-point" />)}
       {hovered && <>
-        <circle cx={hovered.point.x} cy={hovered.point.y} r={6 / safeScale} fill="white"
-          stroke={hovered.completion ? valid ? held ? "#b45309" : "#15803d" : "#dc2626" : hovered.anchor ? "#15803d" : hovered.snap ? "#0f766e" : "#7c3aed"} strokeWidth={2}
+        <circle cx={hovered.completion?.point.x ?? hovered.point.x} cy={hovered.completion?.point.y ?? hovered.point.y} r={6 / safeScale} fill="white"
+          stroke={hovered.completion || hovered.anchor ? "#15803d" : hovered.snap ? "#0f766e" : "#7c3aed"} strokeWidth={2}
           vectorEffect="non-scaling-stroke" data-testid="polyline-redraw-cursor" data-snap={hovered.completion ? "finish" : hovered.anchor ? "outline" : hovered.snap?.kind ?? "free"} />
-        <text x={hovered.point.x + 10 / safeScale} y={hovered.point.y - 10 / safeScale} fontSize={12 / safeScale}
+        <text x={(hovered.completion?.point.x ?? hovered.point.x) + 10 / safeScale} y={(hovered.completion?.point.y ?? hovered.point.y) - 10 / safeScale} fontSize={12 / safeScale}
           fill="#134e4a" stroke="white" strokeWidth={3 / safeScale} paintOrder="stroke" fontWeight={600}>{label}</text>
       </>}
     </svg> : null,

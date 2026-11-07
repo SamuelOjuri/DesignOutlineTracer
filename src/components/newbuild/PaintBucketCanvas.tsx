@@ -1240,13 +1240,13 @@ export const PaintBucketCanvas = ({
       {isAdjustMode ? <div className="px-1 mb-2 min-h-12">
         <div role="group" aria-label="Adjust tools" className="flex flex-wrap items-center gap-2 min-h-10">
           {sideFit.button}
+          {polylineRedraw.button}
           <Button variant="adjustTool" size="sm"
             onClick={() => selectTool(activeTool === "straighten" ? "adjust" : "straighten")}
             title="Click a side to align it horizontally or vertically, including intermediate points"
             aria-pressed={activeTool === "straighten"} disabled={isInitializing || !roofOutlines.length}>
             <Ruler className="w-4 h-4 mr-1" />Straighten
           </Button>
-          {polylineRedraw.button}
           {sideFit.controls}
           {polylineRedraw.controls}
         </div>

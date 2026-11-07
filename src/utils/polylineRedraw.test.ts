@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Point } from "@/types/roof";
 import type { VectorSegment } from "@/types/outline";
-import { findOutlineAnchor, matchRedrawEndpoint, preparePolylineRedraw, REDRAW_VERTEX_MATCH_TOLERANCE, redrawRegionIntrusions,
-  redrawSection, snapToVectors, type OutlineAnchor, type RedrawRegion, type VectorSnap } from "./polylineRedraw";
+import { findOutlineAnchor, preparePolylineRedraw, redrawRegionIntrusions,
+  redrawSection, snapToVectors, type OutlineAnchor, type RedrawRegion } from "./polylineRedraw";
 
 const roof = [{ x: 40, y: 40 }, { x: 200, y: 40 }, { x: 200, y: 260 }, { x: 40, y: 260 }];
 const bounds = { width: 2000, height: 2000 };
@@ -90,53 +90,6 @@ describe("PDF vector snapping", () => {
       ? { start: horizontal.end, end: horizontal.start } : horizontal);
     const snap = snapToVectors({ x: 51, y: 51 }, [...repeated, vertical], 3);
     expect(snap).toEqual({ point: { x: 50, y: 50 }, kind: "intersection", segments: [horizontal, vertical] });
-  });
-});
-
-describe("PDF endpoint completion", () => {
-  const endpoint = (point: Point): VectorSnap => ({ point, kind: "endpoint", segments: [] });
-
-  it("matches fractional rotated PDF corners within numeric noise and returns the actual vertex", () => {
-    const angle = 20 * Math.PI / 180;
-    const polygon = roof.map(({ x, y }) => ({ x: 510.125 + x * Math.cos(angle) - y * Math.sin(angle),
-      y: 310.375 + x * Math.sin(angle) + y * Math.cos(angle) }));
-    const start = anchor(polygon, polygon[0]);
-    const corner = polygon[2];
-    const snap = endpoint({ x: corner.x + REDRAW_VERTEX_MATCH_TOLERANCE / 4,
-      y: corner.y - REDRAW_VERTEX_MATCH_TOLERANCE / 4 });
-    const result = matchRedrawEndpoint(snap, [polygon], start);
-    expect(result).toEqual({ outlineIndex: 0, edgeIndex: 2, t: 0, point: corner });
-    expect(result?.point).toBe(corner);
-  });
-
-  it("does not project an endpoint onto an edge or bridge a two-pixel return", () => {
-    const polygon = [roof[0], roof[1], { x: 200, y: 160 }, { x: 198, y: 160 }, { x: 198, y: 260 }, roof[3]];
-    const start = anchor(polygon, polygon[0]);
-    expect(matchRedrawEndpoint(endpoint({ x: 200, y: 162 }), [polygon], start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint({ x: 199, y: 160 }), [polygon], start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint({ x: 199.999, y: 160 }), [polygon], start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint(polygon[3]), [polygon], start)).toMatchObject({ edgeIndex: 3, t: 0 });
-  });
-
-  it("requires an endpoint snap on the starting outline and excludes the starting coordinate", () => {
-    const other = box(300, 40, 400, 260), start = anchor(roof, roof[0]);
-    const outlines = [roof, other];
-    expect(matchRedrawEndpoint(null, outlines, start)).toBeNull();
-    for (const kind of ["line", "intersection"] as const) {
-      expect(matchRedrawEndpoint({ point: roof[2], kind, segments: [] }, outlines, start)).toBeNull();
-    }
-    expect(matchRedrawEndpoint(endpoint(other[2]), outlines, start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint(roof[0]), outlines, start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint({ x: roof[0].x + 1e-5, y: roof[0].y }), outlines, start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint({ x: NaN, y: 260 }), outlines, start)).toBeNull();
-    expect(matchRedrawEndpoint(endpoint(roof[2]), outlines, { ...start, outlineIndex: 10 })).toBeNull();
-  });
-
-  it("rejects ambiguous actual vertices even if one is closer", () => {
-    const polygon = [roof[0], roof[1], roof[2], { x: 200 - REDRAW_VERTEX_MATCH_TOLERANCE / 2, y: 260 }, roof[3]];
-    expect(matchRedrawEndpoint(endpoint(roof[2]), [polygon], anchor(polygon, polygon[0]))).toBeNull();
-    const duplicate = [...roof, roof[2]];
-    expect(matchRedrawEndpoint(endpoint(roof[2]), [duplicate], anchor(duplicate, duplicate[0]))).toBeNull();
   });
 });
 

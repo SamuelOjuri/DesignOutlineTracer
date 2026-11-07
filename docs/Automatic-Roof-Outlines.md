@@ -54,8 +54,11 @@ supplies context and never turns the ROI rectangle into a roof perimeter.
 Generation failure, cancellation, navigation and stale responses leave existing
 geometry intact. Changing the region, policy, guidance, page or scope invalidates
 the pending proposal; any committed manual edit changes the scope, so it also
-cancels a running generation. **Redraw** keeps its finished draft for review
-instead of applying while a generation is running or a proposal awaits review.
+cancels a running generation. **Redraw** lets you keep drafting and preview the
+last clicked point's reconnection to the same blue boundary; its single
+**Finish redraw** button stays disabled while a generation is running or a
+proposal awaits review. Clicking a boundary point never applies a redraw
+automatically.
 Review and drawing state still live only in the open
 New Build screen; this feature does not add persistence.
 

@@ -280,7 +280,7 @@ async function routeRedrawOutline(page: Page, plan: RedrawPlan, requests: Outlin
 async function applyGeneratedRedrawOutline(page: Page, plan: RedrawPlan) {
   await page.goto("/new-build");
   await page.locator('input[type="file"]').setInputFiles(plan.file);
-  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Next", exact: true })).toBeEnabled({ timeout: 30_000 });
   await page.getByRole("button", { name: "Next", exact: true }).click();
   await page.getByRole("button", { name: "Manual region", exact: true }).click();
   const bounds = (await page.getByTestId("roi-source-canvas").boundingBox())!;
@@ -295,11 +295,11 @@ async function applyGeneratedRedrawOutline(page: Page, plan: RedrawPlan) {
   await page.getByRole("button", { name: "Use outline", exact: true }).click();
 }
 
-for (const automatic of [false, true]) {
-test(automatic
-  ? "finishes and applies a redraw on one click at a PDF endpoint matching an existing outline vertex"
-  : "redraws a missing rotated return using PDF vector snaps and restores it with one undo", async ({ page }, testInfo) => {
-  const plan = await createRedrawPlanPdf(automatic);
+for (const existingEndVertex of [false, true]) {
+test(existingEndVertex
+  ? "finishes a redraw at an existing outline vertex with one button and restores it with one undo"
+  : "finishes a missing rotated return at an outline edge with one button and restores it with one undo", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf(existingEndVertex);
   const requests: OutlineRequest[] = [];
   await routeRedrawOutline(page, plan, requests);
   await applyGeneratedRedrawOutline(page, plan);
@@ -317,35 +317,34 @@ test(automatic
   };
   const start = await screenPoint(plan.start);
   await page.mouse.click(start.x, start.y);
+  const finish = page.getByRole("button", { name: "Finish redraw", exact: true });
+  await expect(finish).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Finish on outline", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Apply redraw", exact: true })).toHaveCount(0);
   const corner = await screenPoint(plan.corner);
   await page.mouse.move(corner.x + 1, corner.y - 1);
   await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
   await page.mouse.click(corner.x + 1, corner.y - 1);
   const end = await screenPoint(plan.end);
-  if (automatic) {
-    await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
-    await page.mouse.move(end.x + 1, end.y - 1);
-    await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
-    await expect(page.getByText("Click to finish and apply", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
-    await expect(page.getByTestId("polyline-redraw-section")).toBeVisible();
-    await expect(accepted).toHaveAttribute("points", before!);
-    await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
-    await testInfo.attach("endpoint-match-before-click", { body: await page.screenshot(), contentType: "image/png" });
-    await page.mouse.click(end.x + 1, end.y - 1);
-    await expect(page.getByRole("button", { name: "Apply redraw", exact: true })).toHaveCount(0);
-  } else {
-    await page.getByRole("button", { name: "Finish on outline", exact: true }).click();
-    await page.mouse.click(end.x, end.y);
-    await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
-    await expect(accepted).toHaveAttribute("points", before!);
-    await testInfo.attach("rotated-return-redraw-preview", { body: await page.screenshot(), contentType: "image/png" });
-    await page.getByRole("button", { name: "Apply redraw", exact: true }).click();
-  }
+  await page.mouse.move(end.x, end.y);
+  await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  await expect(finish).toBeDisabled(); // Hovering cannot select a finishing point or apply the redraw.
+  await page.mouse.click(end.x, end.y);
+  await expect(finish).toBeEnabled();
+  const preview = page.getByTestId("polyline-redraw-preview");
+  await expect(preview).toBeVisible();
+  await expect(page.getByTestId("polyline-redraw-section")).toBeVisible();
+  const previewPoints = await preview.getAttribute("points");
+  await finish.hover();
+  await expect(preview).toHaveAttribute("points", previewPoints!);
+  await expect(accepted).toHaveAttribute("points", before!);
+  await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
+  await testInfo.attach("rotated-return-redraw-preview", { body: await page.screenshot(), contentType: "image/png" });
+  await finish.click();
   await expect(accepted).not.toHaveAttribute("points", before!);
   const actual = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
   expect(actual).toHaveLength(plan.corrected.length);
-  if (automatic) expect(actual).toContainEqual([plan.original[3].x, plan.original[3].y]);
+  if (existingEndVertex) expect(actual).toContainEqual([plan.original[3].x, plan.original[3].y]);
   for (const point of plan.corrected) {
     expect(actual.some(([x, y]) => Math.hypot(x - point.x, y - point.y) < 0.0001)).toBe(true);
   }
@@ -358,7 +357,7 @@ test(automatic
 });
 }
 
-test("holds a one-click redraw while outline generation runs, then applies it after the generation is cancelled", async ({ page }) => {
+test("holds Finish redraw while outline generation runs, then applies it after the generation is cancelled", async ({ page }) => {
   const plan = await createRedrawPlanPdf(true);
   const requests: OutlineRequest[] = [];
   let release = () => {};
@@ -387,18 +386,18 @@ test("holds a one-click redraw while outline generation runs, then applies it af
   const end = await screenPoint(plan.end);
   await page.mouse.move(end.x + 1, end.y - 1);
   await expect(page.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
-  await expect(page.getByText("Click to finish for review", { exact: true })).toBeVisible();
   await page.mouse.click(end.x + 1, end.y - 1);
-  const apply = page.getByRole("button", { name: "Apply redraw", exact: true });
-  await expect(apply).toBeDisabled();
+  const finish = page.getByRole("button", { name: "Finish redraw", exact: true });
+  await expect(finish).toBeDisabled();
+  await expect(page.getByTestId("polyline-redraw-preview")).toBeVisible();
   await expect(page.getByText("Finish or cancel outline generation before applying this redraw.")).toBeVisible();
   await expect(accepted).toHaveAttribute("points", before!);
   await expect(page.getByRole("button", { name: "Undo", exact: true })).toBeDisabled();
 
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText("Generation cancelled. Your drawing is unchanged.")).toBeVisible();
-  await expect(apply).toBeEnabled();
-  await apply.click();
+  await expect(finish).toBeEnabled();
+  await finish.click();
   await expect(accepted).not.toHaveAttribute("points", before!);
   const actual = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
   for (const point of plan.corrected) {

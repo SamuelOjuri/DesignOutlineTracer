@@ -81,26 +81,30 @@ async function editor(lines = vectors, holes: Point[][] = [hole], initialOutline
 }
 
 const accepted = () => screen.getByTestId("accepted-outline-overlay").querySelector("[data-accepted-outline]")!;
-const finish = () => fireEvent.click(screen.getByRole("button", { name: "Finish on outline" }));
+const finishButton = () => screen.getByRole("button", { name: "Finish redraw" });
+const finish = () => fireEvent.click(finishButton());
 
 it("redraws a missing rotated return using PDF endpoints and partial-edge anchors, with review and one Undo", async () => {
   const { pointer, outlinesChanged, holesChanged, source, context } = await editor();
   fireEvent.click(screen.getByTitle("Zoom in"));
   const p = pointer();
   p.click(start);
+  expect(finishButton()).toBeDisabled();
+  expect(screen.queryByRole("button", { name: "Finish on outline" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Apply redraw" })).not.toBeInTheDocument();
   p.move({ x: inset.x + 0.4, y: inset.y - 0.6 });
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
   expect(screen.getAllByTestId("polyline-redraw-vector").length).toBeGreaterThan(0);
   p.click({ x: inset.x + 0.4, y: inset.y - 0.6 });
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
-  finish();
+  expect(finishButton()).toBeDisabled();
   p.click(end);
   expect(screen.getByTestId("polyline-redraw-section")).toBeInTheDocument();
   expect(screen.getByTestId("polyline-redraw-preview")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeEnabled();
+  expect(finishButton()).toBeEnabled();
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(accepted()).toHaveAttribute("points", ringText(roof));
-  fireEvent.click(screen.getByRole("button", { name: "Apply redraw" }));
+  finish();
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
   const result = outlinesChanged.mock.lastCall![0] as Point[][];
   expect(result[0]).toHaveLength(6);
@@ -120,10 +124,11 @@ it("redraws a missing rotated return using PDF endpoints and partial-edge anchor
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
 });
 
-it("keeps snapping very narrow return points beside the old boundary until Finish is explicitly chosen", async () => {
+it("preserves a very narrow PDF return when continuing past a possible connection", async () => {
   const near = turn({ x: 238, y: 130 });
+  const middle = turn({ x: 238, y: 200 });
   const nearEnd = turn({ x: 238, y: 240 });
-  const { pointer, outlinesChanged } = await editor([{ start, end: near }, { start: near, end: nearEnd }]);
+  const { pointer, outlinesChanged } = await editor([{ start, end: near }, { start: near, end: middle }, { start: middle, end: nearEnd }]);
   const p = pointer();
   p.click(start);
   p.move(near);
@@ -131,18 +136,23 @@ it("keeps snapping very narrow return points beside the old boundary until Finis
   p.click(near);
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
   expect(screen.queryByRole("button", { name: "Apply redraw" })).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Finish on outline" })).toBeInTheDocument();
-  finish();
+  expect(finishButton()).toBeDisabled();
+  p.click(middle);
+  expect(finishButton()).toBeEnabled();
   p.click(nearEnd, true);
-  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeEnabled();
+  const retainedMiddle = screen.getAllByTestId("polyline-redraw-point")[2];
+  expect(Number(retainedMiddle.getAttribute("cx"))).toBeCloseTo(middle.x, 8);
+  expect(Number(retainedMiddle.getAttribute("cy"))).toBeCloseTo(middle.y, 8);
+  expect(finishButton()).toBeEnabled();
   expect(outlinesChanged).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Apply redraw" }));
+  finish();
   const result = outlinesChanged.mock.lastCall![0][0] as Point[];
+  expect(result.some(point => Math.hypot(point.x - near.x, point.y - near.y) < 1e-7)).toBe(true);
   expect(result.some(point => Math.hypot(point.x - nearEnd.x, point.y - nearEnd.y) < 1e-7)).toBe(true);
   expect(result.some(point => Math.hypot(point.x - roof[2].x, point.y - roof[2].y) < 1e-7)).toBe(false);
 });
 
-it("supports free placement without PDF vectors and switches between tracing and finishing", async () => {
+it("supports free placement and keeps drawing after a connection, with Back restoring the previous candidate", async () => {
   const { pointer, outlinesChanged } = await editor([]);
   expect(screen.getByRole("status")).toHaveTextContent("No PDF vector lines are available");
   const p = pointer();
@@ -150,13 +160,20 @@ it("supports free placement without PDF vectors and switches between tracing and
   p.move(inset);
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "free");
   p.click(inset);
-  finish();
-  fireEvent.click(screen.getByRole("button", { name: "Keep drawing" }));
-  expect(screen.getByRole("button", { name: "Finish on outline" })).toBeInTheDocument();
-  finish();
+  expect(finishButton()).toBeDisabled();
   p.click(end);
-  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeEnabled();
+  expect(finishButton()).toBeEnabled();
+  const preview = screen.getByTestId("polyline-redraw-preview").getAttribute("points");
+  p.click(turn({ x: 180, y: 210 }));
+  expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(4);
+  expect(finishButton()).toBeDisabled();
+  expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Back$/ }));
+  expect(finishButton()).toBeEnabled();
+  expect(screen.getByTestId("polyline-redraw-preview")).toHaveAttribute("points", preview!);
   expect(outlinesChanged).not.toHaveBeenCalled();
+  finish();
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
 });
 
 it("Alt places a free point near a PDF endpoint and Back removes the point before editing the finish", async () => {
@@ -177,11 +194,10 @@ it("Alt places a free point near a PDF endpoint and Back removes the point befor
   fireEvent.keyDown(window, { key: "Backspace" });
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(1);
   p.click(inset);
-  finish();
   p.click(end);
   fireEvent.click(screen.getByRole("button", { name: /^Back$/ }));
   expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Finish on outline" })).toBeInTheDocument();
+  expect(finishButton()).toBeDisabled();
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
   expect(outlinesChanged).not.toHaveBeenCalled();
 });
@@ -191,15 +207,15 @@ it("shows the alternate old boundary path and blocks a redraw that changes an ex
   const p = pointer();
   p.click(start);
   p.click(inset);
-  finish(); p.click(end);
+  p.click(end);
   const initialPath = screen.getByTestId("polyline-redraw-section").getAttribute("points");
   fireEvent.click(screen.getByRole("button", { name: "Other path" }));
   expect(screen.getByTestId("polyline-redraw-section").getAttribute("points")).not.toBe(initialPath);
   fireEvent.click(screen.getByRole("button", { name: /^Clear$/ }));
   p.click(start);
   p.click(turn({ x: 70, y: 90 }), true);
-  finish(); p.click(end);
-  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeDisabled();
+  p.click(end);
+  expect(finishButton()).toBeDisabled();
   expect(screen.getByRole("status")).toHaveTextContent(/blocked|cutout|opening|cross/i);
   expect(outlinesChanged).not.toHaveBeenCalled();
 });
@@ -231,7 +247,7 @@ it("discards drafts on Escape, switching tools, external geometry changes, and p
 
 const endpointVectors: VectorSegment[] = [{ start, end: inset }, { start: inset, end: roof[2] }];
 
-it("previews an exact PDF endpoint on a rotated outline without mutation, then completes with one click and one Undo", async () => {
+it("previews only a clicked reconnection and keeps that preview stable until Finish redraw, with one Undo", async () => {
   const { pointer, outlinesChanged, holesChanged } = await editor(endpointVectors);
   fireEvent.click(screen.getByTitle("Zoom in"));
   const p = pointer();
@@ -239,7 +255,11 @@ it("previews an exact PDF endpoint on a rotated outline without mutation, then c
   p.click(inset);
   p.move({ x: roof[2].x + 0.35, y: roof[2].y - 0.45 });
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
-  expect(screen.getByText("Click to finish and apply")).toBeInTheDocument();
+  expect(screen.getByText("Reconnect to outline")).toBeInTheDocument();
+  expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
+  expect(finishButton()).toBeDisabled();
+  p.click({ x: roof[2].x + 0.35, y: roof[2].y - 0.45 });
+  expect(finishButton()).toBeEnabled();
   const preview = screen.getByTestId("polyline-redraw-preview").getAttribute("points");
   expect(preview).not.toBe(ringText(roof));
   expect(screen.getByTestId("polyline-redraw-section")).toBeInTheDocument();
@@ -247,7 +267,12 @@ it("previews an exact PDF endpoint on a rotated outline without mutation, then c
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   expect(screen.queryByRole("button", { name: "Apply redraw" })).not.toBeInTheDocument();
-  p.click({ x: roof[2].x + 0.35, y: roof[2].y - 0.45 });
+  p.move(roof[0]);
+  expect(screen.getByTestId("polyline-redraw-preview")).toHaveAttribute("points", preview!);
+  fireEvent.pointerLeave(p.surface);
+  expect(screen.getByTestId("polyline-redraw-preview")).toHaveAttribute("points", preview!);
+  expect(finishButton()).toBeEnabled();
+  finish();
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
   expect(holesChanged).not.toHaveBeenCalled();
   expect(accepted()).toHaveAttribute("points", preview!);
@@ -265,32 +290,54 @@ it("previews an exact PDF endpoint on a rotated outline without mutation, then c
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
 });
 
-it("lets the direct completion preview switch which existing boundary path will be replaced", async () => {
+it("lets the clicked reconnection preview switch which existing boundary path will be replaced", async () => {
   const { pointer, outlinesChanged } = await editor(endpointVectors);
   const p = pointer();
-  p.click(start); p.click(inset); p.move(roof[2]);
+  p.click(start); p.click(inset); p.click(roof[2]);
   const section = screen.getByTestId("polyline-redraw-section").getAttribute("points");
   fireEvent.click(screen.getByRole("button", { name: "Other path" }));
   expect(screen.getByTestId("polyline-redraw-section").getAttribute("points")).not.toBe(section);
   expect(outlinesChanged).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Other path" }));
   expect(screen.getByTestId("polyline-redraw-section")).toHaveAttribute("points", section!);
-  p.click(roof[2]);
+  finish();
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
 });
 
-it("does not complete on a PDF endpoint merely near an existing corner", async () => {
+it("reconnects to a clicked outline vertex despite a nearby mismatched PDF endpoint", async () => {
   const nearby = turn({ x: 238, y: 240 });
   const { pointer, outlinesChanged } = await editor([{ start, end: inset }, { start: inset, end: nearby }]);
   const p = pointer();
-  p.click(start); p.click(inset); p.move(nearby);
-  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
+  p.click(start); p.click(inset); p.move(roof[2]);
+  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
   expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
-  p.click(nearby);
+  p.click(roof[2]);
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(3);
-  expect(screen.getByRole("button", { name: "Finish on outline" })).toBeInTheDocument();
+  expect(finishButton()).toBeEnabled();
   expect(accepted()).toHaveAttribute("points", ringText(roof));
+  finish();
+  const result = outlinesChanged.mock.lastCall![0][0] as Point[];
+  expect(result.some(point => Math.hypot(point.x - roof[2].x, point.y - roof[2].y) < 1e-7)).toBe(true);
+  expect(result.some(point => Math.hypot(point.x - nearby.x, point.y - nearby.y) < 1e-7)).toBe(false);
+});
+
+it("recognises an exact PDF endpoint connection within the PDF snap radius beyond the outline hit radius", async () => {
+  const { pointer, outlinesChanged } = await editor();
+  const p = pointer();
+  p.click(start); p.click(inset);
+  const scale = parseFloat(screen.getByTestId("paint-interaction-canvas").style.width) / width;
+  const raw = turn({ x: 210, y: 240 - 8 / scale });
+  p.move(raw);
+  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  expect(finishButton()).toBeDisabled();
+  p.click(raw);
+  expect(finishButton()).toBeEnabled();
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  const draftPoints = screen.getAllByTestId("polyline-redraw-point");
+  const last = draftPoints[draftPoints.length - 1];
+  expect(Number(last.getAttribute("cx"))).toBeCloseTo(end.x, 8);
+  expect(Number(last.getAttribute("cy"))).toBeCloseTo(end.y, 8);
 });
 
 it("excludes the start and other roof outlines from direct endpoint completion", async () => {
@@ -308,23 +355,32 @@ it("excludes the start and other roof outlines from direct endpoint completion",
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "endpoint");
   p.click(other[0]);
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(3);
+  expect(finishButton()).toBeDisabled();
+  expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getByTestId("accepted-outline-overlay").querySelectorAll("[data-accepted-outline]")).toHaveLength(2);
 });
 
-it("Alt suppresses direct endpoint completion and keeps the clicked point in the draft", async () => {
+it("Alt chooses a precise edge connection near a vertex and leaves the draft unapplied", async () => {
   const { pointer, outlinesChanged } = await editor(endpointVectors);
   const p = pointer();
-  p.click(start); p.click(inset); p.move(roof[2]);
+  const precise = turn({ x: 238, y: 240 });
+  p.click(start); p.click(inset); p.move(precise);
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
-  p.move(roof[2], true);
-  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "free");
+  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("cx", String(roof[2].x));
+  p.move(precise, true);
+  expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  expect(Number(screen.getByTestId("polyline-redraw-cursor").getAttribute("cx"))).toBeCloseTo(precise.x, 8);
   expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
-  p.click(roof[2], true);
+  p.click(precise, true);
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(3);
-  expect(screen.getByRole("button", { name: "Finish on outline" })).toBeInTheDocument();
+  expect(finishButton()).toBeEnabled();
   expect(accepted()).toHaveAttribute("points", ringText(roof));
+  finish();
+  const result = outlinesChanged.mock.lastCall![0][0] as Point[];
+  expect(result.some(point => Math.hypot(point.x - precise.x, point.y - precise.y) < 1e-7)).toBe(true);
+  expect(result.some(point => Math.hypot(point.x - roof[2].x, point.y - roof[2].y) < 1e-7)).toBe(false);
 });
 
 it("keeps an invalid protected-cutout completion as an unchanged draft with no Undo entry", async () => {
@@ -334,18 +390,21 @@ it("keeps an invalid protected-cutout completion as an unchanged draft with no U
   const p = pointer();
   p.click(start); p.click(insideHole); p.move(roof[2]);
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
+  p.click(roof[2]);
   expect(screen.getByRole("status")).toHaveTextContent(/blocked|cutout|opening|cross/i);
   expect(p.surface.querySelector('[stroke="#dc2626"]')).not.toBeNull();
   const draft = screen.getByTestId("polyline-redraw-draft").getAttribute("points");
-  p.click(roof[2]);
+  expect(finishButton()).toBeDisabled();
+  finish();
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(holesChanged).not.toHaveBeenCalled();
   expect(screen.getByTestId("polyline-redraw-draft")).toHaveAttribute("points", draft!);
-  expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
+  expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(3);
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   expect(accepted()).toHaveAttribute("points", ringText(roof));
   fireEvent.click(screen.getByRole("button", { name: /^Back$/ }));
-  expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(1);
+  expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
+  expect(screen.getByRole("status")).not.toHaveTextContent(/Redraw blocked/);
   expect(outlinesChanged).not.toHaveBeenCalled();
 });
 
@@ -357,14 +416,17 @@ it("never applies an endpoint completion from dragging or a cancelled pointer", 
   p.down(roof[2]); p.move({ x: roof[2].x + 20, y: roof[2].y + 20 }); p.up(roof[2]);
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
+  expect(finishButton()).toBeDisabled();
   p.move(roof[2]); p.down(roof[2]);
   fireEvent.pointerCancel(p.surface, { pointerId: 7 }); p.up(roof[2]);
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  expect(finishButton()).toBeDisabled();
+  expect(screen.queryByTestId("polyline-redraw-preview")).not.toBeInTheDocument();
 });
 
-it("keeps drafting but holds a one-click finish and Apply while outline generation is running or awaiting review", async () => {
+it("keeps drafting but disables Finish redraw while outline generation is running or awaiting review", async () => {
   const { pointer, outlinesChanged, setGuards } = await editor(endpointVectors, [hole], [roof], { outlineGeneration: "running" });
   fireEvent.click(screen.getByTitle("Zoom in"));
   const p = pointer();
@@ -372,20 +434,20 @@ it("keeps drafting but holds a one-click finish and Apply while outline generati
   expect(screen.getAllByTestId("polyline-redraw-point")).toHaveLength(2);
   p.move(roof[2]);
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
-  expect(screen.getByText("Click to finish for review")).toBeInTheDocument();
-  expect(screen.getByRole("status")).toHaveTextContent("Finish or cancel outline generation before applying this redraw.");
   p.click(roof[2]);
+  expect(screen.getByRole("status")).toHaveTextContent("Finish or cancel outline generation before applying this redraw.");
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(accepted()).toHaveAttribute("points", ringText(roof));
   expect(screen.getByTestId("polyline-redraw-preview")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeDisabled();
+  expect(finishButton()).toBeDisabled();
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
   setGuards({ outlineGeneration: "review" });
   expect(screen.getByRole("status")).toHaveTextContent("Use or discard the generated outline proposal before applying this redraw.");
-  expect(screen.getByRole("button", { name: "Apply redraw" })).toBeDisabled();
+  expect(finishButton()).toBeDisabled();
   setGuards({ outlineGeneration: null });
   expect(screen.getByRole("status")).not.toHaveTextContent(/outline generation|outline proposal/);
-  fireEvent.click(screen.getByRole("button", { name: "Apply redraw" }));
+  expect(finishButton()).toBeEnabled();
+  finish();
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
   expect(accepted()).not.toHaveAttribute("points", ringText(roof));
 });
@@ -402,24 +464,26 @@ it("warns before a redraw adds roof area inside a roof area that has not been ou
   const p = pointer();
   p.click(start); p.click(outerStart); p.click(outerEnd); p.move(roof[2]);
   expect(screen.getByTestId("polyline-redraw-cursor")).toHaveAttribute("data-snap", "finish");
-  expect(screen.getByText("Click to finish for review")).toBeInTheDocument();
-  expect(screen.getByRole("status")).toHaveTextContent("This redraw extends into Roof area 2, which has not been outlined yet");
   p.click(roof[2]);
+  expect(screen.getByRole("status")).toHaveTextContent("This redraw extends into Roof area 2, which has not been outlined yet");
   expect(outlinesChanged).not.toHaveBeenCalled();
   expect(screen.getByRole("status")).toHaveTextContent("Roof area 2");
   // A warning, not a block: the user can still apply an intended extension.
-  fireEvent.click(screen.getByRole("button", { name: "Apply redraw" }));
+  expect(finishButton()).toBeEnabled();
+  finish();
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
   expect(outlinesChanged.mock.lastCall![0][0]).toHaveLength(7);
 });
 
-it("applies an inward one-click redraw directly when its roof only already overlapped a pending roof area", async () => {
+it("finishes an inward redraw without warning when its roof only already overlapped a pending roof area", async () => {
   const { pointer, outlinesChanged } = await editor(endpointVectors, [hole], [roof], pendingArea);
   fireEvent.click(screen.getByTitle("Zoom in"));
   const p = pointer();
   p.click(start); p.click(inset); p.move(roof[2]);
-  expect(screen.getByText("Click to finish and apply")).toBeInTheDocument();
-  expect(screen.getByRole("status")).not.toHaveTextContent("Roof area 2");
   p.click(roof[2]);
+  expect(screen.getByRole("status")).not.toHaveTextContent("Roof area 2");
+  expect(finishButton()).toBeEnabled();
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  finish();
   expect(outlinesChanged).toHaveBeenCalledTimes(1);
 });
