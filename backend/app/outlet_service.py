@@ -223,12 +223,13 @@ class OutletService:
             finish_reason, response_chars = "unavailable", None
             try:
                 try:
-                    async with asyncio.timeout(call_timeout):
-                        with_context = getattr(service.provider, "generate_outlets_with_context", None)
-                        if callable(with_context):
-                            raw = await with_context(prepared.png, prompt, schema, page.image.png)
-                        else:
-                            raw = await service.provider.generate(prepared.png, prompt, schema)
+                    async with service.provider_slots:
+                        async with asyncio.timeout(call_timeout):
+                            with_context = getattr(service.provider, "generate_outlets_with_context", None)
+                            if callable(with_context):
+                                raw = await with_context(prepared.png, prompt, schema, page.image.png)
+                            else:
+                                raw = await service.provider.generate(prepared.png, prompt, schema)
                 except TimeoutError:
                     logger.warning("outlet_call_timeout request_id=%s attempt=%s timeout_seconds=%s",
                                    request.request_id, attempts, call_timeout)

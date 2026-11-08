@@ -50,8 +50,15 @@ def _rgb(data: bytes, region: tuple[int, int, int, int] | None = None) -> Image.
     """Decode once and flatten onto white; cropping first avoids converting the whole page."""
     with Image.open(BytesIO(data)) as source:
         image = source.crop(region) if region is not None else source
-        rgba = image.convert("RGBA")
-        white = Image.new("RGBA", rgba.size, "white")
+        try:
+            return _flatten_white(image)
+        finally:
+            if image is not source:
+                image.close()
+
+
+def _flatten_white(image: Image.Image) -> Image.Image:
+    with image.convert("RGBA") as rgba, Image.new("RGBA", image.size, "white") as white:
         white.alpha_composite(rgba)
         return white.convert("RGB")
 
@@ -77,12 +84,10 @@ def _bounds(box: Sequence[float], width: int, height: int) -> tuple[float, float
     return xmin * width / 1000, ymin * height / 1000, xmax * width / 1000, ymax * height / 1000
 
 
-def prepare_outline_crop(original: bytes, box: Sequence[float], max_side: int = 2048,
-                         padding_fraction: float = .06) -> PreparedOutlineCrop:
-    """Crop ORIGINAL page pixels, with context, before any inference downsampling."""
+def _prepare_crop(width: int, height: int, region_rgb, box: Sequence[float], max_side: int,
+                  padding_fraction: float) -> PreparedOutlineCrop:
     if not 256 <= max_side <= 4096 or not 0 <= padding_fraction <= .25:
         raise ValueError("invalid_outline_preparation_settings")
-    width, height = _page_size(original)
     bounds = _bounds(box, width, height)
     left, top, right, bottom = bounds
     padding = max(4, max(right - left, bottom - top) * padding_fraction)
@@ -91,16 +96,62 @@ def prepare_outline_crop(original: bytes, box: Sequence[float], max_side: int = 
     # One decode serves both the inference crop and the fitting pixels around the ROI.
     raster = _raster_region(bounds, width, height)
     region = min(x, raster[0]), min(y, raster[1]), max(x2, raster[2]), max(y2, raster[3])
-    rgb = _rgb(original, region)
-    crop = rgb.crop((x - region[0], y - region[1], x2 - region[0], y2 - region[1]))
-    source = SourceRaster(rgb.convert("L"), (region[0], region[1]), (width, height))
-    crop.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
-    output = BytesIO()
-    crop.save(output, format="PNG")
+    with region_rgb(region) as rgb:
+        crop = rgb.crop((x - region[0], y - region[1], x2 - region[0], y2 - region[1]))
+        source = SourceRaster(rgb.convert("L"), (region[0], region[1]), (width, height))
+        try:
+            crop.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+            output = BytesIO()
+            crop.save(output, format="PNG")
+            inference_width, inference_height = crop.size
+        finally:
+            crop.close()
     return PreparedOutlineCrop(output.getvalue(), {
         "x": x, "y": y, "width": x2 - x, "height": y2 - y,
-        "inference_width": crop.width, "inference_height": crop.height,
+        "inference_width": inference_width, "inference_height": inference_height,
     }, width, height, source)
+
+
+def prepare_outline_crop(original: bytes, box: Sequence[float], max_side: int = 2048,
+                         padding_fraction: float = .06) -> PreparedOutlineCrop:
+    """Crop ORIGINAL page pixels, with context, before any inference downsampling."""
+    width, height = _page_size(original)
+    return _prepare_crop(width, height, lambda region: _rgb(original, region), box, max_side, padding_fraction)
+
+
+class OutlineCropSource:
+    """One decoded RGB page for sequential preparation of a bounded crop scan.
+
+    Each prepared crop owns only its local grayscale fitting raster. Call close()
+    after preparing crops to release the full page; do not share this mutable
+    Pillow image between preparation workers.
+    """
+
+    def __init__(self, original: bytes):
+        with Image.open(BytesIO(original)) as source:
+            if source.mode == "RGB" and "transparency" not in source.info:
+                self._page = source.copy()
+            else:
+                # Preserve the same alpha compositing, but keep temporary RGBA
+                # buffers local to strips rather than duplicating a large page.
+                page = Image.new("RGB", source.size, "white")
+                try:
+                    for top in range(0, source.height, 512):
+                        region = (0, top, source.width, min(source.height, top + 512))
+                        with source.crop(region) as strip, _flatten_white(strip) as flattened:
+                            page.paste(flattened, (0, top))
+                except BaseException:
+                    page.close()
+                    raise
+                self._page = page
+
+    def prepare(self, box: Sequence[float], max_side: int = 2048,
+                padding_fraction: float = .06) -> PreparedOutlineCrop:
+        width, height = self._page.size
+        return _prepare_crop(width, height, self._page.crop, box, max_side, padding_fraction)
+
+    def close(self) -> None:
+        self._page.close()
 
 
 def _cross(a, b, c) -> float:

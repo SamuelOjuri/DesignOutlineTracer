@@ -56,6 +56,10 @@ class Settings(BaseModel):
     timeout_seconds: Annotated[float, Field(gt=0, le=900)] = 900
     # Each outlet crop call; a stalled call is abandoned and retried within timeout_seconds.
     outlet_call_timeout_seconds: Annotated[float, Field(gt=0, le=900)] = 120
+    penetration_call_timeout_seconds: Annotated[float, Field(gt=0, le=900)] = 120
+    penetration_crop_concurrency: Annotated[int, Field(gt=0, le=8)] = 4
+    # Shared by crop calls and single-image detections across all active operations.
+    max_provider_calls: Annotated[int, Field(gt=0, le=16)] = 4
     upload_timeout_seconds: Annotated[float, Field(gt=0, le=120)] = 30
     max_attempts: Annotated[int, Field(ge=1, le=2)] = 2
     max_concurrent_requests: Annotated[int, Field(gt=0, le=8)] = 2

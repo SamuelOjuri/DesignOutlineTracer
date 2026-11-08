@@ -165,8 +165,8 @@ test("generates a reviewable stepped outline, applies without filling its notch,
   await expect(regionSelect).toHaveValue(firstRoiId);
   await page.getByRole("button", { name: "Generate Roof area 1 outline", exact: true }).click();
   await expect(overlay).toBeVisible();
-  expect(uploads).toHaveLength(2);
-  expect(uploads[1]).toEqual(uploads[0]);
+  expect(uploads).toHaveLength(1);
+  expect(requests[1].source_image_hash).toBe(context!.source_image_hash);
   await page.getByLabel("Boundary to follow", { exact: true }).selectOption("roof_deck");
   await expect(overlay).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Use outline", exact: true })).toHaveCount(0);

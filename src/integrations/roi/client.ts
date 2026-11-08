@@ -111,6 +111,13 @@ export function createRoiClient(options: ClientOptions = {}) {
   const fetcher = options.fetch ?? globalThis.fetch;
   let sessionToken: string | undefined;
   const sourceSizes = new Map<string, SourceSize>();
+  const uploadReceipts = new Map<string, { context: string; blob: Blob; receipt: z.output<typeof receiptSchema>; expires: number }>();
+  const uploadVersions = new Map<string, number>();
+  function forgetUpload(pageId: string) {
+    uploadReceipts.delete(pageId);
+    sourceSizes.delete(pageId);
+    uploadVersions.set(pageId, (uploadVersions.get(pageId) ?? 0) + 1);
+  }
   let restartWaits = 0;
   const restartListeners = new Set<() => void>();
   const notifyRestart = (delta: number) => {
@@ -170,6 +177,10 @@ export function createRoiClient(options: ClientOptions = {}) {
         const parsed = z.object({ error: z.object({ code: z.string().max(80).regex(/^[a-z_]+$/), retryable: z.boolean() }).strict() })
           .strict().safeParse(payload);
         if (!parsed.success) throw new RoiApiError("request_failed", response.status);
+        if (parsed.data.error.code === "page_not_found") {
+          const pageId = /^\/pages\/([a-zA-Z0-9_-]+)(?:\/|$)/.exec(path)?.[1];
+          if (pageId) forgetUpload(pageId);
+        }
         throw new RoiApiError(parsed.data.error.code, response.status, parsed.data.error.retryable, retryAfterMs(response));
       }
       return payload;
@@ -219,16 +230,33 @@ export function createRoiClient(options: ClientOptions = {}) {
     },
     async uploadPage(page: RenderedPdfPage, signal?: AbortSignal) {
       ensureEnabled();
+      if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
       const { source_blob } = page;
       // Render-only vector evidence is sent with an outline request, never page identity.
       const validated = validate(pageContextSchema, Object.fromEntries(Object.keys(pageContextSchema.shape)
         .map((key) => [key, page[key as keyof RenderedPdfPage]])));
+      const context = JSON.stringify(validated);
+      const started = Date.now();
+      for (const [pageId, cached] of uploadReceipts) {
+        if (cached.expires <= started) uploadReceipts.delete(pageId);
+      }
+      const cached = uploadReceipts.get(validated.page_id);
+      if (cached?.context === context && cached.blob === source_blob) {
+        // Return detached data; callers cannot change later upload identities or TTLs.
+        return { ...validate(receiptSchema, cached.receipt), expires_in_seconds: (cached.expires - started) / 1000 };
+      }
+      const version = uploadVersions.get(validated.page_id) ?? 0;
       const body = new FormData();
-      body.set("context", JSON.stringify(validated));
+      body.set("context", context);
       body.set("image", source_blob, "source-page.png");
       const receipt = validate(receiptSchema, await send("/pages", "POST", body, signal));
+      if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
       if (JSON.stringify(receipt.page) !== JSON.stringify(validated)) throw new RoiApiError("response_identity_mismatch");
-      sourceSizes.set(page.page_id, { width: page.source_width, height: page.source_height });
+      if ((uploadVersions.get(validated.page_id) ?? 0) === version) {
+        sourceSizes.set(page.page_id, { width: page.source_width, height: page.source_height });
+        uploadReceipts.set(validated.page_id, { context, blob: source_blob, receipt: validate(receiptSchema, receipt),
+          expires: started + receipt.expires_in_seconds * 1000 });
+      }
       return receipt;
     },
     async detect(request: DetectionRequest, detectionOptions: DetectionOptions = {}): Promise<RoiDetectionResult> {
@@ -315,8 +343,9 @@ export function createRoiClient(options: ClientOptions = {}) {
     },
     async deletePage(pageId: string, signal?: AbortSignal) {
       ensureEnabled();
-      await send(`/pages/${validate(identifier, pageId)}`, "DELETE", undefined, signal);
-      sourceSizes.delete(pageId);
+      const validated = validate(identifier, pageId);
+      forgetUpload(validated);
+      await send(`/pages/${validated}`, "DELETE", undefined, signal);
     },
   };
 }

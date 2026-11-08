@@ -200,6 +200,28 @@ test("Penetrations: polygon detection, rotation, vertex editing and manual conca
   expect(api.requests[1].scopes).toHaveLength(2);
   expect(api.requests[1].vector_segments!.length).toBeGreaterThan(0);
   const original = (await shape.getAttribute("points"))!;
+  const editVertices = page.getByRole("button", { name: "Edit vertices", exact: true });
+  await editVertices.click();
+  const firstCorner = page.getByRole("button", { name: "Move Penetration 1 vertex 1", exact: true });
+  const secondCorner = page.getByRole("button", { name: "Move Penetration 1 vertex 2", exact: true });
+  const selectedColor = "rgb(236, 19, 19)"; // The app's primary red, independent of toolbar transitions.
+  // Use actual mouse and keyboard focus; locator.press would hide a broken click-to-focus path.
+  await firstCorner.click();
+  await expect(firstCorner).toBeFocused();
+  await expect(firstCorner).toHaveCSS("background-color", selectedColor);
+  await expect(firstCorner).toHaveCSS("border-color", "rgb(255, 255, 255)");
+  await expect(firstCorner).not.toHaveCSS("box-shadow", "none");
+  await expect(firstCorner).toHaveCSS("z-index", "30");
+  await expect(page.getByRole("button", { name: "Add Penetration 1 vertex after 1", exact: true })).toHaveCSS("z-index", "10");
+  await expect(shape).toHaveAttribute("points", original);
+  await page.screenshot({ path: testInfo.outputPath("selected-penetration-corner.png"), fullPage: true });
+  await page.keyboard.press("Tab"); // Midpoint insertion handle.
+  await expect(firstCorner).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await page.keyboard.press("Tab"); // Next square corner.
+  await expect(secondCorner).toBeFocused();
+  await expect(secondCorner).toHaveCSS("background-color", selectedColor);
+  await editVertices.click();
+  await expect(firstCorner).toHaveCount(0);
   await page.getByRole("button", { name: "Add opening", exact: true }).click();
   const opening = page.getByTestId("opening-mask-penetration:child-2-1:0");
   await expect(opening).toBeAttached();
@@ -225,7 +247,10 @@ test("Penetrations: polygon detection, rotation, vertex editing and manual conca
   await page.getByRole("button", { name: "Edit vertices", exact: true }).click();
   await page.getByRole("button", { name: "Add Penetration 1 vertex after 1", exact: true }).click();
   expect((await shape.getAttribute("points"))!.split(" ")).toHaveLength(5);
-  await page.getByRole("button", { name: "Move Penetration 1 vertex 2", exact: true }).press("Delete");
+  await secondCorner.click();
+  await expect(secondCorner).toBeFocused();
+  await expect(secondCorner).toHaveCSS("background-color", selectedColor);
+  await page.keyboard.press("Delete");
   expect((await shape.getAttribute("points"))!.split(" ")).toHaveLength(4);
 
   await page.getByLabel("Opening shape", { exact: true }).selectOption("polygon");
@@ -313,7 +338,8 @@ test("Penetrations: conditioned boxes, nonrectangular exclusions, corrections, r
   expect(api.requests[1].accepted_rois.map((parent) => parent.id)).toEqual(["roof-1-1", "roof-1-2"]);
   expect(api.requests[1].roi_revision).toBeGreaterThan(0);
   expect(api.requests[1].geometry_revision).toBeGreaterThan(0);
-  expect(api.uploads[0].bytes.equals(api.uploads[1].bytes)).toBe(true);
+  expect(api.uploads).toHaveLength(1);
+  expect(api.requests[1].source_image_hash).toBe(api.uploads[0].context.source_image_hash);
   const list = page.getByRole("list", { name: "Penetrations", exact: true });
   await list.getByRole("button", { name: /Penetration 1 / }).click();
   await page.getByRole("button", { name: "Add opening", exact: true }).click();
@@ -500,7 +526,8 @@ test("ROI review: independent boxes, source alignment, correction, undo, rerun a
   await expect(page.getByTestId("annotation-box-roof-2-1")).toBeVisible();
   await expect(first).toHaveAttribute("data-box", corrected);
   await expect(first).toHaveAttribute("data-status", "accepted");
-  expect(api.uploads[0].bytes.equals(api.uploads[1].bytes)).toBe(true);
+  expect(api.uploads).toHaveLength(1);
+  expect(api.requests[1].source_image_hash).toBe(api.uploads[0].context.source_image_hash);
   await continueManually(page).click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();

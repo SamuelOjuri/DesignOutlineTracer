@@ -103,6 +103,40 @@ describe("explicit ROI detection", () => {
     expect(result.current.session.activePage!.annotations).toHaveLength(1);
   });
 
+  it("reuploads a missing server page once with a fresh detection identity", async () => {
+    const { result, upload, detect } = setup();
+    detect.mockRejectedValueOnce(new RoiApiError("page_not_found", 404));
+    await act(() => result.current.detection.detect());
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(detect).toHaveBeenCalledTimes(2);
+    expect(detect.mock.calls[1][0].request_id).not.toBe(detect.mock.calls[0][0].request_id);
+    expect(detect.mock.calls[0][1].signal!.aborted).toBe(true);
+    expect(result.current.session.activePage!.pending).toEqual({});
+    expect(result.current.session.activePage!.runs).toHaveLength(1);
+    expect(result.current.session.activePage!.runs[0].request_id).toBe(detect.mock.calls[1][0].request_id);
+    expect(result.current.detection.feedback).toMatchObject({ status: "partial", cached: false, providerAttempts: 1 });
+  });
+
+  it("stops after one missing-page recovery", async () => {
+    const { result, upload, detect } = setup();
+    detect.mockRejectedValue(new RoiApiError("page_not_found", 404));
+    await act(() => result.current.detection.detect());
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(detect).toHaveBeenCalledTimes(2);
+    expect(result.current.detection.feedback).toEqual({ status: "error", error: "page_not_found" });
+  });
+
+  it("expires a follow-up without starting a replacement scan when its server page is missing", async () => {
+    const { result, upload, detect } = setup();
+    await act(() => result.current.detection.detect());
+    const followUp = result.current.detection.feedback!.followUpOf!;
+    detect.mockRejectedValueOnce(new RoiApiError("page_not_found", 404));
+    await act(() => result.current.detection.detect(followUp));
+    expect(upload).toHaveBeenCalledTimes(2);
+    expect(detect).toHaveBeenCalledTimes(2);
+    expect(result.current.detection.feedback).toEqual({ status: "error", error: "follow_up_expired" });
+  });
+
   it("does no networking when disabled", async () => {
     const { result, upload } = setup(false);
     await act(() => result.current.detection.detect());

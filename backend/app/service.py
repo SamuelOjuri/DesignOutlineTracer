@@ -76,6 +76,7 @@ class RoiService:
         self.wall_clock = wall_clock
         self.sessions: dict[str, Session] = {}
         self.active_calls = 0
+        self.provider_slots = asyncio.Semaphore(settings.max_provider_calls)
         self.total_calls = 0
         self.call_times: list[float] = []
         self.tasks: set[asyncio.Task] = set()
@@ -261,13 +262,22 @@ class RoiService:
         return session.calls < self.settings.max_calls_per_session and self.total_calls < self.settings.max_total_calls
 
     def reserve_call(self, session: Session) -> None:
-        if not self.budget_available(session):
+        if not self.reserve_calls(session, 1):
             raise RoiError("call_budget_exceeded", 429)
-        session.calls += 1
-        self.call_times.append(self.clock())
+
+    def reserve_calls(self, session: Session, count: int) -> int:
+        """Reserve an ordered batch atomically; persist once before provider traffic."""
+        self.refresh_budget()
+        count = min(count, self.settings.max_calls_per_session - session.calls,
+                    self.settings.max_total_calls - self.total_calls)
+        if count <= 0:
+            return 0
+        session.calls += count
+        self.call_times.extend([self.clock()] * count)
         self.total_calls = len(self.call_times)
         # Commit before sending provider traffic; crashes must not refund paid calls.
         self.persist()
+        return count
 
     def completed_response(self, operation: Operation):
         if operation.response is not None:
@@ -441,6 +451,9 @@ class RoiService:
             from .penetration_geometry import ALGORITHM_VERSION, MAX_CROPS
             settings.update(algorithm_version=ALGORITHM_VERSION, max_crops=MAX_CROPS,
                             max_image_side=2048 if request.scopes else 1024,
+                            crop_concurrency=self.settings.penetration_crop_concurrency,
+                            max_provider_calls=self.settings.max_provider_calls,
+                            call_timeout_seconds=self.settings.penetration_call_timeout_seconds,
                             scope_geometry_hash=digest(data["scopes"]), vector_geometry_hash=digest(data["vector_segments"]))
             if request.scopes:
                 prompt_system = PENETRATION_SYSTEM_PROMPT
@@ -524,8 +537,9 @@ class RoiService:
                         attempts += 1
                         finish_reason, response_chars = "unavailable", None
                         try:
-                            raw = await self.provider.generate(page.image.png, prompt, response_schema(
-                                request.task, request.accepted_rois, self.settings.max_annotations))
+                            async with self.provider_slots:
+                                raw = await self.provider.generate(page.image.png, prompt, response_schema(
+                                    request.task, request.accepted_rois, self.settings.max_annotations))
                             finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
                             response_chars = len(raw.text)
                             if raw.finish_reason not in {"STOP", "MAX_TOKENS"}:

@@ -110,12 +110,12 @@ export function PenetrationShapeOverlay({ annotations, labels, size, selectedId,
           onKeyDown={event => keyboard(event, annotation, undefined, handle)} />)}
         {interactive && selected && editVertices && points.map((point, index) => <div key={index}>
           <button type="button" data-annotation-id={annotation.id} data-vertex-index={index}
-            aria-label={`Move ${label} vertex ${index + 1}`} title="Drag vertex. Arrow keys move; Delete removes. Hold Alt to disable snapping."
-            className="absolute w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-sky-800 bg-white pointer-events-auto cursor-move focus-visible:ring-2 focus-visible:ring-primary"
+            aria-label={`Move ${label} vertex ${index + 1}`} title="Click to select this vertex in red. Drag or use arrow keys to move; Delete removes. Hold Alt to disable snapping."
+            className="absolute z-20 w-3 h-3 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-sky-800 bg-white pointer-events-auto cursor-move focus:z-30 focus:border-white focus:bg-primary focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-white"
             style={at(point)} onKeyDown={event => keyboard(event, annotation, index)} />
           {points.length < 128 && <button type="button" aria-label={`Add ${label} vertex after ${index + 1}`}
             title="Add vertex on this edge"
-            className="absolute w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-sky-800 bg-sky-100 pointer-events-auto focus-visible:ring-2 focus-visible:ring-primary"
+            className="absolute z-10 w-2.5 h-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-sky-800 bg-sky-100 pointer-events-auto focus-visible:ring-2 focus-visible:ring-primary"
             style={at({ x: (point.x + points[(index + 1) % points.length].x) / 2, y: (point.y + points[(index + 1) % points.length].y) / 2 })}
             onPointerDown={event => event.stopPropagation()}
             onClick={event => {

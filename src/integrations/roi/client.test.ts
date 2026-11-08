@@ -125,7 +125,7 @@ describe("isolated ROI client", () => {
     expect((init.headers as Record<string, string>).Authorization).toMatch(/^Bearer [a-f0-9]{64}$/);
     expect(init.headers).not.toHaveProperty("Content-Type");
     fetcher.mockResolvedValueOnce(jsonResponse({ page: { ...context, source_width: 1 }, upload_id: "upload_1", expires_in_seconds: 900 }));
-    await expect(client.uploadPage(page)).rejects.toMatchObject({ code: "response_identity_mismatch" });
+    await expect(client.uploadPage({ ...page, source_image_hash: "b".repeat(64) })).rejects.toMatchObject({ code: "response_identity_mismatch" });
   });
 
   it("returns suggestions with Phase 2 request identity and reuses only its in-memory token", async () => {

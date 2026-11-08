@@ -4,8 +4,11 @@ No bounding rectangle, convex hull, orthogonalization or topology repair replace
 an observed boundary. Unsupported model rings remain reviewable proposals.
 """
 import math
+from uuid import uuid4
 
+from shapely import linestrings
 from shapely.geometry import Polygon, box as rectangle
+from shapely.strtree import STRtree
 
 from .errors import RoiError
 from .models import Annotation, PixelPoint
@@ -114,15 +117,36 @@ def closed_vector_rings(segments):
             yield ring
 
 
+class VectorIndex:
+    """Numeric stroke evidence indexed by bounds, retaining original stroke order."""
+
+    def __init__(self, vector_segments):
+        self.segments = [((segment.start.x, segment.start.y), (segment.end.x, segment.end.y))
+                         for segment in vector_segments]
+        self._tree = STRtree(linestrings(self.segments) if self.segments else [])
+
+    def query(self, bounds):
+        left, top, right, bottom = bounds
+        # STRtree queries envelopes by default. Keep the explicit original test
+        # as well, including touching/zero-length segments and numeric precision.
+        return [self.segments[index] for index in sorted(self._tree.query(rectangle(*bounds)))
+                if max(self.segments[index][0][0], self.segments[index][1][0]) >= left
+                and min(self.segments[index][0][0], self.segments[index][1][0]) <= right
+                and max(self.segments[index][0][1], self.segments[index][1][1]) >= top
+                and min(self.segments[index][0][1], self.segments[index][1][1]) <= bottom]
+
+
 def refine_ring(ring, vector_segments, source=None):
     shape = Polygon(ring)
     left, top, right, bottom = shape.bounds
     radius = max(.5, min(4., min(right - left, bottom - top) * .12))
-    segments = [(points([segment.start])[0], points([segment.end])[0]) for segment in vector_segments
+    segments = (vector_segments.query((left - radius, top - radius, right + radius, bottom + radius))
+                if isinstance(vector_segments, VectorIndex) else
+                [(points([segment.start])[0], points([segment.end])[0]) for segment in vector_segments
                 if max(segment.start.x, segment.end.x) >= left - radius
                 and min(segment.start.x, segment.end.x) <= right + radius
                 and max(segment.start.y, segment.end.y) >= top - radius
-                and min(segment.start.y, segment.end.y) <= bottom + radius]
+                and min(segment.start.y, segment.end.y) <= bottom + radius])
     candidates = []
     for loop in closed_vector_rings(segments):
         candidate = Polygon(loop)
@@ -167,7 +191,8 @@ def refine_ring(ring, vector_segments, source=None):
     return fitted, "vector" if all(value == "vector" for value in sources) else "raster", []
 
 
-def annotation_from_proposal(proposal, page, annotation_id, crop=None, scope=None, vectors=(), source=None):
+def annotation_from_proposal(proposal, page, annotation_id, crop=None, scope=None, vectors=(), source=None,
+                             scope_polygon=None):
     width, height = page.image.width, page.image.height
     crop = crop or {"x": 0, "y": 0, "width": width, "height": height}
     top, left, bottom, right = proposal.box_2d
@@ -194,7 +219,8 @@ def annotation_from_proposal(proposal, page, annotation_id, crop=None, scope=Non
                                       (box[3] * width / 1000, box[0] * height / 1000),
                                       (box[3] * width / 1000, box[2] * height / 1000),
                                       (box[1] * width / 1000, box[2] * height / 1000)])
-        usable = Polygon(points(scope.outer), [points(hole) for hole in scope.holes])
+        usable = (scope_polygon if scope_polygon is not None
+                  else Polygon(points(scope.outer), [points(hole) for hole in scope.holes]))
         overlap = shape.intersection(usable).area
         if overlap <= 1e-6:
             return None
@@ -206,6 +232,19 @@ def annotation_from_proposal(proposal, page, annotation_id, crop=None, scope=Non
                       proposed_footprint=[PixelPoint(x=x, y=y) for x, y in original] if original else None,
                       footprint_source=provenance, outline_id=scope.outline_id if scope else None,
                       warnings=list(dict.fromkeys(warnings)))
+
+
+def annotations_from_proposals(proposals, page, crop, scope, vectors=(), source=None):
+    """Fit a whole crop in one worker, reusing its scope and indexed evidence."""
+    index = vectors if isinstance(vectors, VectorIndex) else VectorIndex(vectors)
+    usable = Polygon(points(scope.outer), [points(hole) for hole in scope.holes]) if scope else None
+    candidates = []
+    for proposal in proposals:
+        candidate = annotation_from_proposal(proposal, page, f"annotation_{uuid4().hex}", crop, scope,
+                                             index, source, usable)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
 
 
 def duplicate(candidate, existing, width, height):

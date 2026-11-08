@@ -151,6 +151,9 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
         {!busy && feedback?.status === "partial" && `Partial result. Some ${subject} may be missing.`}
         {!busy && feedback?.status === "cancelled" && "Detection cancelled. Existing work is retained."}
       </div>
+      {!busy && feedback?.durationMs !== undefined && <p className="text-xs text-muted-foreground">
+        {feedback.cached ? "Reused previous recommendations." : `Detection completed in ${(feedback.durationMs / 1000).toFixed(1)} seconds.`}
+      </p>}
       {feedback?.status === "error" && <p role="alert" className="text-sm text-destructive">
         {(errorMessages[feedback.error ?? ""] ?? "Detection failed.").replace("regions", isPenetration ? "penetrations" : "regions")} Existing work is retained. ({feedback.error})
       </p>}

@@ -243,6 +243,45 @@ describe("polygon penetration review", () => {
     expect(footprint()).toEqual(beforeInvalid);
   });
 
+  it("focuses a clicked corner without editing it and routes movement and deletion to the focused vertex", async () => {
+    const { frame, pointer, footprint, history, user } = setup();
+    await user.click(screen.getByRole("button", { name: "Edit vertices" }));
+    const first = () => screen.getByRole("button", { name: "Move Penetration 1 vertex 1" });
+    const second = () => screen.getByRole("button", { name: "Move Penetration 1 vertex 2" });
+    const beforeHistory = Number(history());
+
+    await user.click(first());
+    expect(first()).toHaveFocus();
+    expect(footprint()).toEqual(original);
+    expect(Number(history())).toBe(beforeHistory);
+
+    await user.keyboard("{ArrowRight}");
+    expect(footprint()[0]).toEqual({ x: 281, y: 150 });
+    expect(first()).toHaveFocus();
+    fireEvent.pointerDown(first(), pointer(281, 150));
+    fireEvent.pointerMove(frame, pointer(270, 140));
+    fireEvent.pointerUp(frame, pointer(270, 140));
+    expect(footprint()[0]).toEqual({ x: 270, y: 140 });
+    expect(first()).toHaveFocus();
+
+    const edited = footprint();
+    const afterMovement = Number(history());
+    await user.click(second());
+    expect(second()).toHaveFocus();
+    expect(first()).not.toHaveFocus();
+    expect(footprint()).toEqual(edited);
+    expect(Number(history())).toBe(afterMovement);
+
+    // Use the actual keyboard target, without artificially focusing it in the test.
+    await user.keyboard("{Delete}");
+    expect(footprint()).toEqual(edited.filter((_, index) => index !== 1));
+    expect(Number(history())).toBe(afterMovement + 1);
+    await user.click(screen.getByRole("button", { name: "Edit vertices" }));
+    expect(screen.queryByRole("button", { name: "Move Penetration 1 vertex 1" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit vertices" }));
+    expect(first()).not.toHaveFocus();
+  });
+
   it("cancels live vertex gestures on window blur and external annotation edits", async () => {
     const { frame, pointer, footprint, user } = setup();
     await user.click(screen.getByRole("button", { name: "Edit vertices" }));

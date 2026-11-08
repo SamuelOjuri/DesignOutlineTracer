@@ -6,6 +6,16 @@ import { initialRoiState, roiSessionReducer } from "@/utils/roiSession";
 import { RoiReviewSidebar } from "./RoiReviewSidebar";
 
 describe("ROI failure feedback", () => {
+  it.each([false, true])("shows completed detection timing or cached recommendations (cached=%s)", (cached) => {
+    const source = syntheticPage();
+    const state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });
+    render(<RoiReviewSidebar page={state.pages[source.page_id]} selectedId={null} adding={false}
+      onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()}
+      detection={{ busy: false, restarting: false, cancel: vi.fn(), detect: vi.fn(),
+        feedback: { status: "complete", durationMs: 12_345, cached, providerAttempts: 1 } }} />);
+    expect(screen.getByText(cached ? "Reused previous recommendations." : "Detection completed in 12.3 seconds.")).toBeVisible();
+  });
+
   it("supports penetration correction, parent reassignment and explicit uncertain association review", async () => {
     const source = syntheticPage();
     let state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });

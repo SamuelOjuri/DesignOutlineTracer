@@ -14,8 +14,12 @@ Existing box-only annotations still resolve to rectangular openings.
 - Drag the selected opening's **rotation handle** on the plan to rotate in source
   pixels, including on nonsquare pages. Hold Shift to snap to 15° increments.
   With the handle focused, arrow keys rotate by 1° (Shift: 15°).
-- **Edit vertices** exposes corners and midpoint insertion handles. Drag or use
-  arrow keys on a corner; Delete removes it. Alt disables PDF vector snapping.
+- **Edit vertices** exposes square corners and round midpoint insertion handles.
+  Click a square corner or focus it with Tab to select it: the active corner has
+  a red fill and a contrasting ring for both mouse and keyboard input. Drag or use
+  arrow keys to move it; Delete or Backspace removes it. Clicking another control
+  clears the corner highlight. Corner handles take priority over overlapping
+  midpoint handles. Alt disables PDF vector snapping.
 - Classify uncertain candidates and select their roof area before **Add opening**.
   An `unknown` object cannot create an exclusion until classified.
 - The opening preview shows subtraction restricted to actual insulation scope and
@@ -51,6 +55,41 @@ penetrations** offers one additional pass, including after a completed or empty
 scan. Completed coverage is not a guarantee that every object was detected.
 Scope/vector hashes, prompt and algorithm versions participate in cache identity.
 
+Independent detail crops run in waves of four by default. Initial calls are
+reserved in crop order and committed together before dispatch. A shared provider
+semaphore limits simultaneous model requests across all detection operations.
+Replies are reconciled in crop order, so timing cannot choose which duplicate or
+annotation-limit result wins. A failed crop leaves successful crops available as
+a partial result; retries consume the same durable session and global budgets.
+Queued waves stop once 25 unique annotations are reached. Calls already sent in
+the current wave still consume budget, including when an earlier crop fills the
+annotation limit. Each call has its own 120-second timeout within the scan's
+overall deadline. `ROI_PENETRATION_CROP_CONCURRENCY`, `ROI_MAX_PROVIDER_CALLS` and
+`ROI_PENETRATION_CALL_TIMEOUT_SECONDS` control these limits independently.
+
+The source PNG is decoded once per scan and retained as one RGB page while crops
+are prepared sequentially. Only the current wave's crop rasters are retained.
+Vector bounds are indexed once, preserving the exact stroke selection and order
+used by footprint fitting. Each crop's proposals share one geometry worker and
+scope polygon. Resolution, overlap, model settings and fitting thresholds remain
+unchanged.
+
+`run.settings` records planned/completed crops, failed crop indices/codes and
+`timings_ms` for source decoding, vector indexing, crop preparation, durable
+reservation/flush, provider-slot waiting, model calls, geometry and scan elapsed
+time. Per-crop records include attempts and timing diagnostics. Model, queue and
+geometry totals add time across concurrent crops and can exceed elapsed wall
+time. Cached results retain the original scan diagnostics; `run.cached` and
+`run.duration_ms` describe the replay itself. Pixels and annotation contents are
+not logged.
+
+The client reuses an uploaded-page receipt only for the same immutable source
+blob and complete page identity, within the server's remaining lifetime. Deleting
+a page or receiving `page_not_found` invalidates that receipt. An ordinary scan
+can recover once by uploading again and starting a fresh request ID; follow-ups
+require their original upload and report expiry instead. Completion feedback
+shows elapsed detection time or that previous recommendations were reused.
+
 ## Geometry and exports
 
 The reviewed ring drives association checks, preview, acceptance, area subtraction,
@@ -66,6 +105,21 @@ Automated regressions cover rotated hatches, irregular/concave footprints,
 circles, invalid drafts, translation, rotation, vertex edits, original proposals,
 Undo, scope clipping, split identities, export areas and bounded mocked scans.
 They make no live model calls.
+
+Performance regressions additionally verify concurrent crop calls, crop-order
+deduplication, shared provider capacity, durable batched reservations across
+restart, budgeted retries, partial failures, deadlines and worker cleanup under
+repeated cancellation. Crop equivalence checks compare PNG bytes and grayscale
+fitting pixels, including transparent PNGs, and preserve indexed vector order.
+
+A local offline probe of TP17256 at render scale 2 (six full-page example crops,
+not the user's accepted outline) measured median preparation of 1.854 seconds
+before reuse and 1.412 seconds including the reusable decode. Building the vector
+index and fitting 25 synthetic proposals against 30,000 segments took 0.049
+seconds versus 0.176 seconds with linear filtering. A six-crop run with fixed
+0.2-second empty model replies took 2.585 seconds with one worker and 1.680 with
+four, with the same six calls and completed coverage. These figures isolate local
+work and scheduling; they do not measure live model latency or detection accuracy.
 
 TP17256's supplied validation drawing contains 15 distinct target footprints:
 four rotated hatches, eight rectangular risers, one pentagonal riser, one concave

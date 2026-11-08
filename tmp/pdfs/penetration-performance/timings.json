@@ -1,0 +1,45 @@
+{
+  "source": "C:\\Users\\SamuelOjuri\\OneDrive - Tapered Plus\\Documents\\Samsdocs\\Roof Plan Docs\\Example 3 - TP17256\\TP17256_25.01 - A - input.pdf",
+  "renderer": "PyMuPDF scale=2; approximates PDF.js source workload",
+  "raster_size": [
+    4768,
+    3369
+  ],
+  "original_png_bytes": 1465578,
+  "scope": "full page upper-bound example; actual accepted outline unavailable",
+  "crops": 6,
+  "crop_limit_reached": false,
+  "upload_prepare": {
+    "median_seconds": 0.259,
+    "samples_seconds": [
+      0.2699,
+      0.259,
+      0.2453
+    ]
+  },
+  "all_crop_prepare": {
+    "median_seconds": 1.5099,
+    "samples_seconds": [
+      1.5694,
+      1.5099,
+      1.4853
+    ]
+  },
+  "vector_filter_and_fit_25_proposals_30000_segments": {
+    "median_seconds": 0.1317,
+    "samples_seconds": [
+      0.1302,
+      0.1317,
+      0.1397
+    ]
+  },
+  "local_vectors_fit_25_proposals_4_segments": {
+    "median_seconds": 0.0044,
+    "samples_seconds": [
+      0.0046,
+      0.0044,
+      0.0043
+    ]
+  },
+  "live_model_calls": 0
+}
