@@ -1,7 +1,7 @@
 import polygonClipping, { type Polygon } from "polygon-clipping";
 import type { Point } from "@/types/roof";
 import type { PageSession } from "@/types/roi";
-import { combinePageDrawings, mmPerPixel, type CombinedDrawing } from "./roiDrawing";
+import { combinePageDrawings, mmPerPixel, type CombinedDrawing, type DrawingObjectRef } from "./roiDrawing";
 import { OUTLET_COLOUR } from "./outletMarker";
 import { DEFAULT_OUTLET_DIAMETER_MM } from "./outletDefaults";
 
@@ -32,11 +32,15 @@ export interface ExportRoofArea {
 
 export interface ExportOpening {
   id: string;
+  /** Stable reviewed penetration identity shared by all of its clipped parts. */
+  annotation_id?: string;
   label: string;
   kind: "cutout" | "penetration";
   page_id: string;
   roi_id: string | null;
   roof_area_id: string | null;
+  /** All intersected roofs for legacy/manual cuts that span multiple components. */
+  roof_area_ids?: string[];
   outline: Point[];
   area_m2: number;
 }
@@ -150,6 +154,26 @@ function netArea(outline: Point[], holes: Point[][]): number {
   }
 }
 
+/** A vertex average can fall in a concave roof's empty space; use actual overlap. */
+function roofOwners(ring: Point[], reference: DrawingObjectRef | undefined, roofRings: Point[][],
+  roofReferences: DrawingObjectRef[]): number[] {
+  if (ring.length < 3) return [];
+  return roofRings.flatMap((roof, index) => {
+    const candidate = roofReferences[index];
+    if (roof.length < 3 || !candidate || reference && (candidate.page_id !== reference.page_id
+      || reference.outline_id && candidate.id !== reference.outline_id
+      || reference.roi_id && candidate.roi_id && candidate.roi_id !== reference.roi_id)) return [];
+    try {
+      const overlap = multiPolygonArea(polygonClipping.intersection(clippingPolygon(ring), clippingPolygon(roof)));
+      return overlap > 1e-6 ? [{ index, overlap }] : [];
+    } catch { return []; }
+  }).sort((first, second) => second.overlap - first.overlap).map(owner => owner.index);
+}
+
+function penetrationIdentity(reference: DrawingObjectRef | undefined, fallback: string): string {
+  return reference?.annotation_id ?? reference?.id.match(/^penetration:(.+):\d+$/)?.[1] ?? reference?.id ?? fallback;
+}
+
 /** Builds the exportable roof model from the same combined layout shown on Project Details. */
 export function buildRoofExport(pages: PageSession[], pageOffsets: Record<string, Point> = {}): RoofExport | null {
   const drawing = combinePageDrawings(pages, pageOffsets);
@@ -168,21 +192,28 @@ export function buildRoofExport(pages: PageSession[], pageOffsets: Record<string
   const roofIndexAt = (point: Point) => roofRings.findIndex(ring => ring.length >= 3 && inRing(point, ring));
 
   const openingCounts = { cutout: 0, penetration: 0 };
+  const openingNumbers = new Map<string, number>();
   const openings: ExportOpening[] = holeRings.map((ring, index) => {
     const reference = drawing.holeRefs[index];
-    const kind = reference?.id.startsWith("penetration:") ? "penetration" : "cutout";
-    openingCounts[kind] += 1;
-    const owner = ring.length >= 3 ? roofIndexAt(centroid(ring)) : -1;
+    const kind = reference?.annotation_id || reference?.id.startsWith("penetration:") ? "penetration" : "cutout";
+    const identity = kind === "penetration" ? penetrationIdentity(reference, `opening-${index + 1}`)
+      : reference?.id ?? `opening-${index + 1}`;
+    const key = JSON.stringify([kind, reference?.page_id, identity]);
+    let number = openingNumbers.get(key);
+    if (number === undefined) { number = ++openingCounts[kind]; openingNumbers.set(key, number); }
+    const owners = roofOwners(ring, reference, roofRings, drawing.outlineRefs);
+    const ownerIds = owners.map(owner => drawing.outlineRefs[owner].id);
     return { id: reference?.id ?? `opening-${index + 1}`, kind,
-      label: `${kind === "penetration" ? "Penetration" : "Cutout"} ${openingCounts[kind]}`,
+      ...(kind === "penetration" ? { annotation_id: identity } : {}),
+      label: `${kind === "penetration" ? "Penetration" : "Cutout"} ${number}`,
       page_id: reference?.page_id ?? "", roi_id: reference?.roi_id ?? null,
-      roof_area_id: owner >= 0 ? drawing.outlineRefs[owner]?.id ?? null : null,
+      roof_area_id: ownerIds[0] ?? null, roof_area_ids: ownerIds,
       outline: ring, area_m2: round(Math.abs(signedArea(ring)) / 1e6, 2) };
   });
 
   const roofAreas: ExportRoofArea[] = roofRings.map((ring, index) => {
     const reference = drawing.outlineRefs[index];
-    const holes = holeRings.filter((_, holeIndex) => openings[holeIndex].roof_area_id === reference?.id);
+    const holes = holeRings.filter((_, holeIndex) => openings[holeIndex].roof_area_ids?.includes(reference?.id ?? ""));
     return { id: reference?.id ?? `roof-${index + 1}`, label: `Roof area ${index + 1}`, page_id: reference?.page_id ?? "",
       roi_id: reference?.roi_id ?? null, outline: ring,
       gross_area_m2: round(Math.abs(signedArea(ring)) / 1e6, 2),
@@ -320,7 +351,7 @@ export function roofExportSvg(model: RoofExportModel): string {
     ...model.roof_areas.map(area => `  <path data-id="${xml(area.id)}" data-label="${xml(area.label)}" d="${path(area.outline)}"/>`),
     "</g>",
     `<g id="openings" fill="#ffffff" stroke="#666666" stroke-width="${stroke * 0.8}">`,
-    ...model.openings.map(opening => `  <path data-id="${xml(opening.id)}" data-kind="${opening.kind}" data-label="${xml(opening.label)}" d="${path(opening.outline)}"/>`),
+    ...model.openings.map(opening => `  <path data-id="${xml(opening.id)}"${opening.annotation_id ? ` data-annotation-id="${xml(opening.annotation_id)}"` : ""} data-kind="${opening.kind}" data-label="${xml(opening.label)}" d="${path(opening.outline)}"/>`),
     "</g>",
     `<g id="drainage-edges" stroke="#1a80e6" stroke-width="${stroke * 1.6}" stroke-linecap="round">`,
     ...model.drainage_edges.map(edge => {
@@ -353,6 +384,19 @@ const closed = (ring: Point[], counterClockwise: boolean) => {
   return [...oriented, oriented[0]].map(point => [point.x, point.y]);
 };
 
+/** Boolean subtraction keeps overlapping and edge-touching cuts valid in GeoJSON. */
+function insulatedGeometry(area: ExportRoofArea, openings: ExportOpening[]) {
+  const cuts = openings.filter(opening => opening.outline.length >= 3
+    && (opening.roof_area_ids ? opening.roof_area_ids.includes(area.id) : opening.roof_area_id === area.id));
+  if (!cuts.length) return { type: "Polygon", coordinates: [closed(area.outline, true)] };
+  const roof = clippingPolygon(area.outline);
+  const polygons = polygonClipping.difference(roof, ...cuts.map(opening => clippingPolygon(opening.outline)));
+  const coordinates = polygons.map(polygon => polygon.map((ring, index) => closed(
+    ring.slice(0, -1).map(([x, y]) => ({ x, y })), index === 0)));
+  return coordinates.length === 1 ? { type: "Polygon", coordinates: coordinates[0] }
+    : { type: "MultiPolygon", coordinates };
+}
+
 /** GeoJSON in local planar millimetres (not WGS84); exterior rings counter-clockwise per RFC 7946. */
 export function roofExportGeoJson(model: RoofExportModel): string {
   const features = [
@@ -360,13 +404,12 @@ export function roofExportGeoJson(model: RoofExportModel): string {
       type: "Feature", id: area.id,
       properties: { kind: "roof_area", label: area.label, page_id: area.page_id, roi_id: area.roi_id,
         gross_area_m2: area.gross_area_m2, net_area_m2: area.net_area_m2, perimeter_m: area.perimeter_m },
-      geometry: { type: "Polygon", coordinates: [closed(area.outline, true),
-        ...model.openings.filter(opening => opening.roof_area_id === area.id && opening.outline.length >= 3)
-          .map(opening => closed(opening.outline, false))] },
+      geometry: insulatedGeometry(area, model.openings),
     })),
     ...model.openings.filter(opening => opening.outline.length >= 3).map(opening => ({
       type: "Feature", id: opening.id,
-      properties: { kind: opening.kind, label: opening.label, roof_area_id: opening.roof_area_id, area_m2: opening.area_m2 },
+      properties: { kind: opening.kind, label: opening.label, annotation_id: opening.annotation_id,
+        roof_area_id: opening.roof_area_id, roof_area_ids: opening.roof_area_ids, area_m2: opening.area_m2 },
       geometry: { type: "Polygon", coordinates: [closed(opening.outline, true)] },
     })),
     ...model.outlets.map(outlet => ({

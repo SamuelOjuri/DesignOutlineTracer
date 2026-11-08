@@ -7,10 +7,11 @@ import type { OutlineResponse } from "@/types/outline";
 import { cloneOutlineDrawing, prepareOutlineApplication } from "./outlineSession";
 import { outletAssociation, outletScopeSignature, sameOutletSymbol } from "./outletScope";
 import { DEFAULT_OUTLET_DIAMETER_M } from "./outletDefaults";
+import { footprintBox, penetrationBoundary, transformFootprint, validPenetrationRing } from "./penetrationGeometry";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
-type ReviewPatch = Partial<Pick<RoiAnnotation, "box_2d" | "label" | "subtype" | "roi_id" | "review_status" | "validity">>;
+type ReviewPatch = Partial<Pick<RoiAnnotation, "box_2d" | "footprint" | "footprint_source" | "outline_id" | "label" | "subtype" | "roi_id" | "review_status" | "validity">>;
 export type OutletReviewPatch = Partial<Pick<RoiAnnotation, "label" | "subtype" | "roi_id" | "outline_id" | "review_status"
   | "anchor" | "diameter" | "diameter_confirmed">>;
 export type RoiSessionAction =
@@ -40,6 +41,8 @@ function cloneAnnotation(annotation: RoiAnnotation): RoiAnnotation {
   validateBox(annotation.box_2d);
   validateBox(annotation.proposed_box_2d);
   return { ...annotation, box_2d: [...annotation.box_2d], proposed_box_2d: [...annotation.proposed_box_2d],
+    ...(annotation.footprint ? { footprint: annotation.footprint.map(p => ({ ...p })) } : {}),
+    ...(annotation.proposed_footprint ? { proposed_footprint: annotation.proposed_footprint.map(p => ({ ...p })) } : {}),
     ...(annotation.anchor ? { anchor: { ...annotation.anchor } } : {}),
     ...(annotation.proposed_anchor ? { proposed_anchor: { ...annotation.proposed_anchor } } : {}),
     edits: annotation.edits.map((edit) => ({ ...edit })), warnings: [...annotation.warnings] };
@@ -256,8 +259,13 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
       const duplicate = annotations.some((annotation) => annotation.kind === candidate.kind
         && annotation.roi_id === candidate.roi_id && (similarBoxes(annotation.box_2d, candidate.box_2d)
           || similarBoxes(annotation.proposed_box_2d, candidate.box_2d)));
+      const size = { width: page.source.source_width, height: page.source.source_height };
+      if (candidate.footprint && (candidate.kind !== "penetration" || !validPenetrationRing(candidate.footprint, size))) continue;
+      if (candidate.proposed_footprint && !validPenetrationRing(candidate.proposed_footprint, size)) continue;
       const proposal = checkAssociation({ ...cloneAnnotation(candidate), origin: "gemini", review_status: "suggested",
-        proposed_box_2d: [...candidate.box_2d], edits: [], revision: page.revision + 1 }, annotations);
+        ...(candidate.footprint ? { box_2d: footprintBox(candidate.footprint, size),
+          proposed_footprint: (candidate.proposed_footprint ?? candidate.footprint).map(p => ({ ...p })) } : {}),
+        edits: [], revision: page.revision + 1 }, annotations);
       if (penetrationAssociationWarnings(proposal, page).length) proposal.validity = "needs_review";
       if (duplicate) proposal.warnings.push("Possible duplicate; reconcile with existing annotation");
       if (candidate.kind === "roof_roi" && boxArea(candidate.box_2d) >= 850000) {
@@ -296,7 +304,11 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
     }
   } else if (action.type === "add") {
     if (action.annotation.page_id !== pageId || annotations.some((annotation) => annotation.id === action.annotation.id)) return state;
-    const annotation = checkAssociation({ ...cloneAnnotation(action.annotation), revision }, annotations);
+    const size = { width: page.source.source_width, height: page.source.source_height };
+    if (action.annotation.footprint && (action.annotation.kind !== "penetration" || !validPenetrationRing(action.annotation.footprint, size))) return state;
+    const annotation = checkAssociation({ ...cloneAnnotation(action.annotation), revision,
+      ...(action.annotation.footprint ? { box_2d: footprintBox(action.annotation.footprint, size),
+        proposed_footprint: (action.annotation.proposed_footprint ?? action.annotation.footprint).map(p => ({ ...p })) } : {}) }, annotations);
     if (penetrationAssociationWarnings(annotation, page).length) annotation.validity = "needs_review";
     annotations.push(annotation);
     history.push({ id: annotation.id, index: annotations.length - 1, before: null, roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
@@ -306,16 +318,37 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
     history.push({ id: current.id, index: annotations.indexOf(current), before: cloneAnnotation(current), roi_revision: page.roi_revision, geometry_revision: page.geometry_revision });
     if (action.type === "remove") annotations = annotations.filter((annotation) => annotation.id !== action.id);
     else {
+      const patch = { ...action.patch };
+      const size = { width: page.source.source_width, height: page.source.source_height };
+      if (current.kind === "penetration") {
+        if (patch.footprint !== undefined) {
+          if (!validPenetrationRing(patch.footprint, size)) return state;
+          patch.footprint = patch.footprint.map(p => ({ ...p }));
+          patch.box_2d = footprintBox(patch.footprint, size);
+          patch.footprint_source = "manual";
+        } else if (patch.box_2d && current.footprint) {
+          try { patch.footprint = transformFootprint(penetrationBoundary(current, size), current.box_2d, patch.box_2d, size); }
+          catch { return state; }
+          if (!validPenetrationRing(patch.footprint, size)) return state;
+          patch.footprint_source = "manual";
+        }
+        if (patch.roi_id !== undefined && patch.roi_id !== current.roi_id) patch.outline_id = undefined;
+      } else if (patch.footprint !== undefined) return state;
       const associationEdited = current.kind === "penetration" && (
-        (action.patch.box_2d !== undefined && JSON.stringify(action.patch.box_2d) !== JSON.stringify(current.box_2d))
-        || (action.patch.roi_id !== undefined && action.patch.roi_id !== current.roi_id)
-        || (action.patch.subtype !== undefined && action.patch.subtype !== current.subtype));
-      const updated = checkAssociation(cloneAnnotation({ ...current, ...action.patch, revision,
-        validity: associationEdited ? "needs_review" : action.patch.validity ?? current.validity,
-        edits: [...current.edits, { revision, action: action.patch.box_2d ? "edit" : "review" }] }), annotations);
+        (patch.box_2d !== undefined && JSON.stringify(patch.box_2d) !== JSON.stringify(current.box_2d))
+        || patch.footprint !== undefined
+        || (patch.roi_id !== undefined && patch.roi_id !== current.roi_id)
+        || (patch.subtype !== undefined && patch.subtype !== current.subtype));
+      const updated = checkAssociation(cloneAnnotation({ ...current, ...patch, revision,
+        validity: associationEdited ? "needs_review" : patch.validity ?? current.validity,
+        edits: [...current.edits, { revision, action: patch.box_2d || patch.footprint ? "edit" : "review" }] }), annotations);
+      if (current.kind === "penetration" && patch.review_status === "accepted") {
+        if (penetrationFootprint(updated, page).error) return state;
+        updated.validity = "current";
+      }
       // A deliberate move/resize of an active opening updates it immediately.
       // Parent/type changes and boxes with no usable scope still require review.
-      if (action.patch.box_2d && current.kind === "penetration" && current.review_status === "accepted"
+      if ((patch.box_2d || patch.footprint) && current.kind === "penetration" && current.review_status === "accepted"
         && current.validity === "current" && updated.review_status === "accepted"
         && updated.roi_id === current.roi_id && updated.subtype === current.subtype
         && !penetrationFootprint(updated, page).error) updated.validity = "current";

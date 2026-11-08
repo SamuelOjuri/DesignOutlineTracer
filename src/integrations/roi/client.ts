@@ -1,5 +1,8 @@
 import { z } from "zod";
-import type { DetectionRequest, DetectionRun, RenderedPdfPage, RoiAnnotation } from "@/types/roi";
+import type { DetectionRequest, DetectionRun, PenetrationScope, RenderedPdfPage, RoiAnnotation } from "@/types/roi";
+import type { VectorSegment } from "@/types/outline";
+import type { SourceSize } from "@/utils/roiCoordinates";
+import { validPenetrationRing } from "@/utils/penetrationGeometry";
 import type { OutlineRequest, OutlineResponse } from "@/types/outline";
 import { outlineRequestSchema, outlineResponseSchema } from "./outlineContracts";
 import type { OutletRequest, OutletResponse } from "@/types/outlet";
@@ -7,6 +10,7 @@ import { outletRequestSchema, validateOutletResponse } from "./outlets";
 import { SERVICE_RESTART_CODES, SERVICE_RESTART_RETRY_WINDOW_MS } from "./serviceRestart";
 import {
   detectionSchema, healthSchema, identifier, pageContextSchema, parentSchema, receiptSchema, requestSchema, subtypes,
+  penetrationScopesSchema, penetrationVectorsSchema,
 } from "./contracts";
 
 export class RoiApiError extends Error {
@@ -65,6 +69,9 @@ interface DetectionOptions {
   acceptedRois?: readonly RoiAnnotation[];
   signal?: AbortSignal;
   followUpOf?: string;
+  scopes?: readonly PenetrationScope[];
+  vectorSegments?: readonly VectorSegment[];
+  sourceSize?: SourceSize;
 }
 
 function validate<Schema extends z.ZodTypeAny>(schema: Schema, value: unknown): z.output<Schema> {
@@ -103,6 +110,7 @@ export function createRoiClient(options: ClientOptions = {}) {
   const baseUrl = options.baseUrl ?? import.meta.env.VITE_ROI_API_BASE_URL;
   const fetcher = options.fetch ?? globalThis.fetch;
   let sessionToken: string | undefined;
+  const sourceSizes = new Map<string, SourceSize>();
   let restartWaits = 0;
   const restartListeners = new Set<() => void>();
   const notifyRestart = (delta: number) => {
@@ -220,6 +228,7 @@ export function createRoiClient(options: ClientOptions = {}) {
       body.set("image", source_blob, "source-page.png");
       const receipt = validate(receiptSchema, await send("/pages", "POST", body, signal));
       if (JSON.stringify(receipt.page) !== JSON.stringify(validated)) throw new RoiApiError("response_identity_mismatch");
+      sourceSizes.set(page.page_id, { width: page.source_width, height: page.source_height });
       return receipt;
     },
     async detect(request: DetectionRequest, detectionOptions: DetectionOptions = {}): Promise<RoiDetectionResult> {
@@ -235,7 +244,15 @@ export function createRoiClient(options: ClientOptions = {}) {
         throw new RoiApiError("invalid_parents");
       }
       const followUpOf = detectionOptions.followUpOf === undefined ? undefined : validate(identifier, detectionOptions.followUpOf);
-      const payload = { ...identity, accepted_rois: parents, ...(followUpOf ? { follow_up_of: followUpOf } : {}) };
+      const scopes = detectionOptions.scopes === undefined ? undefined : validate(penetrationScopesSchema, detectionOptions.scopes);
+      const vectors = detectionOptions.vectorSegments === undefined ? undefined : validate(penetrationVectorsSchema, detectionOptions.vectorSegments);
+      const size = detectionOptions.sourceSize ?? sourceSizes.get(identity.page_id);
+      if ((scopes || vectors) && identity.task !== "penetration") throw new RoiApiError("invalid_contract");
+      if (scopes?.some(scope => !parentIds.has(scope.roi_id)
+        || !validPenetrationRing(scope.outer, size, 512) || scope.holes.some(hole => !validPenetrationRing(hole, size, 512)))) throw new RoiApiError("invalid_contract");
+      if (size && vectors?.some(vector => [vector.start, vector.end].some(p => p.x > size.width || p.y > size.height))) throw new RoiApiError("invalid_contract");
+      const payload = { ...identity, accepted_rois: parents, ...(followUpOf ? { follow_up_of: followUpOf } : {}),
+        ...(scopes?.length ? { scopes } : {}), ...(vectors?.length ? { vector_segments: vectors } : {}) };
       const result = validate(detectionSchema, await send(`/pages/${identity.page_id}/detections`, "POST", JSON.stringify(payload),
         detectionOptions.signal, detectionTimeoutMs()));
       if (result.page_id !== identity.page_id || result.request_id !== identity.request_id || result.task !== identity.task
@@ -247,7 +264,10 @@ export function createRoiClient(options: ClientOptions = {}) {
         || (result.status === "complete" && result.annotations.length === 0)
         || (result.status === "partial" && result.warnings.length === 0)
         || result.annotations.some((annotation) => annotation.page_id !== identity.page_id || annotation.kind !== identity.task
-          || JSON.stringify(annotation.box_2d) !== JSON.stringify(annotation.proposed_box_2d)
+          || (identity.task !== "penetration" && JSON.stringify(annotation.box_2d) !== JSON.stringify(annotation.proposed_box_2d))
+          || (annotation.footprint && (identity.task !== "penetration" || !validPenetrationRing(annotation.footprint, size)))
+          || (annotation.proposed_footprint && (identity.task !== "penetration" || !validPenetrationRing(annotation.proposed_footprint, size)))
+          || (annotation.outline_id && scopes?.length && !scopes.some(scope => scope.outline_id === annotation.outline_id && scope.roi_id === annotation.roi_id))
           || (identity.task === "roof_roi" ? annotation.roi_id !== null || annotation.subtype !== undefined
             : !parentIds.has(annotation.roi_id) || !subtypes[identity.task].includes(annotation.subtype)))) {
         throw new RoiApiError("invalid_response");
@@ -260,6 +280,10 @@ export function createRoiClient(options: ClientOptions = {}) {
           id: annotation.id, page_id: annotation.page_id, kind: annotation.kind, label: annotation.label, subtype: annotation.subtype,
           box_2d: [annotation.box_2d[0], annotation.box_2d[1], annotation.box_2d[2], annotation.box_2d[3]],
           proposed_box_2d: [annotation.proposed_box_2d[0], annotation.proposed_box_2d[1], annotation.proposed_box_2d[2], annotation.proposed_box_2d[3]],
+          ...(annotation.footprint ? { footprint: annotation.footprint.map(p => ({ ...p })) } : {}),
+          ...(annotation.proposed_footprint ? { proposed_footprint: annotation.proposed_footprint.map(p => ({ ...p })) } : {}),
+          ...(annotation.footprint_source ? { footprint_source: annotation.footprint_source } : {}),
+          ...(annotation.outline_id ? { outline_id: annotation.outline_id } : {}),
           roi_id: annotation.roi_id, origin: annotation.origin, review_status: annotation.review_status,
           validity: annotation.validity, revision: annotation.revision, edits: [], warnings: annotation.warnings,
         })),
@@ -292,6 +316,7 @@ export function createRoiClient(options: ClientOptions = {}) {
     async deletePage(pageId: string, signal?: AbortSignal) {
       ensureEnabled();
       await send(`/pages/${validate(identifier, pageId)}`, "DELETE", undefined, signal);
+      sourceSizes.delete(pageId);
     },
   };
 }

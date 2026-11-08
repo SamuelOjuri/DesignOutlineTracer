@@ -39,6 +39,10 @@ describe("explicit ROI detection", () => {
       result.current.session.dispatch({ type: "add", page_id: "page-1", annotation: syntheticAnnotation("parent") });
       result.current.session.dispatch({ type: "add", page_id: "page-1",
         annotation: syntheticAnnotation("suggested", { review_status: "suggested" }) });
+      result.current.session.dispatch({ type: "drawing", page_id: "page-1", drawing: {
+        ...result.current.session.activePage!.drawing, outlines: [{ id: "roof", roi_id: "parent", page_id: "page-1",
+          points: [{ x: 160, y: 60 }, { x: 560, y: 60 }, { x: 560, y: 360 }, { x: 160, y: 360 }] }],
+      } });
     });
     let resolve!: (value: RoiDetectionResult) => void;
     detect.mockImplementationOnce(() => new Promise((finish) => { resolve = finish; }));
@@ -48,6 +52,7 @@ describe("explicit ROI detection", () => {
     expect(request.task).toBe("penetration");
     expect(request.roi_revision).toBe(result.current.session.activePage!.roi_revision);
     expect(detect.mock.calls[0][1].acceptedRois?.map((parent) => parent.id)).toEqual(["parent"]);
+    expect(detect.mock.calls[0][1].scopes?.[0]).toMatchObject({ roi_id: "parent", outline_id: "roof" });
     act(() => result.current.session.dispatch({ type: "review", page_id: "page-1", id: "parent",
       patch: { box_2d: [100, 100, 700, 700] } }));
     expect(detect.mock.calls[0][1].signal!.aborted).toBe(true);
@@ -59,6 +64,14 @@ describe("explicit ROI detection", () => {
     });
     expect(result.current.session.activePage!.annotations.map((annotation) => annotation.id)).toEqual(["parent", "suggested"]);
     expect(result.current.detection.feedback).toBeUndefined();
+  });
+
+  it("requires real insulation scope before sending penetration detection", async () => {
+    const { result, upload } = setup(true, "penetration");
+    act(() => result.current.session.dispatch({ type: "add", page_id: "page-1", annotation: syntheticAnnotation("parent") }));
+    await act(() => result.current.detection.detect());
+    expect(upload).not.toHaveBeenCalled();
+    expect(result.current.detection.feedback).toEqual({ status: "error", error: "penetration_scope_required" });
   });
 
   it("uploads only on demand and offers one follow-up while keeping manual geometry empty", async () => {

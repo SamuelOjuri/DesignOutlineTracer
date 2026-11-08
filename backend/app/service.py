@@ -33,6 +33,7 @@ class CachedProposals:
     status: str
     warnings: list[str]
     expires: float
+    settings: dict | None = None
 
 
 @dataclass
@@ -117,7 +118,8 @@ class RoiService:
                     "image": {name: getattr(page.image, name) for name in (
                         "source_hash", "width", "height", "inference_width", "inference_height")},
                     "cache": {key: {"annotations": [item.model_dump(mode="json") for item in value.annotations],
-                                    "status": value.status, "warnings": list(value.warnings), "expires": value.expires + offset}
+                                    "status": value.status, "warnings": list(value.warnings), "expires": value.expires + offset,
+                                    "settings": value.settings}
                               for key, value in page.cache.items()},
                     "outline_cache": {key: {"response": value.response.model_dump(mode="json"), "expires": value.expires + offset}
                                       for key, value in page.outline_cache.items()},
@@ -225,7 +227,7 @@ class RoiService:
                 page = PageRecord(PageContext.model_validate(stored["context"]), PreparedImage(original, png, **stored["image"]),
                                   stored["expires"] + offset, upload_id=stored["upload_id"], follow_ups=stored["follow_ups"])
                 page.cache = {key: CachedProposals([Annotation.model_validate(item) for item in value["annotations"]],
-                                                  value["status"], value["warnings"], value["expires"] + offset)
+                                                  value["status"], value["warnings"], value["expires"] + offset, value.get("settings"))
                               for key, value in stored["cache"].items()}
                 page.outline_cache = {key: CachedOutline(OutlineResponse.model_validate(value["response"]), value["expires"] + offset)
                                       for key, value in stored["outline_cache"].items()}
@@ -418,6 +420,9 @@ class RoiService:
         session, page = self.get_page(owner, request.page_id)
         if request.source_image_hash != page.image.source_hash:
             raise RoiError("source_identity_mismatch", 409)
+        if request.task == "penetration" and request.scopes:
+            from .penetration_geometry import validate_scopes
+            validate_scopes(request, page.image.width, page.image.height)
         data = request.model_dump()
         data["accepted_rois"] = sorted(data["accepted_rois"], key=lambda parent: parent["id"])
         fingerprint = digest(data)
@@ -430,7 +435,16 @@ class RoiService:
             raise RoiError("request_limit_exceeded", 429)
         prompt = make_prompt(request.task, request.accepted_rois, self.settings.max_annotations)
         settings = self.inference_settings(page)
-        settings["prompt_hash"] = sha256((SYSTEM_PROMPT + prompt).encode()).hexdigest()
+        prompt_system = SYSTEM_PROMPT
+        if request.task == "penetration":
+            from .gemini import PENETRATION_SYSTEM_PROMPT
+            from .penetration_geometry import ALGORITHM_VERSION, MAX_CROPS
+            settings.update(algorithm_version=ALGORITHM_VERSION, max_crops=MAX_CROPS,
+                            max_image_side=2048 if request.scopes else 1024,
+                            scope_geometry_hash=digest(data["scopes"]), vector_geometry_hash=digest(data["vector_segments"]))
+            if request.scopes:
+                prompt_system = PENETRATION_SYSTEM_PROMPT
+        settings["prompt_hash"] = sha256((prompt_system + prompt).encode()).hexdigest()
         key = digest({"source_hash": page.image.source_hash, "model": self.settings.model,
                       "prompt_version": PROMPT_VERSIONS[request.task], "schema_version": "1", "task": request.task,
                       "settings": settings, "roi_revision": request.roi_revision,
@@ -440,16 +454,18 @@ class RoiService:
             previous = session.operations.get(request.follow_up_of)
             previous_response = self.completed_response(previous) if previous is not None else None
             if (previous is None or previous.upload_id != page.upload_id or previous.key != key
-                    or previous_response is None or previous_response.status != "partial"):
+                    or previous_response is None or previous_response.status != "partial" and request.task != "penetration"):
                 raise RoiError("invalid_follow_up", 409)
             if page.follow_ups >= 1:
                 raise RoiError("follow_up_limit_exceeded", 429)
-            prompt += "\nReturn additional missed objects only. Previously proposed objects: " + json.dumps([
+            prompt += ("\nReturn additional missed objects only. Previously proposed objects"
+                       + (" (box coordinates normalized to the full PAGE, not a detail crop)" if request.task == "penetration" else "")
+                       + ": ") + json.dumps([
                 {"label": annotation.label, "box_2d": annotation.box_2d, "roi_id": annotation.roi_id}
                 for annotation in previous_response.annotations
             ], separators=(",", ":"))
             settings["follow_up_of"] = request.follow_up_of
-            settings["prompt_hash"] = sha256((SYSTEM_PROMPT + prompt).encode()).hexdigest()
+            settings["prompt_hash"] = sha256((prompt_system + prompt).encode()).hexdigest()
             cached = None
         if cached is None:
             if not self.provider.ready:
@@ -490,6 +506,16 @@ class RoiService:
         attempts = 0
         try:
             result = cached
+            if result is None and request.task == "penetration" and request.scopes:
+                from .penetration_service import scan_penetrations
+                annotations, status, warnings, attempts = await scan_penetrations(
+                    self, session, page, request, prompt, settings)
+                result = CachedProposals(annotations, status, warnings,
+                                         min(page.expires, self.clock() + self.settings.cache_ttl_seconds), dict(settings))
+                if session.pages.get(request.page_id) is not page or page.expires <= self.clock():
+                    raise RoiError("page_not_found", 404)
+                if request.follow_up_of is None and status != "partial":
+                    page.cache[key] = result
             if result is None:
                 async with asyncio.timeout(self.settings.timeout_seconds):
                     while True:
@@ -532,6 +558,12 @@ class RoiService:
                     annotations = [Annotation(**proposal.model_dump(), id=f"annotation_{uuid4().hex}",
                                               page_id=request.page_id, kind=request.task, proposed_box_2d=proposal.box_2d)
                                    for proposal in proposals]
+                    if request.task == "penetration":
+                        from .penetration_geometry import annotation_from_proposal
+                        annotations = [annotation_from_proposal(proposal, page, annotation.id,
+                                       vectors=request.vector_segments)
+                                       for proposal, annotation in zip(proposals, annotations)]
+                        warnings.append("penetration_coverage_requires_review")
                     result = CachedProposals(annotations, status, warnings,
                                              min(page.expires, self.clock() + self.settings.cache_ttl_seconds))
                 if session.pages.get(request.page_id) is not page or page.expires <= self.clock():
@@ -540,7 +572,7 @@ class RoiService:
                     page.cache[key] = result
             run = DetectionRun(**{name: getattr(request, name) for name in (
                 "page_id", "request_id", "task", "source_image_hash", "roi_revision", "geometry_revision")},
-                model=self.settings.model, prompt_version=PROMPT_VERSIONS[request.task], settings=settings,
+                model=self.settings.model, prompt_version=PROMPT_VERSIONS[request.task], settings=result.settings or settings,
                 started_at=started_at, duration_ms=(time.monotonic() - started) * 1000,
                 status=result.status, warnings=result.warnings, cached=cached is not None, provider_attempts=attempts)
             return DetectionResponse(page_id=request.page_id, request_id=request.request_id, task=request.task,

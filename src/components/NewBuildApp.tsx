@@ -31,6 +31,7 @@ import { PenetrationSummary } from "./newbuild/PenetrationSummary";
 import { combinePageDrawings, editorDrainage, reconcilePolygons, shiftPageOffset } from "@/utils/roiDrawing";
 import { cloneOutlineDrawing } from "@/utils/outlineSession";
 import { penetrationOpenings } from "@/utils/penetrationOpenings";
+import { footprintBox, penetrationBoundary, validPenetrationRing } from "@/utils/penetrationGeometry";
 import { outletFromAnnotation, pointInOutletRing, reviewPageOutlets } from "@/utils/outletScope";
 import { DEFAULT_OUTLET_DIAMETER_M } from "@/utils/outletDefaults";
 import { useOutletDetection } from "@/hooks/useOutletDetection";
@@ -62,6 +63,9 @@ export const NewBuildApp = () => {
   const [selectedPenetrationId, setSelectedPenetrationId] = useState<string | null>(null);
   const [addingPenetration, setAddingPenetration] = useState(false);
   const penetrationAnnotations = activePage?.annotations.filter((annotation) => annotation.kind === "penetration") ?? [];
+  const unconfirmedOpenings = penetrationAnnotations.filter(annotation => annotation.review_status === "accepted"
+    && annotation.validity === "needs_review");
+  const [penetrationWarningOpen, setPenetrationWarningOpen] = useState(false);
   useEffect(() => {
     if (currentStep !== "penetrations") return;
     const annotations = activePage?.annotations.filter(annotation => annotation.kind === "penetration") ?? [];
@@ -249,6 +253,21 @@ export const NewBuildApp = () => {
     if (activePage) dispatch({ type: "review", page_id: activePage.source.page_id, id, patch: { box_2d } });
   };
 
+  const addPenetration = (footprint: Point[]) => {
+    if (!activePage) return;
+    const size = { width: activePage.source.source_width, height: activePage.source.source_height };
+    if (!validPenetrationRing(footprint, size)) return;
+    const box = footprintBox(footprint, size), id = crypto.randomUUID();
+    dispatch({ type: "add", page_id: activePage.source.page_id, annotation: {
+      id, page_id: activePage.source.page_id, kind: "penetration", label: `Penetration ${penetrationAnnotations.length + 1}`,
+      subtype: "unknown", box_2d: box, proposed_box_2d: box, footprint, proposed_footprint: footprint,
+      footprint_source: "manual", roi_id: acceptedRegions.length === 1 ? acceptedRegions[0].id : null,
+      origin: "manual", review_status: "suggested", validity: "needs_review", revision: 1, edits: [], warnings: [],
+    } });
+    setSelectedPenetrationId(id);
+    setAddingPenetration(false);
+  };
+
   const addRoi = (box: Box2D) => {
     if (!activePage) return;
     const id = crypto.randomUUID();
@@ -287,6 +306,7 @@ export const NewBuildApp = () => {
 
   const requestNext = () => {
     if (unoutlinedRegions.length) setUnoutlinedWarningOpen(true);
+    else if (currentStep === "penetrations" && unconfirmedOpenings.length) setPenetrationWarningOpen(true);
     else handleNext();
   };
 
@@ -340,16 +360,13 @@ export const NewBuildApp = () => {
           pdfCanvas={pdfCanvas} annotations={penetrationAnnotations} contextAnnotations={acceptedRegions} drawing={activePage.drawing} page={activePage}
           contextLabels={regionLabels}
           selectedId={selectedPenetrationId} adding={addingPenetration} onAddingChange={setAddingPenetration}
-          onSelect={setSelectedPenetrationId} onEdit={editRoi} onAdd={(box) => {
-            const id = crypto.randomUUID();
-            dispatch({ type: "add", page_id: activePage.source.page_id, annotation: {
-              id, page_id: activePage.source.page_id, kind: "penetration", label: `Penetration ${penetrationAnnotations.length + 1}`,
-              subtype: "rooflight", box_2d: box, proposed_box_2d: box, roi_id: acceptedRegions.length === 1 ? acceptedRegions[0].id : null,
-              origin: "manual", review_status: "suggested", validity: "needs_review", revision: 1, edits: [], warnings: [],
-            } });
-            setSelectedPenetrationId(id);
-            setAddingPenetration(false);
-          }} /> : null;
+          onSelect={setSelectedPenetrationId} onEdit={editRoi}
+          onUndoReview={() => dispatch({ type: "undo", page_id: activePage.source.page_id })}
+          onEditFootprint={(id, footprint) => dispatch({ type: "review", page_id: activePage.source.page_id, id, patch: { footprint } })}
+          onAddFootprint={addPenetration}
+          onAdd={(box) => addPenetration(penetrationBoundary({ box_2d: box }, {
+            width: activePage.source.source_width, height: activePage.source.source_height,
+          }))} /> : null;
       case "paint":
         return pdfCanvas ? (
           <PaintBucketCanvas
@@ -569,6 +586,35 @@ export const NewBuildApp = () => {
                   Outline {regionLabels[unoutlinedFocus.id]}
                 </AlertDialogCancel>}
                 <AlertDialogAction onClick={() => { setUnoutlinedWarningOpen(false); handleNext(); }}>Continue anyway</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <AlertDialog open={penetrationWarningOpen && currentStep === "penetrations" && unconfirmedOpenings.length > 0}
+            onOpenChange={setPenetrationWarningOpen}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Accepted openings need confirmation</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {unconfirmedOpenings.length} previously accepted {unconfirmedOpenings.length === 1 ? "opening needs" : "openings need"} confirmation.
+                  {" "}Review their boundaries and select Confirm opening for each one. Until confirmed, these openings
+                  will be excluded from the final drawing and export.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <ul className="max-h-40 overflow-y-auto list-disc pl-5 text-sm text-muted-foreground" aria-label="Openings requiring confirmation">
+                {unconfirmedOpenings.map(annotation => <li key={annotation.id}>
+                  Penetration {penetrationAnnotations.findIndex(candidate => candidate.id === annotation.id) + 1}
+                  {annotation.label ? ` — ${annotation.label}` : ""}
+                </li>)}
+              </ul>
+              <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => {
+                  setSelectedPenetrationId(unconfirmedOpenings[0].id);
+                  setAddingPenetration(false);
+                }}>Review openings</AlertDialogCancel>
+                <AlertDialogAction className="h-auto min-h-10 whitespace-normal" onClick={() => {
+                  setPenetrationWarningOpen(false);
+                  handleNext();
+                }}>Continue without these openings</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

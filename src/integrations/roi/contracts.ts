@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { validPenetrationRing } from "@/utils/penetrationGeometry";
 
 export const identifier = z.string().min(1).max(200).regex(/^[a-zA-Z0-9_-]+$/);
 export const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -9,9 +10,9 @@ export const task = z.enum(["roof_roi", "penetration", "rainwater_outlet"]);
 const status = z.enum(["complete", "no_detections", "partial"]);
 const model = z.enum(["gemini-3.7-flash", "gemini-4-argon"]);
 const warnings = z.array(z.string().max(500)).max(50);
-const subtype = z.enum(["rooflight", "vent", "flue", "access_hatch", "internal_outlet", "parapet_outlet", "scupper"]);
+const subtype = z.enum(["rooflight", "vent", "flue", "access_hatch", "riser", "lift_overrun", "other_upstand", "unknown", "internal_outlet", "parapet_outlet", "scupper"]);
 export const subtypes = {
-  roof_roi: [], penetration: ["rooflight", "vent", "flue", "access_hatch"],
+  roof_roi: [], penetration: ["rooflight", "vent", "flue", "access_hatch", "riser", "lift_overrun", "other_upstand", "unknown"],
   rainwater_outlet: ["internal_outlet", "parapet_outlet", "scupper"],
 };
 
@@ -34,10 +35,23 @@ export const requestSchema = z.object({
 }).strict();
 
 export const parentSchema = z.object({ id: identifier, revision: z.number().int().positive(), box_2d: box }).strict();
+const sourcePoint = z.object({ x: z.number().finite().nonnegative(), y: z.number().finite().nonnegative() }).strict()
+  .transform(p => ({ x: p.x, y: p.y }));
+export const footprintSchema = z.array(sourcePoint).min(3).max(128).refine(points => validPenetrationRing(points));
+const scopeRing = z.array(sourcePoint).min(3).max(512).refine(points => validPenetrationRing(points, undefined, 512));
+export const penetrationScopesSchema = z.array(z.object({
+  roi_id: identifier, outline_id: identifier, outer: scopeRing, holes: z.array(scopeRing).max(100),
+}).strict()).max(100).refine(scopes => scopes.reduce((sum, scope) => sum + scope.outer.length
+  + scope.holes.reduce((count, hole) => count + hole.length, 0), 0) <= 8192);
+export const penetrationVectorsSchema = z.array(z.object({ start: sourcePoint, end: sourcePoint }).strict()).max(30000);
 
 const annotationSchema = z.object({
   id: identifier, page_id: identifier, kind: task, label: z.string().trim().min(1).max(240),
   subtype: subtype.nullish().transform((value) => value ?? undefined), box_2d: box, proposed_box_2d: box,
+  footprint: footprintSchema.nullish().transform(value => value ?? undefined),
+  proposed_footprint: footprintSchema.nullish().transform(value => value ?? undefined),
+  footprint_source: z.enum(["model", "vector", "raster", "manual", "legacy_box"]).nullish().transform(value => value ?? undefined),
+  outline_id: identifier.nullish().transform(value => value ?? undefined),
   roi_id: identifier.nullable(), origin: z.literal("gemini"), review_status: z.literal("suggested"),
   validity: z.literal("current"), revision: z.literal(1), edits: z.array(z.never()).max(0), warnings,
 }).strict();
@@ -46,7 +60,7 @@ const runSchema = requestSchema.extend({
   model, prompt_version: z.string().min(1).max(100), schema_version: z.literal("1"),
   settings: z.record(z.unknown()), started_at: z.string().datetime({ offset: true }),
   duration_ms: z.number().finite().nonnegative(), status, warnings,
-  cached: z.boolean(), provider_attempts: z.number().int().min(0).max(2),
+  cached: z.boolean(), provider_attempts: z.number().int().min(0).max(16),
 }).strict();
 
 export const detectionSchema = z.object({

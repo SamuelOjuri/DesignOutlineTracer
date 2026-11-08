@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { packagePage } from "@/test/package";
 import { syntheticAnnotation } from "@/test/roi";
+import type { Point } from "@/types/roof";
 import { buildRoofExport, maskLayout, roofExportDxf, roofExportGeoJson, roofExportMetadata, roofExportSvg } from "./drawingExport";
 
 describe("roof drawing export", () => {
@@ -107,5 +108,85 @@ describe("roof drawing export", () => {
     const column = (0 - layout.top_left_mm.x) * layout.px_per_mm;
     expect(column).toBeGreaterThan(30);
     expect(column).toBeLessThan(layout.width_px / 2);
+  });
+
+  it("assigns concave cutouts by overlap even when their vertex average lies outside the roof", () => {
+    const page = packagePage();
+    const ring = (coordinates: number[][]): Point[] => coordinates.map(([x, y]) => ({ x, y }));
+    page.drawing.outlines[0].points = ring([[0, 0], [300, 0], [300, 300], [200, 300],
+      [200, 100], [100, 100], [100, 300], [0, 300]]);
+    page.drawing.holes[0].points = ring([[10, 10], [290, 10], [290, 290], [210, 290],
+      [210, 90], [90, 90], [90, 290], [10, 290]]);
+    const { model } = buildRoofExport([page])!;
+    expect(model.openings[0].roof_area_id).toBe("outline-page-1");
+    expect(model.roof_areas[0]).toMatchObject({ gross_area_m2: 700, net_area_m2: 156 });
+    expect(model.openings[0].outline).toHaveLength(8);
+  });
+
+  it("subtracts a legacy cutout from every intersected roof component", () => {
+    const page = packagePage();
+    page.drawing.outlines = [0, 120].map((x, index) => ({ id: `roof-${index}`, page_id: page.source.page_id,
+      roi_id: null, points: [{ x, y: 0 }, { x: x + 100, y: 0 }, { x: x + 100, y: 100 }, { x, y: 100 }] }));
+    page.drawing.holes[0].points = [{ x: 80, y: 20 }, { x: 140, y: 20 }, { x: 140, y: 60 }, { x: 80, y: 60 }];
+    const { model } = buildRoofExport([page])!;
+    expect(model.openings[0].roof_area_ids).toEqual(["roof-0", "roof-1"]);
+    expect(model.roof_areas.map(area => area.net_area_m2)).toEqual([92, 92]);
+    expect(model.totals.net_area_m2).toBe(184);
+    const geojson = JSON.parse(roofExportGeoJson(model));
+    const roofs = geojson.features.filter((feature: { properties: { kind: string } }) => feature.properties.kind === "roof_area");
+    // Edge-touching cuts are notches in the exterior, rather than invalid holes touching it.
+    for (const roof of roofs) {
+      expect(roof.geometry.type).toBe("Polygon");
+      expect(roof.geometry.coordinates).toHaveLength(1);
+      expect(roof.geometry.coordinates[0]).toHaveLength(9);
+    }
+  });
+
+  it("counts a split penetration once and retains both parts with explicit roof ownership", () => {
+    const page = packagePage();
+    page.drawing.outlines = [0, 120].map((x, index) => ({ id: `roof-${index}`, page_id: page.source.page_id,
+      roi_id: "roi", points: [{ x, y: 0 }, { x: x + 100, y: 0 }, { x: x + 100, y: 100 }, { x, y: 100 }] }));
+    page.drawing.holes = [];
+    page.annotations = [syntheticAnnotation("roi", { box_2d: [0, 0, 1000, 1000], proposed_box_2d: [0, 0, 1000, 1000] }),
+      syntheticAnnotation("split", { kind: "penetration", subtype: "riser", roi_id: "roi",
+        box_2d: [0, 0, 1000, 1000], proposed_box_2d: [0, 0, 1000, 1000],
+        footprint: [{ x: 80, y: 20 }, { x: 140, y: 20 }, { x: 140, y: 60 }, { x: 80, y: 60 }] })];
+    const { model, drawing } = buildRoofExport([page])!;
+    expect(model.openings).toHaveLength(2);
+    expect(model.totals).toMatchObject({ penetrations: 1, net_area_m2: 184 });
+    expect(model.openings.map(opening => opening.annotation_id)).toEqual(["split", "split"]);
+    expect(model.openings.map(opening => opening.label)).toEqual(["Penetration 1", "Penetration 1"]);
+    expect(model.openings.map(opening => opening.roof_area_id)).toEqual(["roof-0", "roof-1"]);
+    expect(drawing.holeRefs.map(reference => reference.annotation_id)).toEqual(["split", "split"]);
+    expect(drawing.penetrations.map(part => part.outline_id)).toEqual(["roof-0", "roof-1"]);
+    const svg = new DOMParser().parseFromString(roofExportSvg(model), "image/svg+xml");
+    expect(svg.querySelectorAll('[data-annotation-id="split"]')).toHaveLength(2);
+    expect(roofExportDxf(model).match(/\r\nPOLYLINE\r\n/g)).toHaveLength(4);
+  });
+
+  it("preserves rotated boundaries and subtracts overlapping openings once in export and GeoJSON", () => {
+    const page = packagePage();
+    page.drawing.outlines[0].roi_id = "roi";
+    page.annotations = [syntheticAnnotation("roi", { box_2d: [0, 0, 1000, 1000], proposed_box_2d: [0, 0, 1000, 1000] }),
+      syntheticAnnotation("diamond", { kind: "penetration", subtype: "access_hatch", roi_id: "roi",
+        box_2d: [0, 0, 1000, 1000], proposed_box_2d: [0, 0, 1000, 1000],
+        footprint: [{ x: 150, y: 150 }, { x: 170, y: 130 }, { x: 190, y: 150 }, { x: 170, y: 170 }] })];
+    const original = JSON.stringify(page);
+    const { model } = buildRoofExport([page])!;
+    expect(model.totals).toMatchObject({ penetrations: 1, cutouts: 1, net_area_m2: 586.5 });
+    const opening = model.openings.find(candidate => candidate.kind === "penetration")!;
+    expect(opening.outline.some((point, index, ring) => {
+      const next = ring[(index + 1) % ring.length];
+      return point.x !== next.x && point.y !== next.y;
+    })).toBe(true);
+    const geojson = JSON.parse(roofExportGeoJson(model));
+    const roof = geojson.features.find((feature: { properties: { kind: string } }) => feature.properties.kind === "roof_area");
+    const rings = roof.geometry.coordinates as number[][][];
+    const area = rings.reduce((total, ring) => total + ring.slice(0, -1).reduce((sum, [x, y], index) => {
+      const [nx, ny] = ring[index + 1];
+      return sum + x * ny - nx * y;
+    }, 0) / 2, 0) / 1e6;
+    expect(area).toBeCloseTo(586.5);
+    expect(JSON.stringify(page)).toBe(original);
   });
 });

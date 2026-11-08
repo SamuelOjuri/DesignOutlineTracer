@@ -47,11 +47,33 @@ describe("ROI failure feedback", () => {
     expect(screen.getByRole("button", { name: "Manual penetration" })).toBeEnabled();
   });
 
+  it("explains uncertain types, scope coverage and the missed-penetration follow-up without service codes", async () => {
+    const source = syntheticPage();
+    let state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });
+    state = roiSessionReducer(state, { type: "add", page_id: source.page_id,
+      annotation: syntheticAnnotation("uncertain", { kind: "penetration", subtype: "unknown", review_status: "suggested",
+        warnings: ["penetration_boundary_ambiguous", "penetration_type_requires_review"] }) });
+    const detect = vi.fn();
+    const { container } = render(<RoiReviewSidebar kind="penetration" page={state.pages[source.page_id]} selectedId="uncertain" adding={false}
+      onSelect={vi.fn()} onAddingChange={vi.fn()} dispatch={vi.fn()}
+      detection={{ busy: false, restarting: false, cancel: vi.fn(), detect,
+        feedback: { status: "partial", followUpOf: "previous", warnings: ["penetration_coverage_requires_review", "penetration_scope_incomplete",
+          "penetration_crop_limit_reached", "penetration_call_budget_reached", "penetration_scan_time_limit_reached",
+          "penetration_crop_failed", "penetration_annotation_limit_reached", "possible_truncation"] } }} />);
+    expect(screen.getByRole("button", { name: "Add opening" })).toBeDisabled();
+    expect(screen.getByText(/Choose a penetration type before adding this opening/)).toBeVisible();
+    expect(screen.getByText("Some roof areas have no insulation outline; only outlined areas were scanned.")).toBeVisible();
+    expect(container.textContent).not.toMatch(/penetration_|possible_truncation/);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Find missed penetrations" }));
+    expect(detect).toHaveBeenCalledWith("previous");
+  });
+
   it.each([
     ["malformed_output", "The model response could not be validated. No new regions were added."],
     ["truncated_output", "The model response ended before valid annotations were complete. No new regions were added."],
     ["call_budget_exceeded", "The model-call budget has been used. Further detection requires an approved budget reset."],
     ["storage_unavailable", "The service is restarting after an update. Try again in a minute."],
+    ["penetration_scope_required", "Define the insulation scope in Step 3 before detecting penetrations."],
   ])("explains %s while retaining accepted regions and manual controls", async (code, message) => {
     const source = syntheticPage();
     let state = roiSessionReducer(initialRoiState, { type: "activate", source, scale: { paperSize: "A1", scaleRatio: 100 } });

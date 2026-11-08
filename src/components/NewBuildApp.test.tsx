@@ -68,9 +68,10 @@ vi.mock("./newbuild/PaintBucketCanvas", () => ({
 }));
 
 vi.mock("./newbuild/RoiReviewCanvas", () => ({
-  RoiReviewCanvas: ({ annotations, page, onAdd, onEdit }: ComponentProps<typeof RoiReviewCanvas>) => <>
+  RoiReviewCanvas: ({ annotations, page, onAdd, onEdit, onUndoReview }: ComponentProps<typeof RoiReviewCanvas>) => <>
     <output data-testid="review-regions">{JSON.stringify(annotations)}</output>
     <output data-testid="review-drawing">{JSON.stringify(page && drawingWithPenetrations(page))}</output>
+    {onUndoReview && <button disabled={!page?.history.length} onClick={onUndoReview}>Undo review edit</button>}
     <button onClick={() => onAdd([100.25, 200.5, 400.75, 600.5])}>Add test region</button>
     <button onClick={() => onAdd([0, 0, 1000, 1000])}>Add full-page region</button>
     <button onClick={() => onAdd([700, 700, 900, 900])}>Add far test region</button>
@@ -121,7 +122,103 @@ beforeEach(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/png;base64,AA==");
 });
 
+async function reviewedPenetrations() {
+  roiClient.enabled = true;
+  vi.spyOn(roiClient, "uploadPage").mockResolvedValue({ page: {
+    ...syntheticPage(), render_rotation: 0, pdf_view_box: [0, 0, 400, 300],
+  }, upload_id: "upload", expires_in_seconds: 900 });
+  vi.spyOn(roiClient, "detect").mockImplementation(async (request, options) => ({
+    schema_version: "1", ...request, status: "complete", model: "gemini-3.7-flash", prompt_version: "penetration-v1",
+    annotations: [250, 300, 350, 400].map((left, index) => syntheticAnnotation(`child-${index + 1}`, {
+      label: `Opening ${index + 1}`, kind: "penetration", subtype: "rooflight", roi_id: options!.acceptedRois![0].id,
+      review_status: "suggested", box_2d: [220, left, 250, left + 25], proposed_box_2d: [220, left, 250, left + 25],
+    })), warnings: [], run: { ...syntheticRun(request), cached: false, provider_attempts: 1 },
+  }));
+  const user = userEvent.setup();
+  render(<NewBuildApp />);
+  const next = () => user.click(screen.getByRole("button", { name: "Next" }));
+  const previous = () => user.click(screen.getByRole("button", { name: "Previous" }));
+  const penetration = (number: number) => within(screen.getByRole("list", { name: "Penetrations" }))
+    .getByRole("button", { name: new RegExp(`^Penetration ${number} `) });
+  await user.click(screen.getByRole("button", { name: "Render PDF 1" }));
+  await next();
+  await user.click(screen.getByRole("button", { name: "Add test region" }));
+  await user.click(screen.getByRole("button", { name: "Set Outlines" }));
+  await user.click(screen.getByRole("button", { name: "Select roof" }));
+  await next();
+  await user.click(screen.getByRole("button", { name: "Detect penetrations" }));
+  await screen.findByRole("button", { name: /^Penetration 4 suggested/ });
+  for (const number of [1, 2]) {
+    await user.click(penetration(number));
+    await user.click(screen.getByRole("button", { name: "Add opening" }));
+  }
+  await user.click(penetration(3));
+  await user.click(screen.getByRole("button", { name: "Reject" }));
+  return { user, next, previous, penetration };
+}
+
 describe("manual New Build state", () => {
+  it("keeps confirmed openings through an unchanged outline visit without warning about suggestions or rejected entries", async () => {
+    const { next, previous } = await reviewedPenetrations();
+    await previous();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await next();
+    await next();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(JSON.parse(screen.getByTestId("editor-holes").textContent!)).toHaveLength(2);
+    await next();
+    expect(JSON.parse(screen.getByTestId("penetrations").textContent!)).toHaveLength(2);
+  });
+
+  it("warns after outline corrections, focuses each opening for confirmation, and proceeds once all are current", async () => {
+    const { user, next, previous, penetration } = await reviewedPenetrations();
+    await previous();
+    await user.click(screen.getByRole("button", { name: "Redraw roof side" }));
+    await next();
+    await next();
+    let warning = screen.getByRole("alertdialog", { name: "Accepted openings need confirmation" });
+    expect(warning).toHaveTextContent("2 previously accepted openings need confirmation.");
+    expect(warning).toHaveTextContent("excluded from the final drawing and export");
+    await user.click(within(warning).getByRole("button", { name: "Review openings" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(penetration(1)).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Confirm opening" }));
+    await next();
+    warning = screen.getByRole("alertdialog", { name: "Accepted openings need confirmation" });
+    expect(warning).toHaveTextContent("1 previously accepted opening needs confirmation.");
+    await user.click(within(warning).getByRole("button", { name: "Review openings" }));
+    expect(penetration(2)).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByRole("button", { name: "Confirm opening" }));
+    await next();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(JSON.parse(screen.getByTestId("editor-holes").textContent!)).toHaveLength(2);
+    await next();
+    expect(JSON.parse(screen.getByTestId("penetrations").textContent!)).toHaveLength(2);
+  });
+
+  it("allows explicit continuation without confirming stale openings and warns again on a later review visit", async () => {
+    const { user, next, previous } = await reviewedPenetrations();
+    await previous();
+    await user.click(screen.getByRole("button", { name: "Redraw roof side" }));
+    await next();
+    await next();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Penetrations" })).toBeVisible();
+    await next();
+    const warning = screen.getByRole("alertdialog", { name: "Accepted openings need confirmation" });
+    await user.click(within(warning).getByRole("button", { name: "Continue without these openings" }));
+    expect(JSON.parse(screen.getByTestId("editor-holes").textContent!)).toEqual([]);
+    await next();
+    expect(JSON.parse(screen.getByTestId("penetrations").textContent!)).toEqual([]);
+    expect(screen.getByRole("region", { name: "Penetration annotation summary" })).toHaveTextContent("accepted / Needs review");
+    await previous();
+    await previous();
+    await next();
+    expect(screen.getByRole("alertdialog", { name: "Accepted openings need confirmation" }))
+      .toHaveTextContent("2 previously accepted openings need confirmation.");
+  });
+
   it("routes additional pages through ROI review and keeps each page's regions separate from manual geometry", async () => {
     roiClient.enabled = true;
     const upload = vi.spyOn(roiClient, "uploadPage");
