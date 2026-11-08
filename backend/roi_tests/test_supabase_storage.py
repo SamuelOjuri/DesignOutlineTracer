@@ -2,9 +2,11 @@
 from copy import deepcopy
 import json
 import unittest
+from unittest.mock import patch
 from urllib.parse import unquote
 
 import httpx
+from psycopg.errors import InvalidPassword, SerializationFailure, UndefinedColumn
 
 from backend.app.supabase_storage import SupabaseStateStore, SupabaseWriterBusy
 
@@ -342,14 +344,122 @@ class SupabaseStorageTests(unittest.TestCase):
 
     def test_initialization_does_not_expose_connection_or_key_errors(self):
         def fail(_url, **_kwargs):
-            raise RuntimeError("postgresql://backend:database-password@host and sb_secret_private")
+            raise InvalidPassword("postgresql://backend:database-password@host and sb_secret_private")
 
-        with self.assertRaises(RuntimeError) as caught:
-            SupabaseStateStore("postgresql://backend:password@db.example.com/postgres", "https://project.supabase.co",
-                               "sb_secret_private", connection_factory=fail)
+        with self.assertLogs("roi_app.storage", level="ERROR") as logs:
+            with self.assertRaises(RuntimeError) as caught:
+                SupabaseStateStore("postgresql://backend:password@db.example.com/postgres", "https://project.supabase.co",
+                                   "sb_secret_private", connection_factory=fail)
         self.assertNotIn("database-password", str(caught.exception))
         self.assertNotIn("sb_secret_private", str(caught.exception))
         self.assertTrue(caught.exception.__suppress_context__)
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("operation=initialize stage=postgres_connect exception_type=InvalidPassword", logs.output[0])
+        self.assertIn("http_status=none sqlstate=28P01", logs.output[0])
+        for private in ("postgresql://", "database-password", "sb_secret_private", "host"):
+            self.assertNotIn(private, logs.output[0])
+        self.assertIsNone(logs.records[0].exc_info)
+
+    def test_bucket_http_failure_logs_only_status_and_stage(self):
+        def fail(request):
+            return httpx.Response(403, text="private-body sb_secret_private", request=request)
+
+        with patch.object(self.storage, "request", side_effect=fail):
+            with self.assertLogs("roi_app.storage", level="ERROR") as logs:
+                with self.assertRaisesRegex(RuntimeError, "initialization failed"):
+                    self.store(key="sb_secret_private", bucket="private-bucket")
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("stage=storage_bucket exception_type=HTTPStatusError http_status=403", logs.output[0])
+        for private in ("private-body", "sb_secret_private", "private-bucket", "https://", "apikey", "Authorization"):
+            self.assertNotIn(private, logs.output[0])
+        self.assertTrue(self.database.connections[0].closed)
+
+    def test_schema_preflight_logs_database_error_code(self):
+        execute = FakeConnection.execute
+
+        def fail_schema(connection, query, params=()):
+            if query.startswith("SELECT bucket, prefix, payload"):
+                raise UndefinedColumn("private SQL and database-password")
+            return execute(connection, query, params)
+
+        with patch.object(FakeConnection, "execute", new=fail_schema):
+            with self.assertLogs("roi_app.storage", level="ERROR") as logs:
+                with self.assertRaisesRegex(RuntimeError, "initialization failed"):
+                    self.store()
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("stage=postgres_schema_state exception_type=UndefinedColumn", logs.output[0])
+        self.assertIn("sqlstate=42703", logs.output[0])
+        self.assertNotIn("private SQL", logs.output[0])
+        self.assertNotIn("database-password", logs.output[0])
+        self.assertEqual(self.database.lock_attempts, 0)
+
+    def test_invalid_bucket_response_logs_successful_http_status(self):
+        self.storage.public = True
+        with self.assertLogs("roi_app.storage", level="ERROR") as logs:
+            with self.assertRaisesRegex(RuntimeError, "initialization failed"):
+                self.store()
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("stage=storage_bucket_validation exception_type=RuntimeError http_status=200", logs.output[0])
+
+    def test_runtime_commit_failure_logs_once_across_failed_retries(self):
+        store = self.store()
+        execute = store.connection.execute
+
+        def fail_commit(query, params=()):
+            if query.startswith("UPDATE roi.state"):
+                raise SerializationFailure("private payload and sb_secret_private")
+            return execute(query, params)
+
+        with patch.object(store.connection, "execute", side_effect=fail_commit):
+            with self.assertLogs("roi_app.storage", level="ERROR") as logs:
+                for _ in range(3):
+                    with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                        store.save({"version": 1, "private": "secret-state"}, {})
+                with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                    store.load()
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("operation=save stage=postgres_snapshot_commit exception_type=SerializationFailure", logs.output[0])
+        self.assertIn("sqlstate=40001", logs.output[0])
+        for private in ("private payload", "sb_secret_private", "secret-state"):
+            self.assertNotIn(private, logs.output[0])
+        self.assertFalse(store.healthy)
+        self.assertEqual(len(self.database.connections), 1)
+
+    def test_runtime_upload_timeout_logs_original_type_without_private_request(self):
+        store = self.store()
+        request = httpx.Request("POST", "https://private.example/upload_private", headers={"apikey": "sb_secret_private"})
+        error = httpx.ReadTimeout("private timeout sb_secret_private", request=request)
+        with patch.object(store.client, "request", side_effect=error):
+            with self.assertLogs("roi_app.storage", level="ERROR") as logs:
+                with self.assertRaisesRegex(RuntimeError, "unavailable"):
+                    store.save({"version": 1}, {"upload_private": (b"private-image", b"inference")})
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("operation=save stage=storage_object_upload exception_type=ReadTimeout", logs.output[0])
+        self.assertIn("http_status=none sqlstate=none", logs.output[0])
+        for private in ("private timeout", "sb_secret_private", "upload_private", "private-image", "https://"):
+            self.assertNotIn(private, logs.output[0])
+        self.assertFalse(store.healthy)
+
+    def test_busy_writer_does_not_emit_failure_diagnostics(self):
+        self.store()
+        with self.assertNoLogs("roi_app.storage", level="WARNING"):
+            with self.assertRaises(SupabaseWriterBusy):
+                self.store()
+
+    def test_outbox_http_failure_logs_retry_without_marking_store_unhealthy(self):
+        store = self.store()
+        store.save({"version": 1}, {"upload_private": (b"source", b"inference")})
+        self.storage.fail_delete = 1
+        with self.assertLogs("roi_app.storage", level="WARNING") as logs:
+            store.save({"version": 1}, {})
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(logs.records[0].levelname, "WARNING")
+        self.assertIn("roi_storage_retry operation=delete_outbox stage=storage_object_delete", logs.output[0])
+        self.assertIn("exception_type=HTTPStatusError http_status=503", logs.output[0])
+        self.assertNotIn("upload_private", logs.output[0])
+        self.assertTrue(store.healthy)
+        store.save({"version": 1}, {})
+        self.assertEqual(self.database.outbox, set())
 
     def test_expired_missing_images_are_skipped_and_retired_by_committed_cleanup(self):
         store = self.store()

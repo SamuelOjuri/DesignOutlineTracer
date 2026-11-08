@@ -76,9 +76,12 @@ Then check the private bucket, encrypted database connection and required tables
 & ./backend/app/.venv/Scripts/python.exe -m backend.scripts.check_supabase_storage --env-file .env
 ```
 
-This check prints no credential values, creates no application state and makes
-no model calls. If it reports that the ROI schema is missing, apply the reviewed
-private migration explicitly:
+The checker reports Storage bucket access and Postgres connectivity/schema
+separately. Both checks run even if one fails, and the command exits with code 1
+if either fails. Schema checks verify the required columns and read permissions
+as well as table existence. It prints no credential values, creates no
+application state and makes no model calls. If it reports that the ROI schema
+is missing, apply the reviewed private migration explicitly:
 
 ```powershell
 & ./backend/app/.venv/Scripts/python.exe -m backend.scripts.check_supabase_storage --env-file .env --apply-migration
@@ -86,6 +89,8 @@ private migration explicitly:
 
 The apply flag runs only the checked-in migration for the private ROI tables and
 their permissions. It does not create bucket objects, snapshots or model calls.
+If the private bucket check fails, the migration is skipped and only read-only
+database checks run.
 Run the read-only check again after applying it. If using another active virtual
 environment containing the locked backend dependencies, use its `python` instead.
 
@@ -134,6 +139,28 @@ python -m backend.scripts.check_supabase_storage
 # Only when the reviewed migration has not already been applied:
 python -m backend.scripts.check_supabase_storage --apply-migration
 ```
+
+Storage failures in the Render application logs include a diagnostic line before
+the generic startup or `storage_unavailable` error. For example:
+
+```text
+roi_storage_failure operation=initialize stage=postgres_connect exception_type=InvalidPassword http_status=none sqlstate=28P01
+roi_storage_failure operation=save stage=storage_object_upload exception_type=HTTPStatusError http_status=503 sqlstate=none
+```
+
+`stage` identifies the failed operation: connection/session setup, schema
+preflight, writer ownership, snapshot commit, or a Storage bucket/object request.
+`exception_type` preserves the original exception class; `http_status` and
+`sqlstate` contain the HTTP status and PostgreSQL error code when available,
+otherwise `none`. Exception messages, SQL, credentials, URLs, object keys and
+response bodies are excluded. The checker uses the same diagnostic fields.
+
+Only the first terminal failure per store is logged with these details; later
+cleanup retries retain the existing availability warning. An outbox deletion
+failure logs `roi_storage_retry` at warning level and is retried without making
+the store unhealthy. Normal writer-lock contention during deployment remains
+standby rather than a storage failure. Recovery still requires a fresh process
+after a terminal failure; diagnostics do not reconnect a lost writer session.
 
 ## 6. Verify after deployment
 
