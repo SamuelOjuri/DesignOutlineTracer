@@ -94,8 +94,14 @@ afterEach(() => {
 });
 
 describe("polygon penetration review", () => {
-  it.each([false, true])("zooms to the selected boundary and recenters after panning without editing it, legacy box: %s", async legacy => {
+  it.each([false, true])("zooms to the selected boundary, enables vertex editing and recenters without changing geometry, legacy box: %s", async legacy => {
     const { frame, user, history } = setup(false, legacy);
+    const edit = screen.getByRole("button", { name: "Edit vertices" });
+    const pan = screen.getByRole("button", { name: "Pan drawing" });
+    const select = screen.getByRole("button", { name: "Select penetrations" });
+    const handles = () => screen.queryAllByRole("button", { name: /^Move Penetration 1 vertex \d+$/ });
+    expect(edit).toHaveAttribute("aria-pressed", "false");
+    expect(handles()).toHaveLength(0);
     const viewport = screen.getByTestId("roi-viewport");
     Object.defineProperties(viewport, {
       clientLeft: { configurable: true, value: 2 }, clientTop: { configurable: true, value: 2 },
@@ -111,7 +117,16 @@ describe("polygon penetration review", () => {
     });
     const beforeHistory = history(), before = screen.getByTestId("workflow-footprint").textContent;
     viewport.scrollLeft = 120; viewport.scrollTop = 90;
+    await user.click(pan);
+    expect(pan).toHaveAttribute("aria-pressed", "true");
+    expect(edit).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Zoom to Penetration" }));
+    expect(select).toHaveAttribute("aria-pressed", "true");
+    expect(pan).toHaveAttribute("aria-pressed", "false");
+    expect(edit).toBeEnabled();
+    expect(edit).toHaveAttribute("aria-pressed", "true");
+    expect(handles()).toHaveLength(legacy ? 4 : original.length);
+    handles().forEach(handle => expect(handle).toBeEnabled());
     const displayScale = parseFloat(frame.style.width) / 800;
     expect(displayScale).toBeGreaterThan(1);
     expect(80 * displayScale).toBeLessThan(viewport.clientWidth);
@@ -119,8 +134,15 @@ describe("polygon penetration review", () => {
     expect(viewport.scrollLeft).toBeCloseTo(320 * displayScale - viewport.clientWidth / 2);
     expect(viewport.scrollTop).toBeCloseTo(16 + 195 * displayScale - viewport.clientHeight / 2);
     const focused = { width: frame.style.width, left: viewport.scrollLeft, top: viewport.scrollTop };
+    await user.click(edit);
+    expect(edit).toHaveAttribute("aria-pressed", "false");
+    expect(handles()).toHaveLength(0);
     viewport.scrollLeft = 0; viewport.scrollTop = 0;
     await user.click(screen.getByRole("button", { name: "Zoom to Penetration" }));
+    expect(edit).toBeEnabled();
+    expect(edit).toHaveAttribute("aria-pressed", "true");
+    expect(handles()).toHaveLength(legacy ? 4 : original.length);
+    handles().forEach(handle => expect(handle).toBeEnabled());
     expect(frame.style.width).toBe(focused.width);
     expect(viewport.scrollLeft).toBeCloseTo(focused.left);
     expect(viewport.scrollTop).toBeCloseTo(focused.top);

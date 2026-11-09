@@ -222,6 +222,18 @@ Hold Shift during a vertex drag to align a valid horizontal/vertical corner.
 Shift alignment takes priority over PDF snapping and does not merge vertices or
 collapse intermediate points. Invalid moves remain blocked.
 
+To add a missing outline corner, hover a blue edge in **Adjust** and use its
+small **+** handle (**Add vertex on this edge**). Click to split the edge at its
+midpoint, then drag the new red-ringed vertex to a PDF endpoint or intersection;
+you can also drag directly from **+**. The insertion and first placement share one
+Undo step. Automatic merging is suppressed during that placement, keeping close
+corners distinct while PDF snapping remains available. Only the hovered edge
+shows a handle, and only with sufficient space: zoom in to edit short edges.
+Existing vertices take priority. A straight edge split preserves drainage marks
+and accepted opening/outlet reviews; a changed boundary retains the usual review
+requirements. Placement cannot cross another roof or change a cutout/opening.
+Esc cancels a live drag; a vertex already added by clicking remains undoable.
+
 **Straighten** is separate: click or tap a near-horizontal or near-vertical side
 to align it, including its intermediate vertices. The side is placed halfway
 between its endpoints on the aligned axis. It keeps the vertices and does not

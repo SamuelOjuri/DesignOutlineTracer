@@ -6,6 +6,7 @@ import { acceptedRoofRegions } from "./penetrationAssociation";
 import { penetrationOpenings } from "./penetrationOpenings";
 import { boxToSource } from "./roiCoordinates";
 import { DEFAULT_OUTLET_DIAMETER_M } from "./outletDefaults";
+import { drawingScopeGeometry } from "./scopeGeometry";
 
 const polygon = (points: Point[]): Polygon => [points.map(({ x, y }) => [x, y])];
 const EPSILON = 1e-6;
@@ -41,8 +42,12 @@ export function outletScopes(page: PageSession): OutletScope[] {
 
 /** Synchronous content fingerprint for stale-result checks (not a security credential). */
 export function outletScopeSignature(page: PageSession): string {
+  // A new collinear editing handle leaves the effective scope and pending outlet
+  // results unchanged. Normalize before clipping, including derived penetrations,
+  // so interpolation round-off cannot leak into the scope fingerprint.
+  const scopePage = { ...page, drawing: drawingScopeGeometry(page.drawing) };
   const content = JSON.stringify([page.source.source_image_hash, page.roi_revision, page.geometry_revision,
-    page.outlet_scope_revision ?? 0, outletScopes(page)]);
+    page.outlet_scope_revision ?? 0, outletScopes(scopePage)]);
   let first = 2166136261, second = 5381;
   for (let index = 0; index < content.length; index++) {
     first = Math.imul(first ^ content.charCodeAt(index), 16777619);

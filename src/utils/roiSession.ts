@@ -8,6 +8,7 @@ import { cloneOutlineDrawing, prepareOutlineApplication } from "./outlineSession
 import { outletAssociation, outletScopeSignature, sameOutletSymbol } from "./outletScope";
 import { DEFAULT_OUTLET_DIAMETER_M } from "./outletDefaults";
 import { footprintBox, penetrationBoundary, transformFootprint, validPenetrationRing } from "./penetrationGeometry";
+import { sameDrawingScope } from "./scopeGeometry";
 
 export const initialRoiState: RoiSessionState = { active_page_id: null, pages: {} };
 
@@ -280,7 +281,7 @@ export function roiSessionReducer(state: RoiSessionState, action: RoiSessionActi
     if ([...action.drawing.outlines, ...action.drawing.holes, ...action.drawing.outlets].some((record) => record.page_id !== pageId)) {
       throw new Error("Drawing belongs to another page");
     }
-    const changed = JSON.stringify([page.drawing.outlines, page.drawing.holes]) !== JSON.stringify([action.drawing.outlines, action.drawing.holes]);
+    const changed = !sameDrawingScope(page.drawing, action.drawing);
     const next = { ...page, drawing: cloneDrawing(action.drawing), revision: page.revision + 1,
       geometry_revision: page.geometry_revision + (changed ? 1 : 0) };
     return storePage(state, changed ? invalidateChildren(next) : next);

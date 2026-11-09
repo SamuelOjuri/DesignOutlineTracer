@@ -351,7 +351,11 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
           </Tooltip>)}
           <output className="text-sm tabular-nums w-14">{Math.round(scale * 100)}%</output>
           {kind === "penetration" && selectedAnnotation && <Button variant="outline" size="sm"
-            disabled={adding} onClick={handleZoomToPenetration}>Zoom to Penetration</Button>}
+            disabled={adding} onClick={() => {
+              setPanning(false);
+              if (onEditFootprint) setEditVertices(true);
+              handleZoomToPenetration();
+            }}>Zoom to Penetration</Button>}
           {kind === "penetration" && <>
             <label className="text-sm flex items-center gap-2">Opening shape
               <select aria-label="Opening shape" value={drawingShape} className="h-10 rounded-md border border-input bg-background px-2"

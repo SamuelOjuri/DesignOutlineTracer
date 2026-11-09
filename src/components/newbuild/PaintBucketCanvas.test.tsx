@@ -76,7 +76,11 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], 
     const [currentOutlines, setOutlines] = useState(outlines);
     const [currentHoles, setHoles] = useState(holes);
     return <PaintBucketCanvas pdfCanvas={source} roofOutlines={currentOutlines} interiorHoles={currentHoles} vectorSegments={vectorSegments}
-      onOutlinesExtracted={(next, index) => { outlinesChanged(next, index); setOutlines(next); }}
+      onOutlinesExtracted={(next, index, edgeRemap) => {
+        if (edgeRemap) outlinesChanged(next, index, edgeRemap);
+        else outlinesChanged(next, index);
+        setOutlines(next);
+      }}
       onHolesExtracted={next => { holesChanged(next); setHoles(next); }} />;
   }
   render(<Editor />);
@@ -84,10 +88,10 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], 
   fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
   const canvas = screen.getByTestId("paint-interaction-canvas") as HTMLCanvasElement;
   const event = (type: "pointerDown" | "pointerMove" | "pointerUp", x: number, y: number,
-    modifiers: boolean | Pick<PointerEventInit, "shiftKey" | "altKey"> = false) => {
+    modifiers: boolean | Pick<PointerEventInit, "shiftKey" | "altKey"> = false, target: Element = canvas) => {
     const bounds = screen.getByTestId("paint-source-canvas").getBoundingClientRect();
     const scale = parseFloat(canvas.style.width) / width;
-    fireEvent[type](canvas, { pointerId: 7, button: 0, clientX: bounds.left + x * scale, clientY: bounds.top + y * scale,
+    fireEvent[type](target, { pointerId: 7, button: 0, clientX: bounds.left + x * scale, clientY: bounds.top + y * scale,
       ...(typeof modifiers === "boolean" ? { shiftKey: modifiers } : modifiers) });
   };
   return { canvas, event, context, outlinesChanged, holesChanged };
@@ -401,6 +405,108 @@ it("keeps adjacent outline merges ahead of PDF snapping and lets Alt move freely
   expect(outlinesChanged).toHaveBeenLastCalledWith([
     roof.map((point, index) => index === 2 ? { x: 201, y: 42 } : point), otherRoof,
   ], 0);
+});
+
+it("inserts a precise midpoint, protects its first PDF placement from merging and undoes both together", async () => {
+  const target = { x: 198.5, y: 41.5 };
+  const vectors: VectorSegment[] = [{ start: target, end: { x: 185, y: 41.5 } }];
+  const { canvas, event, outlinesChanged, holesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({ left: -80, top: -40 } as DOMRect);
+  event("pointerMove", 120, 40);
+  const insert = screen.getByRole("button", { name: "Add vertex on this edge" });
+  expect(insert).toBe(screen.getByTestId("outline-insert-vertex"));
+  fireEvent.click(insert); // Keyboard activation follows the same insertion path.
+  const inserted = [roof[0], { x: 120, y: 40 }, ...roof.slice(1)];
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([inserted, otherRoof], 0, [[0, 1], [2], [3], [4], [5]]);
+  expect(holesChanged).not.toHaveBeenCalled();
+  event("pointerDown", 120, 40);
+  event("pointerMove", 120, 20, { altKey: true });
+  fireEvent.keyDown(window, { key: "Escape" });
+  event("pointerUp", 120, 20, { altKey: true });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector('[data-accepted-outline="0"]'))
+    .toHaveAttribute("points", inserted.map(point => `${point.x},${point.y}`).join(" "));
+  const scale = parseFloat(canvas.style.width) / 400;
+  expect(Math.hypot(target.x - 200, target.y - 40) * scale).toBeLessThan(8);
+  event("pointerDown", 120, 40);
+  event("pointerMove", 198, 42);
+  expect(screen.getByTestId("adjust-pdf-snap")).toHaveAttribute("data-snap", "endpoint");
+  expect(screen.queryByTestId("outline-merge-target")).not.toBeInTheDocument();
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  event("pointerUp", 198, 42);
+  const placed = [roof[0], target, ...roof.slice(1)];
+  expect(outlinesChanged).toHaveBeenCalledTimes(2);
+  expect(outlinesChanged.mock.lastCall![0]).toEqual([placed, otherRoof]);
+  expect(outlinesChanged.mock.lastCall![0][0]).toHaveLength(roof.length + 1);
+  expect(outlinesChanged.mock.lastCall![2]).toEqual([[], [], [2], [3], [4], [5]]);
+  expect(holesChanged).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("keeps crowded edge controls hidden until zoom provides room and gives existing vertices priority", async () => {
+  const shortEdge = [{ x: 40, y: 40 }, { x: 60, y: 40 }, { x: 200, y: 40 }, { x: 200, y: 260 }, { x: 40, y: 260 }];
+  const { event, outlinesChanged } = await adjustmentEditor([shortEdge], []);
+  for (let count = 0; count < 12; count++) fireEvent.click(screen.getByTitle("Zoom out"));
+  event("pointerMove", 50, 40);
+  expect(screen.queryByTestId("outline-insert-vertex")).not.toBeInTheDocument();
+  for (let count = 0; count < 20; count++) fireEvent.click(screen.getByTitle("Zoom in"));
+  event("pointerMove", 50, 40);
+  expect(screen.getByRole("button", { name: "Add vertex on this edge" })).toBeVisible();
+  event("pointerMove", 40, 40);
+  expect(screen.queryByTestId("outline-insert-vertex")).not.toBeInTheDocument();
+  expect(outlinesChanged).not.toHaveBeenCalled();
+});
+
+it("keeps split drainage sides mapped once when the first placement slides along the same edge", async () => {
+  const { event, outlinesChanged } = await adjustmentEditor();
+  event("pointerMove", 120, 40);
+  fireEvent.click(screen.getByRole("button", { name: "Add vertex on this edge" }));
+  expect(outlinesChanged.mock.lastCall![2]).toEqual([[0, 1], [2], [3], [4], [5]]);
+  event("pointerDown", 120, 40);
+  event("pointerUp", 140, 40, { altKey: true });
+  expect(outlinesChanged.mock.lastCall![0][0]).toEqual([roof[0], { x: 140, y: 40 }, ...roof.slice(1)]);
+  expect(outlinesChanged.mock.lastCall![2]).toEqual([[0], [1], [2], [3], [4], [5]]);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("cancels a direct insertion drag and rejects placement on another roof without adding undo", async () => {
+  const { event, outlinesChanged } = await adjustmentEditor();
+  event("pointerMove", 120, 40);
+  event("pointerDown", 120, 40, false, screen.getByRole("button", { name: "Add vertex on this edge" }));
+  event("pointerMove", 120, 20);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  fireEvent.keyDown(window, { key: "Escape" });
+  event("pointerUp", 120, 20);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  event("pointerMove", 120, 40);
+  event("pointerDown", 120, 40, false, screen.getByRole("button", { name: "Add vertex on this edge" }));
+  event("pointerMove", 280, 100, { altKey: true });
+  expect(screen.getByRole("status")).toHaveTextContent(/blocked/i);
+  event("pointerUp", 280, 100, { altKey: true });
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("commits a direct insertion drag on release as one reversible placement", async () => {
+  const { event, outlinesChanged } = await adjustmentEditor();
+  event("pointerMove", 120, 40);
+  event("pointerDown", 120, 40, false, screen.getByRole("button", { name: "Add vertex on this edge" }));
+  event("pointerMove", 120, 20, { altKey: true });
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  event("pointerUp", 120, 20, { altKey: true });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged.mock.lastCall![0]).toEqual([[roof[0], { x: 120, y: 20 }, ...roof.slice(1)], otherRoof]);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
 });
 
 it("leaves clicks and Adjust movement under two display pixels unchanged beside a PDF target", async () => {

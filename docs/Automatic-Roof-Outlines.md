@@ -41,6 +41,28 @@ PDF snapping; otherwise an adjacent outline vertex merge takes priority. Pages
 without extracted PDF vectors retain manual dragging. Geometry checks still block
 crossings, touching roofs and page overshoot.
 
+Hover an edge in **Adjust** to reveal **+ / Add vertex on this edge** at its
+midpoint. Click to insert a vertex on the unchanged edge, then drag the new red
+ring to place the missing corner; dragging directly from **+** also works.
+Insertion and the first placement form one Undo action. The new vertex ignores
+adjacent-vertex merging during placement while retaining PDF snapping and Alt
+free movement. Shift still applies the existing horizontal/vertical corner rule.
+Only edges at least 40 screen pixels long show the handle, and the midpoint must
+be at least 18 screen pixels from every existing vertex. Zooming reveals shorter
+edges without changing their geometry. Existing vertices always take priority.
+Crossings, page overshoot, touching roofs and changes to cutout/opening coverage
+are blocked. Esc cancels the current drag; a point already inserted by clicking
+stays available for placement or Undo. Changing editing tools finishes the group.
+
+A collinear split maps drainage on the original side to both new segments;
+moving the point away from that side clears its drainage markings while keeping
+unaffected sides mapped. Scope comparisons and outlet fingerprints ignore only
+redundant forward collinear samples within a tiny source-pixel arithmetic
+tolerance. Stored vertices, component identities and ownership remain intact.
+Adding or undoing a handle on an unchanged edge preserves geometry revisions,
+accepted penetration/outlet decisions and pending detection requests. Real bends,
+narrow returns and changed ownership retain the existing invalidation behavior.
+
 ### Several roof areas on one page
 
 Every accepted roof area is listed in **Select roof area to outline**, so they can

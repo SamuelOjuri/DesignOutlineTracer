@@ -295,6 +295,68 @@ async function applyGeneratedRedrawOutline(page: Page, plan: RedrawPlan) {
   await page.getByRole("button", { name: "Use outline", exact: true }).click();
 }
 
+test("inserts an Adjust edge vertex and snaps it to a native PDF corner with one Undo after zoom and scroll", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf();
+  const requests: OutlineRequest[] = [];
+  await routeRedrawOutline(page, plan, requests);
+  await applyGeneratedRedrawOutline(page, plan);
+  const endpoint = requests[0].vector_segments.flatMap(segment => [segment.start, segment.end])
+    .find(point => Math.hypot(point.x - plan.corner.x, point.y - plan.corner.y) < 0.0001)!;
+  expect(endpoint).toBeDefined();
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  const zoom = page.getByRole("button", { name: "Zoom in", exact: true });
+  for (let count = 0; count < 10 && await zoom.isEnabled(); count++) await zoom.click();
+  const source = page.getByTestId("paint-source-canvas");
+  const scrolled = await source.evaluate(element => {
+    const container = element.parentElement!.parentElement!;
+    container.scrollLeft = container.scrollWidth;
+    container.scrollTop = container.scrollHeight;
+    return { x: container.scrollLeft, y: container.scrollTop };
+  });
+  expect(scrolled.x).toBeGreaterThan(0);
+  expect(scrolled.y).toBeGreaterThan(0);
+  const screenPoint = async ({ x, y }: { x: number; y: number }) => {
+    const box = (await source.boundingBox())!;
+    return { x: box.x + x / 600 * box.width, y: box.y + y / 400 * box.height };
+  };
+  const accepted = page.getByTestId("accepted-outline-overlay").locator("[data-accepted-outline]");
+  const before = (await accepted.getAttribute("points"))!;
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  const midpoint = { x: (plan.original[1].x + plan.original[2].x) / 2,
+    y: (plan.original[1].y + plan.original[2].y) / 2 };
+  const hover = await screenPoint(midpoint);
+  await page.mouse.move(hover.x, hover.y);
+  const insert = page.getByRole("button", { name: "Add vertex on this edge", exact: true });
+  await expect(insert).toBeVisible();
+  await expect(page.getByTestId("outline-insert-vertex")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("outline-insert-handle.png") });
+  await insert.click();
+  const inserted = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
+  expect(inserted).toHaveLength(plan.original.length + 1);
+  expect(inserted.some(([x, y]) => Math.hypot(x - midpoint.x, y - midpoint.y) < 1e-9)).toBe(true);
+  await expect(undo).toBeEnabled();
+  const start = await screenPoint(midpoint);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  const target = await screenPoint(endpoint);
+  await page.mouse.move(target.x + 2, target.y - 1, { steps: 5 });
+  const snap = page.getByTestId("adjust-pdf-snap");
+  await expect(snap).toHaveAttribute("data-snap", "endpoint");
+  await expect(snap).toHaveAttribute("cx", String(endpoint.x));
+  await expect(snap).toHaveAttribute("cy", String(endpoint.y));
+  const previewPath = testInfo.outputPath("inserted-outline-vertex-pdf-placement.png");
+  await page.screenshot({ path: previewPath });
+  await testInfo.attach("inserted-outline-vertex-pdf-placement", { path: previewPath, contentType: "image/png" });
+  await page.mouse.up();
+  const placed = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
+  expect(placed).toHaveLength(plan.original.length + 1);
+  expect(placed).toContainEqual([endpoint.x, endpoint.y]);
+  await undo.click();
+  await expect(accepted).toHaveAttribute("points", before);
+  await expect(undo).toBeDisabled();
+  expect(requests).toHaveLength(1); // Insertion, placement and Undo use the existing drawing and native vectors.
+});
+
 test("snaps an Adjust vertex to a native PDF endpoint after zoom and scroll, with Alt bypass and one Undo", async ({ page }, testInfo) => {
   const plan = await createRedrawPlanPdf();
   const requests: OutlineRequest[] = [];

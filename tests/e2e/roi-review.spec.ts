@@ -240,6 +240,8 @@ test("Penetrations: pinned review actions retain list position and advance throu
   await add.click();
   await item(12).click();
   await page.getByRole("button", { name: "Zoom to Penetration", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit vertices", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Move Penetration 12 vertex 1", exact: true })).toBeVisible();
   const distantView = await viewPosition();
   await advance.click();
   await expect(item(12)).toContainText("accepted");
@@ -247,7 +249,7 @@ test("Penetrations: pinned review actions retain list position and advance throu
   await expect(footer).toContainText("Penetration 4");
   await expect(item(4)).toContainText("suggested");
   await expect.poll(viewPosition).not.toEqual(distantView);
-  const nextBoundary = page.getByTestId("annotation-box-child-2-4");
+  const nextBoundary = page.getByTestId("penetration-shape-child-2-4");
   await expect.poll(async () => {
     const boundary = (await nextBoundary.boundingBox())!, visible = (await viewport.boundingBox())!;
     return boundary.x >= visible.x && boundary.y >= visible.y

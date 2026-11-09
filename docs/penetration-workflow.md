@@ -26,6 +26,9 @@ Existing box-only annotations still resolve to rectangular openings.
   pixels, including on nonsquare pages. Hold Shift to snap to 15° increments.
   With the handle focused, arrow keys rotate by 1° (Shift: 15°).
 - **Edit vertices** exposes square corners and round midpoint insertion handles.
+  **Zoom to Penetration** also activates vertex editing and exits pan mode so
+  the selected opening's corners are ready to edit. Use **Edit vertices** to turn
+  it off again; zooming changes no geometry or review decisions.
   Click a square corner or focus it with Tab to select it: the active corner has
   a thin red outline with a transparent centre, keeping the PDF corner visible
   for both mouse and keyboard input. Drag or use arrow keys to move it; Delete or
