@@ -295,6 +295,81 @@ async function applyGeneratedRedrawOutline(page: Page, plan: RedrawPlan) {
   await page.getByRole("button", { name: "Use outline", exact: true }).click();
 }
 
+test("snaps an Adjust vertex to a native PDF endpoint after zoom and scroll, with Alt bypass and one Undo", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf();
+  const requests: OutlineRequest[] = [];
+  await routeRedrawOutline(page, plan, requests);
+  await applyGeneratedRedrawOutline(page, plan);
+  expect(requests).toHaveLength(1);
+  const endpoint = requests[0].vector_segments.flatMap(segment => [segment.start, segment.end])
+    .find(point => Math.hypot(point.x - plan.corner.x, point.y - plan.corner.y) < 0.0001)!;
+  expect(endpoint).toBeDefined();
+  expect(endpoint.x).not.toBe(Math.round(endpoint.x));
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  const zoom = page.getByRole("button", { name: "Zoom in", exact: true });
+  for (let count = 0; count < 10 && await zoom.isEnabled(); count++) await zoom.click();
+  const source = page.getByTestId("paint-source-canvas");
+  const scroll = await source.evaluate(element => {
+    const container = element.parentElement!.parentElement!;
+    container.scrollLeft = container.scrollWidth;
+    container.scrollTop = container.scrollHeight;
+    return { x: container.scrollLeft, y: container.scrollTop };
+  });
+  expect(scroll.x).toBeGreaterThan(0);
+  expect(scroll.y).toBeGreaterThan(0);
+  const screenPoint = async ({ x, y }: { x: number; y: number }) => {
+    const box = (await source.boundingBox())!;
+    return { x: box.x + x / 600 * box.width, y: box.y + y / 400 * box.height };
+  };
+  const accepted = page.getByTestId("accepted-outline-overlay").locator("[data-accepted-outline]");
+  const before = (await accepted.getAttribute("points"))!;
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  const grab = await screenPoint(plan.original[2]);
+  await page.mouse.click(grab.x + 2, grab.y - 1);
+  await expect(accepted).toHaveAttribute("points", before);
+  await expect(undo).toBeDisabled();
+  await expect(page.getByTestId("adjust-pdf-snap")).toHaveCount(0);
+
+  // Grab slightly off-centre, then release near (rather than precisely on) the drawn corner.
+  await page.mouse.move(grab.x + 2, grab.y - 1);
+  await page.mouse.down();
+  const target = await screenPoint(endpoint);
+  await page.mouse.move(target.x + 3, target.y - 2, { steps: 5 });
+  const snap = page.getByTestId("adjust-pdf-snap");
+  await expect(snap).toHaveAttribute("data-snap", "endpoint");
+  await expect(snap).toHaveAttribute("cx", String(endpoint.x));
+  await expect(snap).toHaveAttribute("cy", String(endpoint.y));
+  await expect(page.getByTestId("adjust-pdf-vector")).toHaveCount(2);
+  await expect(undo).toBeDisabled();
+  const previewPath = testInfo.outputPath("adjust-native-pdf-endpoint-preview.png");
+  await page.screenshot({ path: previewPath });
+  await testInfo.attach("adjust-native-pdf-endpoint-preview", { path: previewPath, contentType: "image/png" });
+  await page.mouse.up();
+  await expect(snap).toHaveCount(0);
+  await expect(undo).toBeEnabled();
+  const snapped = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
+  expect(snapped).toContainEqual([endpoint.x, endpoint.y]);
+  await undo.click();
+  await expect(accepted).toHaveAttribute("points", before);
+  await expect(undo).toBeDisabled();
+
+  const freeGrab = await screenPoint(plan.original[2]);
+  await page.mouse.move(freeGrab.x, freeGrab.y);
+  await page.mouse.down();
+  await page.keyboard.down("Alt");
+  const free = await screenPoint(endpoint);
+  await page.mouse.move(free.x + 3, free.y - 2, { steps: 5 });
+  await expect(snap).toHaveCount(0);
+  await page.mouse.up();
+  await page.keyboard.up("Alt");
+  await expect(undo).toBeEnabled();
+  const unsnapped = (await accepted.getAttribute("points"))!.split(" ").map(pair => pair.split(",").map(Number));
+  expect(unsnapped).not.toContainEqual([endpoint.x, endpoint.y]);
+  await undo.click();
+  await expect(accepted).toHaveAttribute("points", before);
+  expect(requests).toHaveLength(1); // Snapping and Undo use native PDF vectors without another service call.
+});
+
 for (const existingEndVertex of [false, true]) {
 test(existingEndVertex
   ? "finishes a redraw at an existing outline vertex with one button and restores it with one undo"

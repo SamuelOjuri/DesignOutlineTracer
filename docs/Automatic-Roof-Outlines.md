@@ -31,6 +31,16 @@ separate from the editable drawing until **Use outline** is selected.
    the base scope invalidates dependent opening decisions; it does not silently
    restore stale accepted openings.
 
+In **Adjust**, drag a vertex near a PDF endpoint or intersection to snap it exactly
+to that point. The snap radius stays at 10 screen pixels as you zoom; nearby PDF
+lines provide a fallback target. Teal linework, a marker and a **PDF endpoint**,
+**PDF intersection** or **PDF line** label identify the active snap. Release applies
+the move as one Undo action. Hold Alt for free movement without PDF snapping or
+vertex merging. Shift retains 90-degree corner alignment and takes priority over
+PDF snapping; otherwise an adjacent outline vertex merge takes priority. Pages
+without extracted PDF vectors retain manual dragging. Geometry checks still block
+crossings, touching roofs and page overshoot.
+
 ### Several roof areas on one page
 
 Every accepted roof area is listed in **Select roof area to outline**, so they can

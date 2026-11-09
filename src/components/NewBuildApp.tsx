@@ -61,6 +61,7 @@ export const NewBuildApp = () => {
   const outletDetection = useOutletDetection(session, { enabled: roiClient.enabled && currentStep === "outlets" });
   const [selectedOutletAnnotationId, setSelectedOutletAnnotationId] = useState<string | null>(null);
   const [selectedPenetrationId, setSelectedPenetrationId] = useState<string | null>(null);
+  const [penetrationFocus, setPenetrationFocus] = useState<{ id: string; sequence: number } | null>(null);
   const [addingPenetration, setAddingPenetration] = useState(false);
   const penetrationAnnotations = activePage?.annotations.filter((annotation) => annotation.kind === "penetration") ?? [];
   const unconfirmedOpenings = penetrationAnnotations.filter(annotation => annotation.review_status === "accepted"
@@ -149,6 +150,7 @@ export const NewBuildApp = () => {
     setSelectedRoiId(null);
     setAddingRoi(false);
     setSelectedPenetrationId(null);
+    setPenetrationFocus(null);
     setAddingPenetration(false);
   };
 
@@ -360,6 +362,7 @@ export const NewBuildApp = () => {
           pdfCanvas={pdfCanvas} annotations={penetrationAnnotations} contextAnnotations={acceptedRegions} drawing={activePage.drawing} page={activePage}
           contextLabels={regionLabels}
           selectedId={selectedPenetrationId} adding={addingPenetration} onAddingChange={setAddingPenetration}
+          focusRequest={penetrationFocus}
           onSelect={setSelectedPenetrationId} onEdit={editRoi}
           onUndoReview={() => dispatch({ type: "undo", page_id: activePage.source.page_id })}
           onEditFootprint={(id, footprint) => dispatch({ type: "review", page_id: activePage.source.page_id, id, patch: { footprint } })}
@@ -438,7 +441,11 @@ export const NewBuildApp = () => {
   const renderSidebar = () => {
     if (currentStep === "penetrations" && activePage) {
       return <RoiReviewSidebar kind="penetration" page={activePage} selectedId={selectedPenetrationId} adding={addingPenetration}
-        onSelect={setSelectedPenetrationId} onAddingChange={setAddingPenetration} dispatch={dispatch} detection={penetrationDetection} />;
+        onSelect={setSelectedPenetrationId} onSelectNext={id => {
+          setSelectedPenetrationId(id);
+          setAddingPenetration(false);
+          setPenetrationFocus(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 }));
+        }} onAddingChange={setAddingPenetration} dispatch={dispatch} detection={penetrationDetection} />;
     }
     if (currentStep === "roi" && activePage) {
       return <RoiReviewSidebar page={activePage} selectedId={selectedRoiId} adding={addingRoi}
@@ -551,9 +558,10 @@ export const NewBuildApp = () => {
             hasResponsiveCanvas ? "w-full md:w-80 max-h-[45vh] md:max-h-none" : currentStep === "details" || currentStep === "upload" ? "w-96" : "w-80"
           } shrink-0 border-r border-border bg-card p-4 ${hasResponsiveCanvas ? "flex flex-col overflow-hidden" : "overflow-y-auto"}`}
         >
-          <div className={hasResponsiveCanvas ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
+          <div className={currentStep === "penetrations" ? "flex flex-col flex-1 min-h-0 overflow-hidden"
+            : hasResponsiveCanvas ? "flex-1 min-h-0 overflow-y-auto" : undefined}>{renderSidebar()}</div>
 
-          <div className="mt-6 flex gap-2 shrink-0">
+          <div className={`${currentStep === "penetrations" ? "mt-3" : "mt-6"} flex gap-2 shrink-0`}>
             <Button
               variant="outline"
               onClick={handlePrev}

@@ -83,10 +83,12 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], 
   await waitFor(() => expect(screen.getByRole("button", { name: "Adjust" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
   const canvas = screen.getByTestId("paint-interaction-canvas") as HTMLCanvasElement;
-  const event = (type: "pointerDown" | "pointerMove" | "pointerUp", x: number, y: number, shiftKey = false) => {
+  const event = (type: "pointerDown" | "pointerMove" | "pointerUp", x: number, y: number,
+    modifiers: boolean | Pick<PointerEventInit, "shiftKey" | "altKey"> = false) => {
     const bounds = screen.getByTestId("paint-source-canvas").getBoundingClientRect();
     const scale = parseFloat(canvas.style.width) / width;
-    fireEvent[type](canvas, { pointerId: 7, button: 0, clientX: bounds.left + x * scale, clientY: bounds.top + y * scale, shiftKey });
+    fireEvent[type](canvas, { pointerId: 7, button: 0, clientX: bounds.left + x * scale, clientY: bounds.top + y * scale,
+      ...(typeof modifiers === "boolean" ? { shiftKey: modifiers } : modifiers) });
   };
   return { canvas, event, context, outlinesChanged, holesChanged };
 }
@@ -343,6 +345,93 @@ it("highlights a merge at zoom, commits only on release and restores points and 
   expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
 });
 
+it.each(["endpoint", "intersection"] as const)("snaps an Adjust vertex to an exact PDF %s at zoom while preserving its grab offset", async kind => {
+  const target = { x: 218.25, y: 147.75 };
+  const vectors: VectorSegment[] = kind === "endpoint"
+    ? [{ start: target, end: { x: 188.25, y: 147.75 } }]
+    : [{ start: { x: 188.25, y: 147.75 }, end: { x: 248.25, y: 147.75 } },
+      { start: { x: 218.25, y: 117.75 }, end: { x: 218.25, y: 177.75 } }];
+  const { canvas, event, outlinesChanged, holesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  vi.spyOn(HTMLCanvasElement.prototype, "getBoundingClientRect").mockReturnValue({ left: -80, top: -40 } as DOMRect);
+  const scale = parseFloat(canvas.style.width) / 400;
+  // Grab three source pixels to the right of the vertex, rather than at its centre.
+  event("pointerDown", 205, 160);
+  if (kind === "endpoint") {
+    event("pointerMove", 227, 148);
+    expect(Math.hypot(224 - target.x, 148 - target.y) * scale).toBeGreaterThan(10);
+    expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
+  }
+  event("pointerMove", 224, 149);
+  expect(Math.hypot(224 - target.x, 149 - target.y) * scale).toBeGreaterThan(10);
+  const marker = screen.getByTestId("adjust-pdf-snap");
+  expect(marker).toHaveAttribute("data-snap", kind);
+  expect(screen.getByRole("status")).toHaveTextContent(`PDF ${kind}`);
+  const expected = roof.map((point, index) => index === 2 ? target : point);
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector('[data-accepted-outline="0"]'))
+    .toHaveAttribute("points", expected.map(point => `${point.x},${point.y}`).join(" "));
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  event("pointerUp", 224, 149);
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([expected, otherRoof], 0);
+  expect(holesChanged).not.toHaveBeenCalled();
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("keeps adjacent outline merges ahead of PDF snapping and lets Alt move freely past both targets", async () => {
+  const vectors: VectorSegment[] = [{ start: { x: 201.5, y: 42.5 }, end: { x: 230, y: 42.5 } }];
+  const { event, outlinesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  event("pointerDown", 202, 160);
+  event("pointerMove", 201, 42);
+  expect(screen.getByRole("status")).toHaveTextContent("Merge vertex");
+  expect(screen.getByTestId("outline-merge-target")).toBeInTheDocument();
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
+  event("pointerUp", 201, 42);
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof.filter((_, index) => index !== 2), otherRoof], 0);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  event("pointerDown", 202, 160);
+  event("pointerMove", 201, 42, { altKey: true });
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
+  expect(screen.queryByTestId("outline-merge-target")).not.toBeInTheDocument();
+  event("pointerUp", 201, 42, { altKey: true });
+  expect(outlinesChanged).toHaveBeenLastCalledWith([
+    roof.map((point, index) => index === 2 ? { x: 201, y: 42 } : point), otherRoof,
+  ], 0);
+});
+
+it("leaves clicks and Adjust movement under two display pixels unchanged beside a PDF target", async () => {
+  const vectors: VectorSegment[] = [{ start: { x: 205.25, y: 160.25 }, end: { x: 230, y: 160.25 } }];
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([roof], [cutout], vectors);
+  fireEvent.click(screen.getByTitle("Zoom out"));
+  expect(parseFloat(canvas.style.width) / 400).toBeLessThan(2);
+  event("pointerDown", 202, 160);
+  event("pointerMove", 203, 160);
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector('[data-accepted-outline="0"]'))
+    .toHaveAttribute("points", roof.map(point => `${point.x},${point.y}`).join(" "));
+  event("pointerUp", 203, 160);
+  event("pointerDown", 202, 160);
+  event("pointerUp", 202, 160);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("rejects a PDF snap that would overlap another roof without displaying a valid snap or committing", async () => {
+  const vectors: VectorSegment[] = [{ start: { x: 280.25, y: 100.25 }, end: { x: 310, y: 100.25 } }];
+  const { event, outlinesChanged } = await adjustmentEditor([roof, otherRoof], [cutout], vectors);
+  event("pointerDown", 202, 160);
+  event("pointerMove", 277, 100);
+  expect(screen.getByRole("status")).toHaveTextContent("Edit blocked:");
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
+  event("pointerUp", 277, 100);
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
 it("keeps accepted geometry aligned at zoom, shows handles only for Adjust and excludes both kinds of openings", async () => {
   const source = document.createElement("canvas");
   source.width = 400; source.height = 300;
@@ -427,14 +516,23 @@ it("rejects crossed outlines, merges with other roofs, collapsed Shift alignment
 it("still aligns valid corners with Shift and moves edges without losing cutouts", async () => {
   const rectangle = roof.filter((_, index) => index !== 2);
   const skewed = rectangle.map((point, index) => index === 1 ? { x: 202, y: 42 } : point);
-  const { event, outlinesChanged, holesChanged } = await adjustmentEditor([skewed]);
+  const vectors: VectorSegment[] = [{ start: { x: 201.25, y: 40.25 }, end: { x: 230, y: 40.25 } },
+    { start: { x: 221, y: 140 }, end: { x: 221, y: 180 } }];
+  const { event, outlinesChanged, holesChanged } = await adjustmentEditor([skewed], [cutout], vectors);
   event("pointerDown", 202, 42);
+  event("pointerMove", 201, 40, true);
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
   event("pointerUp", 201, 40, true);
   expect(outlinesChanged).toHaveBeenLastCalledWith([rectangle], 0);
   event("pointerDown", 200, 160);
+  event("pointerMove", 220, 160);
+  expect(screen.queryByTestId("adjust-pdf-snap")).not.toBeInTheDocument();
   event("pointerUp", 220, 160);
   expect(outlinesChanged.mock.lastCall![0][0].filter((point: Point) => point.x === 220)).toHaveLength(2);
   expect(holesChanged).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([rectangle], undefined);
+  expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
 });
 
 it.each(["outside", "partial"])("shrinks the scope with an %s cutout, previews without saving and undoes outlines and cutouts together", async mode => {

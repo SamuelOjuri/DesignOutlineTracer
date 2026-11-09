@@ -8,7 +8,7 @@ type Mode = "complete" | "no_detections" | "partial" | "offline" | "delayed";
 type Payload = DetectionRequest & { follow_up_of?: string; scopes?: PenetrationScope[];
   vector_segments?: unknown[]; accepted_rois: { id: string; revision: number; box_2d: Box2D }[] };
 
-async function mockRoi(page: Page, polygonMode = false) {
+async function mockRoi(page: Page, polygonMode = false, penetrationCount?: number) {
   const uploads: { context: PageContext; bytes: Buffer }[] = [];
   const requests: Payload[] = [];
   let mode: Mode = "complete";
@@ -39,7 +39,10 @@ async function mockRoi(page: Page, polygonMode = false) {
       source_image_hash: payload.source_image_hash, roi_revision: payload.roi_revision, geometry_revision: payload.geometry_revision };
     const childTask = payload.task === "penetration";
     const promptVersion = childTask ? "penetration-v2" : "roof-roi-v1";
-    const boxes: Box2D[] = childTask ? [[400, 180, 450, 220], [150, 700, 180, 740], [850, 500, 900, 550], [650, 350, 690, 380]]
+    const boxes: Box2D[] = childTask && penetrationCount ? Array.from({ length: penetrationCount }, (_, index): Box2D =>
+      index === penetrationCount - 1 ? [150, 700, 180, 740]
+        : [320 + Math.floor(index / 4) * 40, 120 + index % 4 * 65, 345 + Math.floor(index / 4) * 40, 145 + index % 4 * 65])
+      : childTask ? [[400, 180, 450, 220], [150, 700, 180, 740], [850, 500, 900, 550], [650, 350, 690, 380]]
       : [[300, 100, 800, 433.3333333333333], [100, 650, 250, 850]];
     const annotations = status === "no_detections" ? [] : (polygonMode && childTask ? boxes.slice(0, 2) : boxes).map((box, index) => ({
       id: `${childTask ? "child" : "roof"}-${sequence}-${index + 1}`, page_id: payload.page_id, kind: payload.task,
@@ -53,7 +56,8 @@ async function mockRoi(page: Page, polygonMode = false) {
         return { subtype: index === 0 ? "access_hatch" : "riser", footprint: ring, proposed_footprint: ring,
           footprint_source: "vector", outline_id: payload.scopes?.find(scope => scope.roi_id === payload.accepted_rois[index].id)?.outline_id };
       })() : {}),
-      box_2d: box, proposed_box_2d: box, roi_id: childTask ? (payload.accepted_rois[index === 1 ? 1 : 0] ?? payload.accepted_rois[0]).id : null,
+      box_2d: box, proposed_box_2d: box, roi_id: childTask
+        ? (payload.accepted_rois[(penetrationCount ? index === penetrationCount - 1 : index === 1) ? 1 : 0] ?? payload.accepted_rois[0]).id : null,
       origin: "gemini", review_status: "suggested", validity: "current",
       revision: 1, edits: [], warnings: [],
     }));
@@ -190,6 +194,91 @@ async function enterPenetrations(page: Page, withParents = true) {
   await expect(page.getByRole("heading", { name: "Penetrations", exact: true })).toBeVisible();
 }
 
+test("Penetrations: pinned review actions retain list position and advance through unreviewed openings", async ({ page, networkGuard }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = await mockRoi(page, false, 12);
+  await enterPenetrations(page);
+  await page.getByRole("button", { name: "Detect penetrations", exact: true }).click();
+  const list = page.getByRole("list", { name: "Penetrations", exact: true });
+  const item = (index: number) => list.getByRole("button", { name: new RegExp(`^Penetration ${index} `) });
+  await expect(list.getByRole("button")).toHaveCount(12);
+  const scroll = page.getByTestId("penetration-sidebar-scroll");
+  const footer = page.getByRole("region", { name: "Penetration review actions", exact: true });
+  const add = footer.getByRole("button", { name: "Add opening", exact: true });
+  const advance = footer.getByRole("button", { name: "Add opening & next", exact: true });
+  const viewport = page.getByTestId("roi-viewport");
+  const viewPosition = () => viewport.evaluate(element => ({ left: element.scrollLeft, top: element.scrollTop }));
+  const pinnedPosition = (await footer.boundingBox())!;
+  const assertVisibleActions = async () => {
+    await expect(footer).toBeInViewport();
+    for (const name of ["Reject", "Delete penetration"]) {
+      await expect(footer.getByRole("button", { name, exact: true })).toBeInViewport();
+    }
+    const bounds = (await footer.boundingBox())!;
+    const previous = (await page.getByRole("button", { name: "Previous", exact: true }).boundingBox())!;
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(previous.y);
+  };
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const listPosition = await scroll.evaluate(element => element.scrollTop);
+  expect(listPosition).toBeGreaterThan(0);
+  expect((await footer.boundingBox())!.y).toBeCloseTo(pinnedPosition.y, 0);
+  await assertVisibleActions();
+
+  // Ordinary acceptance leaves the current selection, list and drawing where the reviewer put them.
+  const beforeView = await viewPosition();
+  await add.click();
+  await expect(footer).toContainText("Penetration 1");
+  await expect(item(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(footer.getByRole("button", { name: "Opening added", exact: true })).toBeDisabled();
+  expect(await scroll.evaluate(element => element.scrollTop)).toBe(listPosition);
+  expect(await viewPosition()).toEqual(beforeView);
+  await expect(page.getByTestId("opening-mask-penetration:child-2-1:0")).toBeAttached();
+
+  await item(2).click();
+  await footer.getByRole("button", { name: "Reject", exact: true }).click();
+  await item(3).click();
+  await add.click();
+  await item(12).click();
+  await page.getByRole("button", { name: "Zoom to Penetration", exact: true }).click();
+  const distantView = await viewPosition();
+  await advance.click();
+  await expect(item(12)).toContainText("accepted");
+  await expect(item(4)).toHaveAttribute("aria-pressed", "true");
+  await expect(footer).toContainText("Penetration 4");
+  await expect(item(4)).toContainText("suggested");
+  await expect.poll(viewPosition).not.toEqual(distantView);
+  const nextBoundary = page.getByTestId("annotation-box-child-2-4");
+  await expect.poll(async () => {
+    const boundary = (await nextBoundary.boundingBox())!, visible = (await viewport.boundingBox())!;
+    return boundary.x >= visible.x && boundary.y >= visible.y
+      && boundary.x + boundary.width <= visible.x + visible.width
+      && boundary.y + boundary.height <= visible.y + visible.height;
+  }).toBe(true);
+  await assertVisibleActions();
+  await page.screenshot({ path: testInfo.outputPath("pinned-penetration-actions-desktop.png"), fullPage: true });
+
+  for (let index = 4; index <= 11; index++) {
+    await expect(item(index)).toHaveAttribute("aria-pressed", "true");
+    await advance.click();
+  }
+  await expect(item(11)).toHaveAttribute("aria-pressed", "true");
+  await expect(footer).toContainText("All penetrations reviewed.");
+  await expect(footer.getByRole("button", { name: "Opening added", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Undo review edit", exact: true }).click();
+  await expect(add).toBeEnabled();
+  await expect(item(11)).toContainText("suggested");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await assertVisibleActions();
+  await expect(add).toBeInViewport();
+  await expect(advance).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("pinned-penetration-actions-mobile.png"), fullPage: true });
+  expect(api.requests).toHaveLength(2);
+  expect(networkGuard.submissions).toEqual([]);
+});
+
 test("Penetrations: polygon detection, rotation, vertex editing and manual concave tracing", async ({ page, networkGuard }, testInfo) => {
   test.setTimeout(120_000);
   const api = await mockRoi(page, true);
@@ -208,9 +297,10 @@ test("Penetrations: polygon detection, rotation, vertex editing and manual conca
   // Use actual mouse and keyboard focus; locator.press would hide a broken click-to-focus path.
   await firstCorner.click();
   await expect(firstCorner).toBeFocused();
-  await expect(firstCorner).toHaveCSS("background-color", selectedColor);
-  await expect(firstCorner).toHaveCSS("border-color", "rgb(255, 255, 255)");
-  await expect(firstCorner).not.toHaveCSS("box-shadow", "none");
+  await expect(firstCorner).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(firstCorner).toHaveCSS("border-color", selectedColor);
+  await expect(firstCorner).toHaveCSS("border-width", "1px");
+  await expect(firstCorner).toHaveCSS("box-shadow", "none");
   await expect(firstCorner).toHaveCSS("z-index", "30");
   await expect(page.getByRole("button", { name: "Add Penetration 1 vertex after 1", exact: true })).toHaveCSS("z-index", "10");
   await expect(shape).toHaveAttribute("points", original);
@@ -219,7 +309,10 @@ test("Penetrations: polygon detection, rotation, vertex editing and manual conca
   await expect(firstCorner).toHaveCSS("background-color", "rgb(255, 255, 255)");
   await page.keyboard.press("Tab"); // Next square corner.
   await expect(secondCorner).toBeFocused();
-  await expect(secondCorner).toHaveCSS("background-color", selectedColor);
+  await expect(secondCorner).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(secondCorner).toHaveCSS("border-color", selectedColor);
+  await expect(secondCorner).toHaveCSS("border-width", "1px");
+  await expect(secondCorner).toHaveCSS("box-shadow", "none");
   await editVertices.click();
   await expect(firstCorner).toHaveCount(0);
   await page.getByRole("button", { name: "Add opening", exact: true }).click();
@@ -249,7 +342,10 @@ test("Penetrations: polygon detection, rotation, vertex editing and manual conca
   expect((await shape.getAttribute("points"))!.split(" ")).toHaveLength(5);
   await secondCorner.click();
   await expect(secondCorner).toBeFocused();
-  await expect(secondCorner).toHaveCSS("background-color", selectedColor);
+  await expect(secondCorner).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(secondCorner).toHaveCSS("border-color", selectedColor);
+  await expect(secondCorner).toHaveCSS("border-width", "1px");
+  await expect(secondCorner).toHaveCSS("box-shadow", "none");
   await page.keyboard.press("Delete");
   expect((await shape.getAttribute("points"))!.split(" ")).toHaveLength(4);
 

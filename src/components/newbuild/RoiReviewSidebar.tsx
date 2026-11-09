@@ -18,6 +18,8 @@ interface RoiReviewSidebarProps {
   selectedId: string | null;
   adding: boolean;
   onSelect: (id: string) => void;
+  /** Select and bring the next unreviewed penetration into view on the drawing. */
+  onSelectNext?: (id: string) => void;
   onAddingChange: (adding: boolean) => void;
   dispatch: (action: RoiSessionAction) => void;
   detection: ReturnType<typeof useRoiDetection>;
@@ -112,7 +114,7 @@ const penetrationWarnings: Record<string, string> = {
   possible_truncation: "The result may be incomplete. Review the full roof for missed objects.",
 };
 
-export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, onSelect, onAddingChange, dispatch, detection }: RoiReviewSidebarProps) => {
+export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, onSelect, onSelectNext, onAddingChange, dispatch, detection }: RoiReviewSidebarProps) => {
   const isPenetration = kind === "penetration";
   const subject = isPenetration ? "penetrations" : "roof areas";
   const itemLabel = isPenetration ? "Penetration" : "Roof area";
@@ -120,17 +122,43 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
   const annotations = page.annotations.filter((annotation) => annotation.kind === kind);
   const selected = annotations.find((annotation) => annotation.id === selectedId);
   const selectedPanel = useRef<HTMLDivElement>(null);
-  useEffect(() => { selectedPanel.current?.scrollIntoView?.({ block: "nearest" }); }, [selectedId]);
+  const scrollPanel = useRef<HTMLDivElement>(null);
+  const selectedItem = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!isPenetration) { selectedPanel.current?.scrollIntoView?.({ block: "nearest" }); return; }
+    const container = scrollPanel.current, item = selectedItem.current;
+    if (!container || !item) return;
+    // Reveal the selected list row without scrolling the details or the whole page to the top.
+    const bounds = container.getBoundingClientRect(), row = item.getBoundingClientRect();
+    const top = bounds.top + container.clientTop, bottom = top + container.clientHeight;
+    if (row.top < top) container.scrollTop += row.top - top;
+    else if (row.bottom > bottom) container.scrollTop += row.bottom - bottom;
+  }, [selectedId, isPenetration]);
   const footprint = isPenetration && selected ? penetrationFootprint(selected, page) : null;
   const associationWarnings = selected ? penetrationAssociationWarnings(selected, page) : [];
   const canAccept = !isPenetration || Boolean(selected && parents.some((parent) => parent.id === selected.roi_id)
     && selected.subtype !== "unknown" && penetrationSubtypes.some((subtype) => subtype === selected.subtype) && !footprint?.error);
   const accepted = annotations.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current").length;
+  const unreviewed = annotations.filter(annotation => annotation.review_status !== "rejected"
+    && (annotation.review_status === "suggested" || annotation.validity === "needs_review"));
+  const selectedIndex = annotations.findIndex(annotation => annotation.id === selectedId);
+  const next = [...annotations.slice(selectedIndex + 1), ...annotations.slice(0, selectedIndex)]
+    .find(annotation => unreviewed.includes(annotation));
+  const alreadyAccepted = selected?.review_status === "accepted" && selected.validity === "current";
+  const acceptLabel = selected?.review_status === "accepted" ? alreadyAccepted ? "Opening added" : "Confirm opening" : "Add opening";
   const { feedback, busy, restarting } = detection;
   const review = (review_status: RoiAnnotation["review_status"]) => {
     if (selected) dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch: { review_status, validity: "current" } });
   };
-  return <section aria-label={isPenetration ? "Penetration recommendations" : "Roof area recommendations"} className="min-w-0 space-y-4 break-words">
+  const acceptAndNext = () => {
+    if (!selected || !canAccept || alreadyAccepted || adding) return;
+    review("accepted");
+    if (next) (onSelectNext ?? onSelect)(next.id);
+  };
+  return <section aria-label={isPenetration ? "Penetration recommendations" : "Roof area recommendations"}
+    className={`min-w-0 break-words ${isPenetration ? "flex flex-col flex-1 min-h-0" : ""}`}>
+    <div ref={scrollPanel} data-testid={isPenetration ? "penetration-sidebar-scroll" : undefined}
+      className={`space-y-4 ${isPenetration ? "flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1" : ""}`}>
     <div>
       <h2 className="text-lg font-semibold">{isPenetration ? "Penetrations" : "Roof Areas"}</h2>
       <p className="text-sm text-muted-foreground break-all">{page.source.file_name} / Page {page.source.page_index + 1}</p>
@@ -187,17 +215,15 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
         {isPenetration && footprint?.clipped && <p className="text-xs mt-2 font-medium">
           Part of this boundary falls outside the insulation scope or overlaps a cutout. The opening preview shows the part that will be removed.
         </p>}
-        <div className="flex flex-wrap gap-2 mt-3">
+        {!isPenetration && <div className="flex flex-wrap gap-2 mt-3">
           <Button size="sm" onClick={() => review("accepted")} disabled={!canAccept || (selected.review_status === "accepted" && selected.validity === "current")}>
-            <Check className="w-4 h-4 mr-1" />{isPenetration
-              ? selected.review_status === "accepted" ? selected.validity === "current" ? "Opening added" : "Confirm opening" : "Add opening"
-              : "Accept"}</Button>
+            <Check className="w-4 h-4 mr-1" />Accept</Button>
           <Button size="sm" variant="outline" onClick={() => review("rejected")} disabled={selected.review_status === "rejected"}>
             <X className="w-4 h-4 mr-1" />Reject</Button>
-          <Tooltip><TooltipTrigger asChild><Button size="icon" variant="outline" aria-label={isPenetration ? "Delete penetration" : "Delete region"}
+          <Tooltip><TooltipTrigger asChild><Button size="icon" variant="outline" aria-label="Delete region"
             onClick={() => dispatch({ type: "remove", page_id: page.source.page_id, id: selected.id })}>
-            <Trash2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Delete {isPenetration ? "penetration" : "region"}</TooltipContent></Tooltip>
-        </div>
+            <Trash2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Delete region</TooltipContent></Tooltip>
+        </div>}
         {isPenetration && <PenetrationBoundaryControls key={`boundary:${selected.id}`} annotation={selected}
           size={{ width: page.source.source_width, height: page.source.source_height }}
           onSave={points => dispatch({ type: "review", page_id: page.source.page_id, id: selected.id,
@@ -218,6 +244,7 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
       {annotations.length > 0 && <ul className="divide-y border-y border-border" aria-label={isPenetration ? "Penetrations" : "Regions"}>
         {annotations.map((annotation, index) => <li key={annotation.id}>
           <button className={`w-full text-left py-3 px-2 min-w-0 focus-visible:ring-2 focus-visible:ring-primary ${annotation.id === selectedId ? "bg-accent" : "hover:bg-muted"}`}
+            ref={annotation.id === selectedId ? selectedItem : undefined}
             aria-pressed={annotation.id === selectedId} onClick={() => onSelect(annotation.id)}>
             <span className="flex items-center gap-2 text-sm font-medium">
               {annotation.review_status === "accepted" ? <Check className="w-4 h-4 shrink-0" />
@@ -234,5 +261,33 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
       </ul>}
 
     </TooltipProvider>
+    </div>
+    {isPenetration && <section aria-label="Penetration review actions" className="shrink-0 border-t border-border bg-card pt-3 mt-3">
+      {selected ? <>
+        <p className="text-sm font-semibold truncate" title={`Penetration ${selectedIndex + 1} · ${selected.label}`}>
+          Penetration {selectedIndex + 1} · {selected.label}
+        </p>
+        <p role="status" aria-live="polite" className="text-xs text-muted-foreground mt-1 mb-2">
+          <span className="capitalize">{selected.review_status === "accepted" ? alreadyAccepted ? "Opening added" : "Needs confirmation"
+            : selected.review_status}</span> · {unreviewed.length ? `${unreviewed.length} to review` : "All penetrations reviewed."}
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" className="flex-1 min-w-0" onClick={() => review("accepted")} disabled={adding || !canAccept || alreadyAccepted}>
+            <Check className="w-4 h-4 mr-1 shrink-0" />{acceptLabel}</Button>
+          <Button size="sm" variant="outline" onClick={() => review("rejected")} disabled={adding || selected.review_status === "rejected"}>
+            <X className="w-4 h-4 mr-1" />Reject</Button>
+          <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild>
+            <Button size="icon" className="h-9 w-9 shrink-0" variant="outline" aria-label="Delete penetration" disabled={adding}
+              onClick={() => dispatch({ type: "remove", page_id: page.source.page_id, id: selected.id })}>
+              <Trash2 className="w-4 h-4" /></Button>
+          </TooltipTrigger><TooltipContent>Delete penetration</TooltipContent></Tooltip></TooltipProvider>
+        </div>
+        <Button size="sm" variant="outline" className="w-full mt-2" onClick={acceptAndNext}
+          disabled={adding || !canAccept || alreadyAccepted}>
+          {selected.review_status === "accepted" && !alreadyAccepted ? "Confirm opening & next" : "Add opening & next"}
+        </Button>
+        {adding && <p className="text-xs text-muted-foreground mt-2">Finish or cancel the new boundary before reviewing this opening.</p>}
+      </> : <p className="text-sm text-muted-foreground">Select a penetration to review its opening.</p>}
+    </section>}
   </section>;
 };

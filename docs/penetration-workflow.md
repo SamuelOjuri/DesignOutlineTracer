@@ -8,6 +8,17 @@ Existing box-only annotations still resolve to rectangular openings.
 
 ## Review controls
 
+- **Add opening**, **Reject** and **Delete penetration** stay pinned above
+  **Previous / Next** while the sidebar details and list scroll independently.
+  The action bar identifies the selected penetration and shows how many remain
+  to review. Ordinary **Add opening** preserves the selection and drawing view.
+- **Add opening & next** accepts the selected opening and selects, centres and
+  zooms to the next unreviewed penetration in list order, wrapping at the end.
+  Already added and rejected items are skipped; accepted openings that need
+  confirmation remain in the queue. These use **Confirm opening & next**.
+  The final acceptance stays on the same item and shows **All penetrations
+  reviewed**. Undo remains available in the drawing toolbar. Both acceptance
+  actions use the same boundary, type and parent-roof validation.
 - Select Rectangle, Polygon, Ellipse or Circle in **Opening shape**, then choose
   **Manual penetration**. Polygon mode places individual corners; Finish polygon
   or Enter closes the draft. Escape cancels and Backspace removes the last corner.
@@ -16,8 +27,9 @@ Existing box-only annotations still resolve to rectangular openings.
   With the handle focused, arrow keys rotate by 1° (Shift: 15°).
 - **Edit vertices** exposes square corners and round midpoint insertion handles.
   Click a square corner or focus it with Tab to select it: the active corner has
-  a red fill and a contrasting ring for both mouse and keyboard input. Drag or use
-  arrow keys to move it; Delete or Backspace removes it. Clicking another control
+  a thin red outline with a transparent centre, keeping the PDF corner visible
+  for both mouse and keyboard input. Drag or use arrow keys to move it; Delete or
+  Backspace removes it. Clicking another control
   clears the corner highlight. Corner handles take priority over overlapping
   midpoint handles. Alt disables PDF vector snapping.
 - Classify uncertain candidates and select their roof area before **Add opening**.

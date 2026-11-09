@@ -22,6 +22,8 @@ interface RoiReviewCanvasProps {
   pdfCanvas: HTMLCanvasElement;
   annotations: RoiAnnotation[];
   selectedId: string | null;
+  /** Explicit navigation from Add opening & next; ordinary edits and selections retain the view. */
+  focusRequest?: { id: string; sequence: number } | null;
   adding: boolean;
   onAddingChange: (adding: boolean) => void;
   onSelect: (id: string) => void;
@@ -59,12 +61,13 @@ function ellipsePoints(box: Box2D, size: { width: number; height: number }, circ
 
 export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], contextLabels, drawing, page,
   pdfCanvas, annotations, selectedId, adding, onAddingChange, onSelect, onEdit, onAdd,
-  onEditFootprint, onAddFootprint, onUndoReview }: RoiReviewCanvasProps) => {
+  onEditFootprint, onAddFootprint, onUndoReview, focusRequest }: RoiReviewCanvasProps) => {
   const viewport = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const gesture = useRef<Gesture | null>(null);
   const zoomTarget = useRef<Point | null>(null);
+  const handledFocus = useRef<typeof focusRequest>(null);
   const [fit, setFit] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [panning, setPanning] = useState(false);
@@ -288,11 +291,12 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
-  const handleZoomToPenetration = () => {
+  const handleZoomToPenetration = useCallback(() => {
     const container = viewport.current;
     if (!selectedAnnotation || !container) return;
-    const boundary = penetrationBoundary(selectedAnnotation, size);
-    if (!validPenetrationRing(boundary, size)) return;
+    const pageSize = { width: pdfCanvas.width, height: pdfCanvas.height };
+    const boundary = penetrationBoundary(selectedAnnotation, pageSize);
+    if (!validPenetrationRing(boundary, pageSize)) return;
     const left = Math.min(...boundary.map(point => point.x)), right = Math.max(...boundary.map(point => point.x));
     const top = Math.min(...boundary.map(point => point.y)), bottom = Math.max(...boundary.map(point => point.y));
     const target = { x: (left + right) / 2, y: (top + bottom) / 2 };
@@ -303,7 +307,15 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
     clearGesture();
     if (nextZoom === zoom) centerPenetration(target, scale);
     else { zoomTarget.current = target; setZoom(nextZoom); }
-  };
+  }, [selectedAnnotation, pdfCanvas, fit, zoom, scale, clearGesture, centerPenetration]);
+
+  useEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest || kind !== "penetration" || adding
+      || selectedAnnotation?.id !== focusRequest.id) return;
+    handledFocus.current = focusRequest;
+    setPanning(false);
+    handleZoomToPenetration();
+  }, [focusRequest, kind, adding, selectedAnnotation?.id, handleZoomToPenetration]);
 
   const tools = [
     { label: kind === "penetration" ? "Select penetrations" : "Select regions", icon: MousePointer2, active: !adding && !panning, action: () => { onAddingChange(false); setPanning(false); clearTrace(); } },

@@ -213,8 +213,14 @@ and refresh/rebuild the frontend to use the new endpoint and controls.
 In Define Roof Area, **Adjust** moves edges or individual red vertices. Drop a
 vertex onto an adjacent vertex on the same roof to merge them. A green ring marks
 a valid merge target within 8 screen pixels; release removes the dragged vertex.
+Vertex drags also snap to PDF vector endpoints and intersections within 10 screen
+pixels, falling back to the nearest point on a PDF line. A teal marker and label
+identify the target; release applies the move as one Undo action. Hold Alt to move
+freely without PDF snapping or merging. Scanned pages without PDF vectors use
+free movement. Existing outline merge targets take priority over PDF snapping.
 Hold Shift during a vertex drag to align a valid horizontal/vertical corner.
-Shift alignment does not merge vertices or collapse intermediate points.
+Shift alignment takes priority over PDF snapping and does not merge vertices or
+collapse intermediate points. Invalid moves remain blocked.
 
 **Straighten** is separate: click or tap a near-horizontal or near-vertical side
 to align it, including its intermediate vertices. The side is placed halfway
@@ -313,7 +319,12 @@ Phase 5 extends the enabled sequence to
 `upload -> roi -> paint -> penetrations -> outlets -> details`. Penetration review
 supports parent/subtype corrections, manual additions, scope warnings and explicit
 acceptance. In Step 4, select a detection and **Add opening** to cut it out of the
-insulation scope. Drag its box or corner handles to move or resize the opening;
+insulation scope. Review actions stay pinned above **Previous / Next**, with the
+selected penetration and remaining review count visible while the sidebar scrolls.
+**Add opening & next** accepts it and brings the next unreviewed penetration into
+view, skipping added and rejected items and wrapping at the end. Ordinary
+**Add opening** keeps the current selection and drawing view.
+Drag its box or corner handles to move or resize the opening;
 **Reject**, **Delete** and **Undo** also update the cutout. **Manual penetration**
 supports drawing a new box and then adding it. Openings are clipped to the Step 3
 scope and appear in Steps 3, 5 and 6. Project Details includes their polygons and

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import type { Box2D, RoiAnnotation } from "@/types/roi";
 import { buildRoiFillMask } from "@/utils/roiFillMask";
 import { boxToSource } from "@/utils/roiCoordinates";
-import type { RedrawRegion } from "@/utils/polylineRedraw";
+import { snapToVectors, type RedrawRegion, type VectorSnap } from "@/utils/polylineRedraw";
 import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/utils/rectangleCutout";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import type { OutlineProposal } from "@/types/outline";
@@ -59,6 +59,8 @@ const PREVIEW_REMOVE_COLOR = [220, 50, 50, 80] as const;
 const PREVIEW_CUTOUT_COLOR = [255, 140, 0, 100] as const;
 const DEFAULT_CUTOUT_SENSITIVITY = 40;
 const DEFAULT_SELECTION_SENSITIVITY = 45;
+const VERTEX_PDF_SNAP_RADIUS = 10;
+const ADJUST_DRAG_THRESHOLD = 2;
 
 export const PaintBucketCanvas = ({
   pdfCanvas,
@@ -142,6 +144,7 @@ export const PaintBucketCanvas = ({
     previewEdit: OutlineEditResult | null;
     previewMask: Uint8Array | null;
     mergeTarget: Point | null;
+    pdfSnap: VectorSnap | null;
   } | null>(null);
   const interiorHolesRef = useRef<Point[][]>([]);
   const sourceGeometry = useRef({ roofOutlines, interiorHoles });
@@ -283,6 +286,7 @@ export const PaintBucketCanvas = ({
     outlines: adjustDragRef.current?.previewEdit?.outlines ?? roofOutlines,
     holes: adjustDragRef.current?.previewEdit?.holes ?? interiorHoles,
     mergeTarget: adjustDragRef.current?.mergeTarget ?? null,
+    pdfSnap: adjustDragRef.current?.pdfSnap ?? null,
   };
 
   // --- Preview logic ---
@@ -734,7 +738,7 @@ export const PaintBucketCanvas = ({
       startX: position.x, startY: position.y, pointerId: event.pointerId,
       originalOutlines: roofOutlines.map(outline => outline.map(point => ({ ...point }))),
       originalHoles: interiorHolesRef.current.map(hole => hole.map(point => ({ ...point }))),
-      previewEdit: null, previewMask: null, mergeTarget: null,
+      previewEdit: null, previewMask: null, mergeTarget: null, pdfSnap: null,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -745,6 +749,16 @@ export const PaintBucketCanvas = ({
     const position = getCanvasPos(event);
     const canvas = canvasRef.current;
     if (!drag || drag.pointerId !== event.pointerId || !position || !canvas) return;
+    // Grabbing a corner must not move it onto a nearby PDF point before a drag starts.
+    if (drag.type === "vertex" && Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale < ADJUST_DRAG_THRESHOLD) {
+      drag.previewEdit = null;
+      drag.previewMask = null;
+      drag.mergeTarget = null;
+      drag.pdfSnap = null;
+      setSelectionMessage(null);
+      setAdjustmentVersion(version => version + 1);
+      return;
+    }
     const original = drag.originalOutlines[drag.outlineIndex];
     const prepare = (candidate: Point[], edgeMove = false): OutlineEditResult => {
       if (candidate.some(point => point.x < 0 || point.y < 0 || point.x > canvas.width || point.y > canvas.height)) {
@@ -758,15 +772,21 @@ export const PaintBucketCanvas = ({
     };
     let candidate: Point[] | null;
     drag.mergeTarget = null;
+    drag.pdfSnap = null;
     if (activeTool === "straighten") {
       candidate = straightenPolygonSide(original, drag.edgeIndex!);
     } else if (drag.type === "vertex") {
       const vertexIndex = drag.vertexIndex!;
-      let destination = {
-        x: Math.round(original[vertexIndex].x + position.x - drag.startX),
-        y: Math.round(original[vertexIndex].y + position.y - drag.startY),
+      // Snap the vertex's destination, retaining the offset where its handle was grabbed.
+      const movedPosition = {
+        x: original[vertexIndex].x + position.x - drag.startX,
+        y: original[vertexIndex].y + position.y - drag.startY,
       };
-      const target = event.shiftKey ? null : findVertexMergeTarget(original, vertexIndex, destination, 8 / displayScale);
+      let destination = {
+        x: Math.round(movedPosition.x),
+        y: Math.round(movedPosition.y),
+      };
+      const target = event.shiftKey || event.altKey ? null : findVertexMergeTarget(original, vertexIndex, destination, 8 / displayScale);
       if (target !== null) {
         candidate = mergePolygonVertex(original, vertexIndex, target);
         if (candidate) drag.mergeTarget = original[target];
@@ -786,6 +806,9 @@ export const PaintBucketCanvas = ({
             setAdjustmentVersion(version => version + 1);
             return;
           }
+        } else if (!event.altKey) {
+          drag.pdfSnap = snapToVectors(movedPosition, vectorSegments, VERTEX_PDF_SNAP_RADIUS / displayScale);
+          if (drag.pdfSnap) destination = drag.pdfSnap.point;
         }
         candidate = moved(destination);
       }
@@ -797,11 +820,14 @@ export const PaintBucketCanvas = ({
       drag.previewEdit = null;
       drag.previewMask = null;
       drag.mergeTarget = null;
+      drag.pdfSnap = null;
       setSelectionMessage(edit?.error ?? "This side is not close enough to horizontal or vertical.");
     } else {
       drag.previewEdit = edit;
       drag.previewMask = rasterizeOutlinesWithHoles(edit.outlines, edit.holes, canvas.width, canvas.height);
-      setSelectionMessage(drag.mergeTarget ? "Merge vertex" : edit.repaired ? "Existing boundary defects will be repaired." : null);
+      const targetMessage = drag.mergeTarget ? "Merge vertex" : drag.pdfSnap ? `PDF ${drag.pdfSnap.kind}` : null;
+      setSelectionMessage([targetMessage, edit.repaired ? "Existing boundary defects will be repaired." : null]
+        .filter(Boolean).join(". ") || null);
     }
     setAdjustmentVersion(version => version + 1);
   };
@@ -821,7 +847,7 @@ export const PaintBucketCanvas = ({
     if (!drag || drag.pointerId !== event.pointerId) return;
     const position = getCanvasPos(event);
     if (!position) { cancelAdjustment(); return; }
-    const moved = position && Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale >= 2;
+    const moved = Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale >= ADJUST_DRAG_THRESHOLD;
     if (moved || activeTool === "straighten") previewAdjustment(event);
     else { cancelAdjustment(); return; }
     adjustDragRef.current = null;
@@ -1144,7 +1170,7 @@ export const PaintBucketCanvas = ({
             variant={isAdjustMode ? "default" : "ghost"}
             size="sm"
             onClick={() => selectTool("adjust")}
-            title="Drag edges or vertices; drop onto a neighbouring vertex to merge. Shift aligns a corner."
+            title="Drag vertices to snap to PDF endpoints, intersections or lines. Alt moves freely; Shift aligns a corner. Drop onto a neighbouring vertex to merge."
             aria-pressed={isAdjustMode}
             className="rounded-none"
             disabled={isInitializing || !hasAnyFill}
@@ -1250,7 +1276,7 @@ export const PaintBucketCanvas = ({
           {sideFit.controls}
           {polylineRedraw.controls}
         </div>
-        {!sideFit.active && !polylineRedraw.active && <p role="status" className="text-sm text-muted-foreground">
+        {!sideFit.active && !polylineRedraw.active && <p role="status" className="text-sm text-muted-foreground min-h-5">
           {selectionMessage ?? (activeTool === "straighten" ? "Click a side to align it horizontally or vertically. Esc returns to dragging." : null)}
         </p>}
       </div> : selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
@@ -1275,7 +1301,8 @@ export const PaintBucketCanvas = ({
               penetrationHoles={penetrationHoles} width={pdfCanvas.width} height={pdfCanvas.height}
               displayScale={displayScale} showVertices={activeTool === "adjust"}
               hoveredEdge={activeTool === "adjust" || activeTool === "straighten" ? hoveredEdge : null}
-              hoveredVertex={activeTool === "adjust" ? hoveredVertex : null} mergeTarget={displayedGeometry.mergeTarget} />
+              hoveredVertex={activeTool === "adjust" ? hoveredVertex : null} mergeTarget={displayedGeometry.mergeTarget}
+              pdfSnap={displayedGeometry.pdfSnap} />
           </div>}
           <canvas
             ref={previewCanvasRef}
@@ -1315,7 +1342,7 @@ export const PaintBucketCanvas = ({
           {activeTool === "rectangle-cutout"
             ? "Drag to preview a rectangular cut; release to apply. Esc cancels. Undo restores the selection."
             : activeTool === "adjust"
-            ? "Drag edges or vertices to adjust — hold Shift to lock to 90° — right-click edge to delete — Ctrl + scroll to zoom"
+            ? `Drag edges or vertices to adjust${vectorSegments.length ? " — vertices snap to PDF points and lines" : " — no PDF vector lines available"} — Alt moves freely — Shift locks to 90° — right-click edge to delete — Ctrl + scroll to zoom`
             : activeTool === "fill"
             ? "Hover to preview — click or hold & drag to multi-select areas — click filled area to remove — Ctrl + scroll to zoom"
             : "Hover to preview — click inside a filled area to cut out a section — Ctrl + scroll to zoom"}

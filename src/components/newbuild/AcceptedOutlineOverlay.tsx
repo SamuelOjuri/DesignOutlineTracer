@@ -1,5 +1,6 @@
 import { useId } from "react";
 import type { Point } from "@/types/roof";
+import type { VectorSnap } from "@/utils/polylineRedraw";
 import { OUTLINE_APPEARANCE } from "@/utils/outlineAppearance";
 
 interface AcceptedOutlineOverlayProps {
@@ -13,12 +14,13 @@ interface AcceptedOutlineOverlayProps {
   hoveredEdge: { outlineIndex: number; edgeIndex: number } | null;
   hoveredVertex: { outlineIndex: number; vertexIndex: number } | null;
   mergeTarget: Point | null;
+  pdfSnap?: VectorSnap | null;
 }
 
 const polygonPoints = (points: readonly Point[]) => points.map(point => `${point.x},${point.y}`).join(" ");
 
 export function AcceptedOutlineOverlay({ outlines, holes, penetrationHoles, width, height, displayScale,
-  showVertices, hoveredEdge, hoveredVertex, mergeTarget }: AcceptedOutlineOverlayProps) {
+  showVertices, hoveredEdge, hoveredVertex, mergeTarget, pdfSnap = null }: AcceptedOutlineOverlayProps) {
   const maskId = useId();
   const scale = Math.max(displayScale, 0.01);
   const openings = [...holes, ...penetrationHoles];
@@ -56,5 +58,15 @@ export function AcceptedOutlineOverlay({ outlines, holes, penetrationHoles, widt
     }))}
     {mergeTarget && <circle cx={mergeTarget.x} cy={mergeTarget.y} r={8 / scale} fill="none"
       stroke="#00875a" strokeWidth={2} vectorEffect="non-scaling-stroke" data-testid="outline-merge-target" />}
+    {pdfSnap && <>
+      {pdfSnap.segments.map((segment, index) => <line key={index} x1={segment.start.x} y1={segment.start.y}
+        x2={segment.end.x} y2={segment.end.y} stroke="#0f766e" strokeOpacity={0.7} strokeWidth={2}
+        vectorEffect="non-scaling-stroke" data-testid="adjust-pdf-vector" />)}
+      <circle cx={pdfSnap.point.x} cy={pdfSnap.point.y} r={6 / scale} fill="white"
+        stroke="#0f766e" strokeWidth={2} vectorEffect="non-scaling-stroke"
+        data-testid="adjust-pdf-snap" data-snap={pdfSnap.kind} />
+      <text x={pdfSnap.point.x + 10 / scale} y={pdfSnap.point.y - 10 / scale} fontSize={12 / scale}
+        fill="#134e4a" stroke="white" strokeWidth={3 / scale} paintOrder="stroke" fontWeight={600}>PDF {pdfSnap.kind}</text>
+    </>}
   </svg>;
 }
