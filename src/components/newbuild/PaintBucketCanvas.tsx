@@ -104,6 +104,7 @@ export const PaintBucketCanvas = ({
   const [fitScale, setFitScale] = useState(1);
   const [fillCount, setFillCount] = useState(0);
   const [activeTool, setActiveTool] = useState<PaintTool>("fill");
+  const isCutoutMode = activeTool === "cutout" || activeTool === "rectangle-cutout";
   const isAdjustMode = activeTool === "adjust" || activeTool === "straighten";
   const [cutoutSensitivity, setCutoutSensitivity] = useState(DEFAULT_CUTOUT_SENSITIVITY);
   const cutoutSensitivityId = useId();
@@ -1256,27 +1257,16 @@ export const PaintBucketCanvas = ({
             Select
           </Button>
           <Button
-            variant={activeTool === "cutout" ? "default" : "ghost"}
+            variant={isCutoutMode ? "default" : "ghost"}
             size="sm"
             onClick={() => selectTool("cutout")}
             title="Cut out areas from fill"
+            aria-pressed={isCutoutMode}
             className="rounded-none"
             disabled={isInitializing}
           >
             <Scissors className="w-4 h-4 mr-1" />
             Cut Out
-          </Button>
-          <Button
-            variant={activeTool === "rectangle-cutout" ? "default" : "ghost"}
-            size="sm"
-            onClick={() => selectTool("rectangle-cutout")}
-            title="Drag a rectangle to remove selected areas inside it"
-            aria-pressed={activeTool === "rectangle-cutout"}
-            className="rounded-none"
-            disabled={isInitializing || !roofOutlines.length}
-          >
-            <RectangleHorizontal className="w-4 h-4 mr-1" />
-            Cut Out rectangle
           </Button>
           <Button
             variant={isAdjustMode ? "default" : "ghost"}
@@ -1345,6 +1335,18 @@ export const PaintBucketCanvas = ({
           <Button variant="ghost" size="sm" onClick={() => setSelectionSensitivity(DEFAULT_SELECTION_SENSITIVITY)}
             disabled={isInitializing || selectionSensitivity === DEFAULT_SELECTION_SENSITIVITY}>
             Default (45)
+          </Button>
+        </div>
+      </div>}
+
+      {isCutoutMode && <div className="px-1 mb-2">
+        <div role="group" aria-label="Cut Out tools" className="flex flex-wrap items-center gap-2 min-h-10">
+          <Button variant="adjustTool" size="sm"
+            onClick={() => selectTool(activeTool === "rectangle-cutout" ? "cutout" : "rectangle-cutout")}
+            title="Drag a rectangle to remove selected areas inside it"
+            aria-pressed={activeTool === "rectangle-cutout"} disabled={isInitializing || !roofOutlines.length}>
+            <RectangleHorizontal className="w-4 h-4 mr-1" />
+            Cut Out rectangle
           </Button>
         </div>
       </div>}

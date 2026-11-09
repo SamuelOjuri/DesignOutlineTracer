@@ -165,6 +165,8 @@ it("uses selection sensitivity for hover and click without changing existing geo
   expect(selectedMask()[50 * width + 95]).toBe(1);
   fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
   expect(screen.queryByRole("slider")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Cut Out rectangle" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Cut Out" }));
   fireEvent.click(screen.getByRole("button", { name: "Cut Out rectangle" }));
   expect(screen.queryByRole("slider")).not.toBeInTheDocument();
 });

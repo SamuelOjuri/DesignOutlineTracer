@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { mockCanvasContext } from "@/test/canvas";
 import { rasterizeOutlinesWithHoles } from "@/utils/polygonAdjust";
@@ -45,9 +45,16 @@ async function setup() {
       onHolesExtracted={(next) => { holesChanged(next); setHoles(next); }} />;
   }
   render(<Editor />);
-  const tool = screen.getByRole("button", { name: "Cut Out rectangle" });
+  expect(screen.queryByRole("group", { name: "Cut Out tools" })).not.toBeInTheDocument();
+  const cutout = screen.getByRole("button", { name: "Cut Out" });
+  await waitFor(() => expect(cutout).toBeEnabled());
+  fireEvent.click(cutout);
+  const tool = within(screen.getByRole("group", { name: "Cut Out tools" })).getByRole("button", { name: "Cut Out rectangle" });
   await waitFor(() => expect(tool).toBeEnabled());
+  expect(tool).toHaveAttribute("aria-pressed", "false");
   fireEvent.click(tool);
+  expect(tool).toHaveAttribute("aria-pressed", "true");
+  expect(cutout).toHaveAttribute("aria-pressed", "true");
   const canvas = screen.getByTestId("paint-interaction-canvas") as HTMLCanvasElement;
   const event = (type: "pointerDown" | "pointerMove" | "pointerUp", x: number, y: number) => {
     const bounds = canvas.getBoundingClientRect();
@@ -93,7 +100,14 @@ it("cancels on Escape, tool change and lost capture; clicks and empty rectangles
   event("pointerDown", 100, 30);
   fireEvent.click(screen.getByRole("button", { name: "Select" }));
   event("pointerUp", 310, 90);
-  fireEvent.click(screen.getByRole("button", { name: "Cut Out rectangle" }));
+  expect(screen.queryByRole("group", { name: "Cut Out tools" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Cut Out" }));
+  const rectangle = screen.getByRole("button", { name: "Cut Out rectangle" });
+  fireEvent.click(rectangle);
+  fireEvent.click(rectangle);
+  expect(rectangle).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("slider", { name: "Cut Out sensitivity" })).toBeInTheDocument();
+  fireEvent.click(rectangle);
   event("pointerDown", 100, 30);
   fireEvent.lostPointerCapture(canvas, { pointerId: 7 });
   event("pointerUp", 310, 90);
