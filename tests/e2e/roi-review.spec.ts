@@ -295,7 +295,7 @@ test("Penetrations: polygon detection, rotation, vertex editing and manual conca
   await editVertices.click();
   const firstCorner = page.getByRole("button", { name: "Move Penetration 1 vertex 1", exact: true });
   const secondCorner = page.getByRole("button", { name: "Move Penetration 1 vertex 2", exact: true });
-  const selectedColor = "rgb(236, 19, 19)"; // The app's primary red, independent of toolbar transitions.
+  const selectedColor = "rgb(176, 0, 181)"; // Deep magenta #B000B5 for the selected vertex.
   // Use actual mouse and keyboard focus; locator.press would hide a broken click-to-focus path.
   await firstCorner.click();
   await expect(firstCorner).toBeFocused();

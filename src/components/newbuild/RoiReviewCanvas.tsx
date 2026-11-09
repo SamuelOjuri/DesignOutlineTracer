@@ -373,7 +373,7 @@ export const RoiReviewCanvas = ({ kind = "roof_roi", contextAnnotations = [], co
       {kind === "penetration" && <p className="text-sm text-muted-foreground">
         {adding ? drawingShape === "polygon" ? "Click each corner, then Finish polygon or click the first corner. Hold Alt for a free point."
           : `Drag around the ${drawingShape}, then select Add opening.`
-          : editVertices ? "Click a square corner to select it in red; drag or use arrow keys to move it, Delete to remove it. Round handles add vertices. Drag the rotation handle to rotate; Shift snaps by 15 degrees. Alt disables PDF snapping."
+          : editVertices ? "Click a square corner to select it in deep magenta; drag or use arrow keys to move it, Delete to remove it. Round handles add vertices. Drag the rotation handle to rotate; Shift snaps by 15 degrees. Alt disables PDF snapping."
             : "Select a penetration and Add opening to cut it out. Drag its boundary to move, corners to resize, or the rotation handle to rotate. Shift snaps rotation by 15 degrees."}
       </p>}
       {kind === "penetration" && adding && drawingShape === "polygon" && <div className="flex flex-wrap gap-2 items-center">

@@ -30,7 +30,7 @@ Existing box-only annotations still resolve to rectangular openings.
   the selected opening's corners are ready to edit. Use **Edit vertices** to turn
   it off again; zooming changes no geometry or review decisions.
   Click a square corner or focus it with Tab to select it: the active corner has
-  a thin red outline with a transparent centre, keeping the PDF corner visible
+  a thin deep magenta (`#B000B5`) outline with a transparent centre, keeping the PDF corner visible
   for both mouse and keyboard input. Drag or use arrow keys to move it; Delete or
   Backspace removes it. Clicking another control
   clears the corner highlight. Corner handles take priority over overlapping
