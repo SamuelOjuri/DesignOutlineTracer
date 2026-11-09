@@ -83,7 +83,17 @@ async def bounded_cpu(function, *args):
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
-        await asyncio.gather(task, return_exceptions=True)
+        # Threads cannot be cancelled. Repeated cancellation must not release
+        # their pixels or operation capacity before the worker has exited.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
         raise
 
 
@@ -175,11 +185,12 @@ class OutlineService:
                     attempts += 1
                     finish_reason, response_chars = "unavailable", None
                     try:
-                        with_context = getattr(service.provider, "generate_with_context", None)
-                        if callable(with_context):
-                            raw = await with_context(prepared.png, prompt, model_schema(), page.image.png)
-                        else:
-                            raw = await service.provider.generate(prepared.png, prompt, model_schema())
+                        async with service.provider_slots:
+                            with_context = getattr(service.provider, "generate_with_context", None)
+                            if callable(with_context):
+                                raw = await with_context(prepared.png, prompt, model_schema(), page.image.png)
+                            else:
+                                raw = await service.provider.generate(prepared.png, prompt, model_schema())
                         finish_reason = raw.finish_reason if raw.finish_reason in {"STOP", "MAX_TOKENS"} else "other"
                         response_chars = len(raw.text)
                         if raw.finish_reason == "MAX_TOKENS":

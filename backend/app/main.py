@@ -84,6 +84,7 @@ class BoundedRequests:
             bounded_receive = receive
             if scope["method"] == "POST":
                 maximum = (self.settings.max_upload_bytes + 16384 if scope["path"] == PREFIX + "/pages"
+                           else 6 * 1024 * 1024 if re.fullmatch(PREFIX + r"/pages/[a-zA-Z0-9_-]+/detections", scope["path"])
                            else 512 * 1024 if re.fullmatch(PREFIX + r"/pages/[a-zA-Z0-9_-]+/(outlines|outlets)", scope["path"])
                            else 65536)
                 try:

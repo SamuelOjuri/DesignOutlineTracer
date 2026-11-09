@@ -198,7 +198,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
         self.assertEqual(result["status"], "complete")
-        self.assertEqual(result["prompt_version"], "penetration-v1")
+        self.assertEqual(result["prompt_version"], "penetration-v2")
         self.assertEqual(result["run"]["roi_revision"], 4)
         self.assertEqual([annotation["roi_id"] for annotation in result["annotations"]], ["roof-a", "roof-b"])
         self.assertEqual([annotation["box_2d"] for annotation in result["annotations"]],
@@ -423,8 +423,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_body_limits_without_content_length_and_localhost_guard(self):
         async def chunks():
-            yield b"x" * 40000
-            yield b"x" * 40000
+            yield b"x" * (3 * 1024 * 1024)
+            yield b"x" * (3 * 1024 * 1024 + 1)
 
         response = await self.client.post(PREFIX + "/pages/page/detections", content=chunks())
         self.assertEqual(response.status_code, 413)

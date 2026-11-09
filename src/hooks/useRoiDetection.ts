@@ -3,12 +3,16 @@ import { roiClient, RoiApiError } from "@/integrations/roi/client";
 import type { AnnotationKind, PageSession } from "@/types/roi";
 import type { useRoiSession } from "./useRoiSession";
 import { useServiceRestarting } from "./useServiceRestarting";
+import { penetrationScopes } from "@/utils/penetrationScopes";
 
 interface DetectionFeedback {
   status: "uploading" | "detecting" | "complete" | "no_detections" | "partial" | "error" | "cancelled";
   error?: string;
   warnings?: string[];
   followUpOf?: string;
+  durationMs?: number;
+  cached?: boolean;
+  providerAttempts?: number;
 }
 
 export function useRoiDetection(session: ReturnType<typeof useRoiSession>, client = roiClient, task: AnnotationKind = "roof_roi") {
@@ -34,16 +38,21 @@ export function useRoiDetection(session: ReturnType<typeof useRoiSession>, clien
     const acceptedRois = task === "roof_roi" ? [] : page.annotations.filter((annotation) => annotation.kind === "roof_roi"
       && annotation.review_status === "accepted" && annotation.validity === "current");
     if (task !== "roof_roi" && acceptedRois.length === 0) return;
+    const scopes = task === "penetration" ? penetrationScopes(page) : undefined;
+    if (scopes && !scopes.length) {
+      setFeedback(previous => ({ ...previous, [feedbackKey(page)]: { status: "error", error: "penetration_scope_required" } }));
+      return;
+    }
     if (followUpOf && feedback[feedbackKey(page)]?.followUpOf !== followUpOf) return;
     if (followUpOf && followedRequests.has(followUpOf)) return;
     if (followUpOf) followedRequests.add(followUpOf);
-    const { request, signal } = session.beginRequest(task);
+    let { request, signal } = session.beginRequest(task);
     const update = (value: DetectionFeedback) => setFeedback((previous) => ({ ...previous, [feedbackKey(page)]: value }));
     const isCurrent = () => !signal.aborted
       && session.getActivePage()?.pending[task]?.request_id === request.request_id;
     update({ status: "uploading" });
     try {
-      const receipt = await client.uploadPage(page.source, signal);
+      let receipt = await client.uploadPage(page.source, signal);
       if (!isCurrent()) return;
       if (followUpOf) {
         if (partialUploads.get(followUpOf) !== receipt.upload_id) throw new RoiApiError("follow_up_expired");
@@ -51,13 +60,33 @@ export function useRoiDetection(session: ReturnType<typeof useRoiSession>, clien
         followedUploads.add(receipt.upload_id);
       }
       update({ status: "detecting" });
-      const result = await client.detect(request, { signal, followUpOf, acceptedRois });
+      const sendDetection = () => client.detect(request, { signal, followUpOf, acceptedRois,
+        ...(scopes ? { scopes, vectorSegments: page.source.vector_segments ?? [] } : {}),
+        sourceSize: { width: page.source.source_width, height: page.source.source_height } });
+      let result;
+      try {
+        result = await sendDetection();
+      } catch (error) {
+        if (!isCurrent()) return;
+        if (!(error instanceof RoiApiError) || error.code !== "page_not_found" || error.status !== 404) throw error;
+        if (followUpOf) throw new RoiApiError("follow_up_expired");
+        // The server may retain the failed operation after its page expires.
+        // A new upload therefore needs a fresh request ID, never an altered replay.
+        session.dispatch({ type: "cancel", ...request });
+        ({ request, signal } = session.beginRequest(task));
+        update({ status: "uploading" });
+        receipt = await client.uploadPage(page.source, signal);
+        if (!isCurrent()) return;
+        update({ status: "detecting" });
+        result = await sendDetection();
+      }
       if (!isCurrent()) return;
       session.dispatch({ type: "result", run: result.run, annotations: result.annotations });
-      const allowFollowUp = result.status === "partial" && !followUpOf && !followedUploads.has(receipt.upload_id);
+      const allowFollowUp = (result.status === "partial" || task === "penetration") && !followUpOf && !followedUploads.has(receipt.upload_id);
       if (allowFollowUp) partialUploads.set(request.request_id, receipt.upload_id);
       update({ status: result.status, warnings: [...new Set([...result.warnings, ...result.run.warnings])],
-        followUpOf: allowFollowUp ? request.request_id : undefined });
+        followUpOf: allowFollowUp ? request.request_id : undefined, durationMs: result.run.duration_ms,
+        cached: result.run.cached, providerAttempts: result.run.provider_attempts });
     } catch (error) {
       if (!isCurrent()) return;
       session.dispatch({ type: "cancel", ...request });

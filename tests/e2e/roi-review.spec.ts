@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { createOpenRoofPlanPdf, createPenetrationPlanPdf, createRoofPlanPdf } from "../fixtures/roofPlan";
-import type { Box2D, DetectionRequest, PageContext } from "../../src/types/roi";
+import type { Box2D, DetectionRequest, PageContext, PenetrationScope } from "../../src/types/roi";
 
 type Mode = "complete" | "no_detections" | "partial" | "offline" | "delayed";
-type Payload = DetectionRequest & { follow_up_of?: string; accepted_rois: { id: string; revision: number; box_2d: Box2D }[] };
+type Payload = DetectionRequest & { follow_up_of?: string; scopes?: PenetrationScope[];
+  vector_segments?: unknown[]; accepted_rois: { id: string; revision: number; box_2d: Box2D }[] };
 
-async function mockRoi(page: Page) {
+async function mockRoi(page: Page, polygonMode = false, penetrationCount?: number) {
   const uploads: { context: PageContext; bytes: Buffer }[] = [];
   const requests: Payload[] = [];
   let mode: Mode = "complete";
@@ -37,14 +38,26 @@ async function mockRoi(page: Page) {
     const identity: DetectionRequest = { page_id: payload.page_id, request_id: payload.request_id, task: payload.task,
       source_image_hash: payload.source_image_hash, roi_revision: payload.roi_revision, geometry_revision: payload.geometry_revision };
     const childTask = payload.task === "penetration";
-    const promptVersion = childTask ? "penetration-v1" : "roof-roi-v1";
-    const boxes: Box2D[] = childTask ? [[400, 180, 450, 220], [150, 700, 180, 740], [850, 500, 900, 550], [650, 350, 690, 380]]
+    const promptVersion = childTask ? "penetration-v2" : "roof-roi-v1";
+    const boxes: Box2D[] = childTask && penetrationCount ? Array.from({ length: penetrationCount }, (_, index): Box2D =>
+      index === penetrationCount - 1 ? [150, 700, 180, 740]
+        : [320 + Math.floor(index / 4) * 40, 120 + index % 4 * 65, 345 + Math.floor(index / 4) * 40, 145 + index % 4 * 65])
+      : childTask ? [[400, 180, 450, 220], [150, 700, 180, 740], [850, 500, 900, 550], [650, 350, 690, 380]]
       : [[300, 100, 800, 433.3333333333333], [100, 650, 250, 850]];
-    const annotations = status === "no_detections" ? [] : boxes.map((box, index) => ({
+    const annotations = status === "no_detections" ? [] : (polygonMode && childTask ? boxes.slice(0, 2) : boxes).map((box, index) => ({
       id: `${childTask ? "child" : "roof"}-${sequence}-${index + 1}`, page_id: payload.page_id, kind: payload.task,
       label: `Synthetic ${childTask ? "penetration" : "proposed roof"} ${index + 1}`,
       ...(childTask ? { subtype: index === 0 ? "rooflight" : "vent" } : {}),
-      box_2d: box, proposed_box_2d: box, roi_id: childTask ? (payload.accepted_rois[index === 1 ? 1 : 0] ?? payload.accepted_rois[0]).id : null,
+      ...(polygonMode && childTask ? (() => {
+        const context = uploads[uploads.length - 1].context;
+        const ring = (index === 0 ? [[180, 425], [200, 400], [220, 425], [200, 450]]
+          : [[700, 150], [740, 150], [740, 165], [720, 165], [720, 180], [700, 180]])
+          .map(([x, y]) => ({ x: x / 1000 * context.source_width, y: y / 1000 * context.source_height }));
+        return { subtype: index === 0 ? "access_hatch" : "riser", footprint: ring, proposed_footprint: ring,
+          footprint_source: "vector", outline_id: payload.scopes?.find(scope => scope.roi_id === payload.accepted_rois[index].id)?.outline_id };
+      })() : {}),
+      box_2d: box, proposed_box_2d: box, roi_id: childTask
+        ? (payload.accepted_rois[(penetrationCount ? index === penetrationCount - 1 : index === 1) ? 1 : 0] ?? payload.accepted_rois[0]).id : null,
       origin: "gemini", review_status: "suggested", validity: "current",
       revision: 1, edits: [], warnings: [],
     }));
@@ -181,6 +194,235 @@ async function enterPenetrations(page: Page, withParents = true) {
   await expect(page.getByRole("heading", { name: "Penetrations", exact: true })).toBeVisible();
 }
 
+test("Penetrations: pinned review actions retain list position and advance through unreviewed openings", async ({ page, networkGuard }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = await mockRoi(page, false, 12);
+  await enterPenetrations(page);
+  await page.getByRole("button", { name: "Detect penetrations", exact: true }).click();
+  const list = page.getByRole("list", { name: "Penetrations", exact: true });
+  const item = (index: number) => list.getByRole("button", { name: new RegExp(`^Penetration ${index} `) });
+  await expect(list.getByRole("button")).toHaveCount(12);
+  const scroll = page.getByTestId("penetration-sidebar-scroll");
+  const footer = page.getByRole("region", { name: "Penetration review actions", exact: true });
+  const add = footer.getByRole("button", { name: "Add opening", exact: true });
+  const advance = footer.getByRole("button", { name: "Add opening & next", exact: true });
+  const viewport = page.getByTestId("roi-viewport");
+  const viewPosition = () => viewport.evaluate(element => ({ left: element.scrollLeft, top: element.scrollTop }));
+  const pinnedPosition = (await footer.boundingBox())!;
+  const assertVisibleActions = async () => {
+    await expect(footer).toBeInViewport();
+    for (const name of ["Reject", "Delete penetration"]) {
+      await expect(footer.getByRole("button", { name, exact: true })).toBeInViewport();
+    }
+    const bounds = (await footer.boundingBox())!;
+    const previous = (await page.getByRole("button", { name: "Previous", exact: true }).boundingBox())!;
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(previous.y);
+  };
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  const listPosition = await scroll.evaluate(element => element.scrollTop);
+  expect(listPosition).toBeGreaterThan(0);
+  expect((await footer.boundingBox())!.y).toBeCloseTo(pinnedPosition.y, 0);
+  await assertVisibleActions();
+
+  // Ordinary acceptance leaves the current selection, list and drawing where the reviewer put them.
+  const beforeView = await viewPosition();
+  await add.click();
+  await expect(footer).toContainText("Penetration 1");
+  await expect(item(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(footer.getByRole("button", { name: "Opening added", exact: true })).toBeDisabled();
+  expect(await scroll.evaluate(element => element.scrollTop)).toBe(listPosition);
+  expect(await viewPosition()).toEqual(beforeView);
+  await expect(page.getByTestId("opening-mask-penetration:child-2-1:0")).toBeAttached();
+
+  await item(2).click();
+  await footer.getByRole("button", { name: "Reject", exact: true }).click();
+  await item(3).click();
+  await add.click();
+  await item(12).click();
+  await page.getByRole("button", { name: "Zoom to Penetration", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Edit vertices", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Move Penetration 12 vertex 1", exact: true })).toBeVisible();
+  const distantView = await viewPosition();
+  await advance.click();
+  await expect(item(12)).toContainText("accepted");
+  await expect(item(4)).toHaveAttribute("aria-pressed", "true");
+  await expect(footer).toContainText("Penetration 4");
+  await expect(item(4)).toContainText("suggested");
+  await expect.poll(viewPosition).not.toEqual(distantView);
+  const nextBoundary = page.getByTestId("penetration-shape-child-2-4");
+  await expect.poll(async () => {
+    const boundary = (await nextBoundary.boundingBox())!, visible = (await viewport.boundingBox())!;
+    return boundary.x >= visible.x && boundary.y >= visible.y
+      && boundary.x + boundary.width <= visible.x + visible.width
+      && boundary.y + boundary.height <= visible.y + visible.height;
+  }).toBe(true);
+  await assertVisibleActions();
+  await page.screenshot({ path: testInfo.outputPath("pinned-penetration-actions-desktop.png"), fullPage: true });
+
+  for (let index = 4; index <= 11; index++) {
+    await expect(item(index)).toHaveAttribute("aria-pressed", "true");
+    await advance.click();
+  }
+  await expect(item(11)).toHaveAttribute("aria-pressed", "true");
+  await expect(footer).toContainText("All penetrations reviewed.");
+  await expect(footer.getByRole("button", { name: "Opening added", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Undo review edit", exact: true }).click();
+  await expect(add).toBeEnabled();
+  await expect(item(11)).toContainText("suggested");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await scroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  await assertVisibleActions();
+  await expect(add).toBeInViewport();
+  await expect(advance).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("pinned-penetration-actions-mobile.png"), fullPage: true });
+  expect(api.requests).toHaveLength(2);
+  expect(networkGuard.submissions).toEqual([]);
+});
+
+test("Penetrations: polygon detection, rotation, vertex editing and manual concave tracing", async ({ page, networkGuard }, testInfo) => {
+  test.setTimeout(120_000);
+  const api = await mockRoi(page, true);
+  await enterPenetrations(page);
+  await page.getByRole("button", { name: "Detect penetrations", exact: true }).click();
+  const shape = page.getByTestId("penetration-shape-child-2-1");
+  await expect(shape).toBeVisible();
+  expect(api.requests[1].scopes).toHaveLength(2);
+  expect(api.requests[1].vector_segments!.length).toBeGreaterThan(0);
+  const original = (await shape.getAttribute("points"))!;
+  const editVertices = page.getByRole("button", { name: "Edit vertices", exact: true });
+  await editVertices.click();
+  const firstCorner = page.getByRole("button", { name: "Move Penetration 1 vertex 1", exact: true });
+  const secondCorner = page.getByRole("button", { name: "Move Penetration 1 vertex 2", exact: true });
+  const selectedColor = "rgb(236, 19, 19)"; // The app's primary red, independent of toolbar transitions.
+  // Use actual mouse and keyboard focus; locator.press would hide a broken click-to-focus path.
+  await firstCorner.click();
+  await expect(firstCorner).toBeFocused();
+  await expect(firstCorner).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(firstCorner).toHaveCSS("border-color", selectedColor);
+  await expect(firstCorner).toHaveCSS("border-width", "1px");
+  await expect(firstCorner).toHaveCSS("box-shadow", "none");
+  await expect(firstCorner).toHaveCSS("z-index", "30");
+  await expect(page.getByRole("button", { name: "Add Penetration 1 vertex after 1", exact: true })).toHaveCSS("z-index", "10");
+  await expect(shape).toHaveAttribute("points", original);
+  await page.screenshot({ path: testInfo.outputPath("selected-penetration-corner.png"), fullPage: true });
+  await page.keyboard.press("Tab"); // Midpoint insertion handle.
+  await expect(firstCorner).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await page.keyboard.press("Tab"); // Next square corner.
+  await expect(secondCorner).toBeFocused();
+  await expect(secondCorner).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(secondCorner).toHaveCSS("border-color", selectedColor);
+  await expect(secondCorner).toHaveCSS("border-width", "1px");
+  await expect(secondCorner).toHaveCSS("box-shadow", "none");
+  await editVertices.click();
+  await expect(firstCorner).toHaveCount(0);
+  await page.getByRole("button", { name: "Add opening", exact: true }).click();
+  const opening = page.getByTestId("opening-mask-penetration:child-2-1:0");
+  await expect(opening).toBeAttached();
+  const originalOpening = (await opening.getAttribute("points"))!;
+  const grip = (await page.getByRole("button", { name: "Rotate Penetration 1", exact: true }).boundingBox())!;
+  const plan = (await page.getByTestId("roi-source-canvas").boundingBox())!;
+  const sourceSize = api.uploads[api.uploads.length - 1].context;
+  const vertices = original.split(" ").map(point => point.split(",").map(Number));
+  const pivot = {
+    x: plan.x + (Math.min(...vertices.map(point => point[0])) + Math.max(...vertices.map(point => point[0]))) / 2 / sourceSize.source_width * plan.width,
+    y: plan.y + (Math.min(...vertices.map(point => point[1])) + Math.max(...vertices.map(point => point[1]))) / 2 / sourceSize.source_height * plan.height,
+  };
+  const start = { x: grip.x + grip.width / 2, y: grip.y + grip.height / 2 }, radians = 18 * Math.PI / 180;
+  const end = { x: pivot.x + (start.x - pivot.x) * Math.cos(radians) - (start.y - pivot.y) * Math.sin(radians),
+    y: pivot.y + (start.x - pivot.x) * Math.sin(radians) + (start.y - pivot.y) * Math.cos(radians) };
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
+  await expect(shape).not.toHaveAttribute("points", original);
+  await expect(opening).not.toHaveAttribute("points", originalOpening);
+  await page.getByRole("button", { name: "Undo review edit", exact: true }).click();
+  await expect(shape).toHaveAttribute("points", original);
+  await expect(opening).toHaveAttribute("points", originalOpening);
+  await page.getByRole("button", { name: "Edit vertices", exact: true }).click();
+  await page.getByRole("button", { name: "Add Penetration 1 vertex after 1", exact: true }).click();
+  expect((await shape.getAttribute("points"))!.split(" ")).toHaveLength(5);
+  await secondCorner.click();
+  await expect(secondCorner).toBeFocused();
+  await expect(secondCorner).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(secondCorner).toHaveCSS("border-color", selectedColor);
+  await expect(secondCorner).toHaveCSS("border-width", "1px");
+  await expect(secondCorner).toHaveCSS("box-shadow", "none");
+  await page.keyboard.press("Delete");
+  expect((await shape.getAttribute("points"))!.split(" ")).toHaveLength(4);
+
+  await page.getByLabel("Opening shape", { exact: true }).selectOption("polygon");
+  await page.getByRole("button", { name: "Manual penetration", exact: true }).click();
+  const source = (await page.getByTestId("roi-source-canvas").boundingBox())!;
+  await page.keyboard.down("Alt");
+  for (const [x, y] of [[.13, .55], [.20, .55], [.20, .64], [.17, .61], [.13, .65]]) {
+    await page.mouse.click(source.x + source.width * x, source.y + source.height * y);
+  }
+  await page.keyboard.up("Alt");
+  await page.getByRole("button", { name: "Finish polygon", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Add opening", exact: true })).toBeDisabled();
+  await page.getByText("Edit type, roof area and coordinates", { exact: true }).click();
+  await page.getByRole("combobox", { name: "Parent roof area", exact: true }).selectOption("roof-1-1", { timeout: 10_000 });
+  await page.getByRole("combobox", { name: "Subtype", exact: true }).selectOption("other_upstand");
+  await page.getByRole("button", { name: "Apply correction", exact: true }).click();
+  await page.getByRole("button", { name: "Add opening", exact: true }).click();
+  const manual = page.getByRole("button", { name: "Penetration 3: accepted", exact: true });
+  expect((await manual.getAttribute("points"))!.split(" ")).toHaveLength(5);
+  await page.getByRole("button", { name: "Edit vertices", exact: true }).click();
+  await page.screenshot({ path: testInfo.outputPath("polygon-penetration-review-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("polygon-penetration-review-mobile.png"), fullPage: true });
+  expect(networkGuard.submissions).toEqual([]);
+});
+
+test("Penetrations: warns before leaving accepted openings needing confirmation after outline corrections", async ({ page, networkGuard }, testInfo) => {
+  test.setTimeout(120_000);
+  await mockRoi(page, true);
+  await enterPenetrations(page);
+  await page.getByRole("button", { name: "Detect penetrations", exact: true }).click();
+  const list = page.getByRole("list", { name: "Penetrations", exact: true });
+  for (const index of [1, 2]) {
+    await list.getByRole("button", { name: new RegExp(`Penetration ${index} `) }).click();
+    await page.getByRole("button", { name: "Add opening", exact: true }).click();
+  }
+  await page.getByRole("button", { name: "Previous", exact: true }).click();
+  await page.getByRole("button", { name: "Adjust", exact: true }).click();
+  const accepted = page.getByTestId("accepted-outline-overlay");
+  const outline = accepted.locator("[data-accepted-outline]").first();
+  const before = (await outline.getAttribute("points"))!;
+  const corner = (await accepted.locator("[data-outline-vertex]").first().boundingBox())!;
+  const start = { x: corner.x + corner.width / 2, y: corner.y + corner.height / 2 };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 8, start.y + 6, { steps: 5 });
+  await page.mouse.up();
+  await expect(outline).not.toHaveAttribute("points", before);
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Confirm opening", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  const warning = page.getByRole("alertdialog", { name: "Accepted openings need confirmation" });
+  await expect(warning).toContainText("2 previously accepted openings need confirmation.");
+  await expect(warning).toContainText("excluded from the final drawing and export");
+  await expect(warning.getByRole("listitem")).toHaveCount(2);
+  await expect(warning.getByRole("button", { name: "Review openings", exact: true })).toBeFocused();
+  await page.screenshot({ path: testInfo.outputPath("penetration-confirmation-warning-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: testInfo.outputPath("penetration-confirmation-warning-mobile.png"), fullPage: true });
+  await warning.getByRole("button", { name: "Review openings", exact: true }).click();
+  await expect(warning).not.toBeVisible();
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.getByRole("button", { name: "Confirm opening", exact: true }).click();
+  await list.getByRole("button", { name: /Penetration 2 / }).click();
+  await page.getByRole("button", { name: "Confirm opening", exact: true }).click();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Upload Another PDF", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Penetration annotation summary" }).getByText(/accepted \/ Current/)).toHaveCount(2);
+  expect(networkGuard.submissions).toEqual([]);
+});
+
 test("Penetrations: conditioned boxes, nonrectangular exclusions, corrections, reruns and summary", async ({ page, networkGuard }, testInfo) => {
   test.setTimeout(120_000);
   const api = await mockRoi(page);
@@ -194,7 +436,8 @@ test("Penetrations: conditioned boxes, nonrectangular exclusions, corrections, r
   expect(api.requests[1].accepted_rois.map((parent) => parent.id)).toEqual(["roof-1-1", "roof-1-2"]);
   expect(api.requests[1].roi_revision).toBeGreaterThan(0);
   expect(api.requests[1].geometry_revision).toBeGreaterThan(0);
-  expect(api.uploads[0].bytes.equals(api.uploads[1].bytes)).toBe(true);
+  expect(api.uploads).toHaveLength(1);
+  expect(api.requests[1].source_image_hash).toBe(api.uploads[0].context.source_image_hash);
   const list = page.getByRole("list", { name: "Penetrations", exact: true });
   await list.getByRole("button", { name: /Penetration 1 / }).click();
   await page.getByRole("button", { name: "Add opening", exact: true }).click();
@@ -381,7 +624,8 @@ test("ROI review: independent boxes, source alignment, correction, undo, rerun a
   await expect(page.getByTestId("annotation-box-roof-2-1")).toBeVisible();
   await expect(first).toHaveAttribute("data-box", corrected);
   await expect(first).toHaveAttribute("data-status", "accepted");
-  expect(api.uploads[0].bytes.equals(api.uploads[1].bytes)).toBe(true);
+  expect(api.uploads).toHaveLength(1);
+  expect(api.requests[1].source_image_hash).toBe(api.uploads[0].context.source_image_hash);
   await continueManually(page).click();
   await expect(page.getByRole("button", { name: "Select", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Next", exact: true })).toBeDisabled();

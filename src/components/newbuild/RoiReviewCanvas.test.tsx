@@ -1,5 +1,5 @@
 import { useReducer, useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockCanvasContext } from "@/test/canvas";
@@ -21,6 +21,7 @@ function Editor({ canvas }: { canvas: HTMLCanvasElement }) {
       detection={{ busy: false, restarting: false, cancel: vi.fn(), detect: vi.fn(), feedback: undefined }} />
     <RoiReviewCanvas kind="penetration" page={page} pdfCanvas={canvas} annotations={annotations}
       selectedId={selected} adding={adding} onSelect={select} onAddingChange={setAdding}
+      onUndoReview={() => dispatch({ type: "undo", page_id: "page-1" })}
       onEdit={(id, box_2d) => dispatch({ type: "review", page_id: "page-1", id, patch: { box_2d } })}
       onAdd={box_2d => {
         dispatch({ type: "add", page_id: "page-1", annotation: syntheticAnnotation("manual", {
@@ -71,6 +72,10 @@ afterEach(() => {
 describe("penetration opening gestures", () => {
   it("previews and commits move/resize at zoom with Undo, and cancels unfinished drags", async () => {
     const { frame, pointer, opening, box, user } = setup();
+    expect(within(screen.getByRole("group", { name: "Penetration tools" }))
+      .getByRole("button", { name: "Undo review edit" })).toBeEnabled();
+    expect(within(screen.getByRole("region", { name: "Penetration recommendations" }))
+      .queryByRole("button", { name: "Undo review edit" })).not.toBeInTheDocument();
     expect(opening()).not.toBeInTheDocument();
     expect(screen.getByTestId("annotation-box-rooflight")).toHaveClass("border-dashed");
     await user.click(screen.getByRole("button", { name: "Add opening" }));

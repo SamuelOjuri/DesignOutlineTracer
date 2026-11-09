@@ -16,7 +16,7 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
         parents = [AcceptedRoi(id="roof-b", revision=3, box_2d=[100.5, 600, 400, 900]),
                    AcceptedRoi(id="roof-a", revision=2, box_2d=[100, 100, 500, 400])]
         prompt = make_prompt("penetration", parents, 25)
-        self.assertEqual(PROMPT_VERSIONS["penetration"], "penetration-v1")
+        self.assertEqual(PROMPT_VERSIONS["penetration"], "penetration-v2")
         for instruction in ("unannotated full-page", "actual object/symbol extents", "out-of-scope objects",
                             "empty portions of a nonrectangular roof's box", "Do not infer physical",
                             "[ymin, xmin, ymax, xmax]", "Return at most 25 objects."):
@@ -26,8 +26,8 @@ class GeminiTests(unittest.IsolatedAsyncioTestCase):
         schema = response_schema("penetration", parents, 25)
         self.assertEqual(schema["items"]["properties"]["roi_id"]["enum"], ["roof-a", "roof-b"])
         self.assertEqual(set(schema["items"]["properties"]["subtype"]["enum"]),
-                         {"rooflight", "vent", "flue", "access_hatch"})
-        self.assertEqual(set(schema["items"]["required"]), {"label", "box_2d", "roi_id", "subtype"})
+                         {"rooflight", "vent", "flue", "access_hatch", "riser", "lift_overrun", "other_upstand", "unknown"})
+        self.assertEqual(set(schema["items"]["required"]), {"label", "box_2d", "roi_id", "subtype", "footprint"})
 
     async def make_call(self, payload=None, status=200, structured=False, max_bytes=262144, chunks=None,
                         model="gemini-4-argon", thinking_level="medium", temperature=0.5, json_mode=True):

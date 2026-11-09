@@ -1,5 +1,6 @@
 import polygonClipping, { type MultiPolygon, type Polygon } from "polygon-clipping";
 import type { Box2D, PageSession, RoiAnnotation } from "@/types/roi";
+import { penetrationBoundary, validPenetrationRing } from "./penetrationGeometry";
 
 const { difference, intersection, union } = polygonClipping;
 
@@ -28,7 +29,10 @@ export function penetrationAssociationWarnings(annotation: RoiAnnotation, page: 
   const parent = parents.find((candidate) => candidate.id === annotation.roi_id);
   if (!parent) return ["Association unresolved: select an accepted current roof area."];
   const warnings: string[] = [];
-  const box = rectangle(annotation.box_2d);
+  const size = { width: page.source.source_width, height: page.source.source_height };
+  const boundary = penetrationBoundary(annotation, size);
+  if (!validPenetrationRing(boundary, size)) return ["The opening boundary is invalid; trace a simple polygon inside the page."];
+  const box: Polygon = [boundary.map(point => [point.x / size.width * 1000, point.y / size.height * 1000])];
   const boxArea = area([box]);
   const parentOverlap = area(intersection(box, rectangle(parent.box_2d)));
   if (parentOverlap < boxArea - 1e-8) warnings.push(parentOverlap === 0

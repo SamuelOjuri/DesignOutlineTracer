@@ -120,7 +120,8 @@ def parse_proposals(
         fields = {"label", "box_2d"}
         if task != "roof_roi":
             fields |= {"roi_id", "subtype"}
-        if not isinstance(record, dict) or set(record) != fields:
+        optional = {"footprint"} if task == "penetration" else set()
+        if not isinstance(record, dict) or not fields <= set(record) or set(record) - fields - optional:
             raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.ANNOTATION_FIELDS)
         try:
             Geometry.model_validate({"box_2d": record["box_2d"]})
@@ -134,5 +135,12 @@ def parse_proposals(
             proposal = Proposal.model_validate(record)
         except ValidationError:
             raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.ANNOTATION_LABEL) from None
+        if proposal.footprint is not None:
+            from .penetration_geometry import valid_ring
+            points = [(point.x, point.y) for point in proposal.footprint]
+            if (any(x > 1000 or y > 1000 for x, y in points) or not valid_ring(points)
+                    or any(not proposal.box_2d[1] - .5 <= x <= proposal.box_2d[3] + .5
+                           or not proposal.box_2d[0] - .5 <= y <= proposal.box_2d[2] + .5 for x, y in points)):
+                raise RoiError("malformed_output", 502, diagnostic=OutputDiagnostic.ANNOTATION_GEOMETRY)
         proposals.append(proposal)
     return proposals

@@ -40,6 +40,69 @@ function setup() {
 }
 
 describe("outlet effective scope", () => {
+  it("preserves accepted openings, outlets and pending requests when an edge gains a collinear handle, including Undo", () => {
+    const { page, dispatch, receive, accept, start } = setup();
+    dispatch({ type: "add", page_id: "page-1", annotation: syntheticAnnotation("opening", {
+      kind: "penetration", subtype: "rooflight", roi_id: "roi-1", box_2d: [500, 450, 550, 475],
+      proposed_box_2d: [500, 450, 550, 475],
+    }) });
+    receive(); accept();
+    const outletRequest = start();
+    const penetrationRequest = { page_id: "page-1", request_id: "pending-penetration", task: "penetration" as const,
+      source_image_hash: page().source.source_image_hash, roi_revision: page().roi_revision,
+      geometry_revision: page().geometry_revision };
+    dispatch({ type: "start", request: penetrationRequest });
+    const originalDrawing = page().drawing;
+    const originalAnnotations = page().annotations;
+    const signature = outletScopeSignature(page());
+    const revision = page().geometry_revision;
+    const [outline] = originalDrawing.outlines, [hole] = originalDrawing.holes;
+    const splitDrawing = { ...originalDrawing,
+      outlines: [{ ...outline, points: [outline.points[0], { x: 250, y: 100 }, ...outline.points.slice(1)] }],
+      holes: [{ ...hole, points: [hole.points[0], { x: 335, y: 250 }, ...hole.points.slice(1)] }],
+      drainage_edges: [{ outline_id: outline.id, edge_index: 0 }, { outline_id: outline.id, edge_index: 1 }],
+    };
+    dispatch({ type: "drawing", page_id: "page-1", drawing: splitDrawing });
+    expect(page().drawing.outlines[0].points).toHaveLength(outline.points.length + 1);
+    expect(page().drawing.holes[0].points).toHaveLength(hole.points.length + 1);
+    expect(page().drawing.drainage_edges).toEqual(splitDrawing.drainage_edges);
+    expect(page().geometry_revision).toBe(revision);
+    expect(page().annotations).toEqual(originalAnnotations);
+    expect(page().pending).toMatchObject({ rainwater_outlet: outletRequest, penetration: penetrationRequest });
+    expect(outletScopeSignature(page())).toBe(signature);
+    expect(activePageOutlets(page())).toHaveLength(1);
+    dispatch({ type: "drawing", page_id: "page-1", drawing: originalDrawing });
+    expect(page().drawing).toEqual(originalDrawing);
+    expect(page().geometry_revision).toBe(revision);
+    expect(page().annotations).toEqual(originalAnnotations);
+    expect(outletScopeSignature(page())).toBe(signature);
+    expect(page().pending).toMatchObject({ rainwater_outlet: outletRequest, penetration: penetrationRequest });
+  });
+
+  it.each(["small bend", "narrow return", "outline ownership", "hole ownership"])("invalidates reviews and pending requests for a real %s change", change => {
+    const { page, dispatch, receive, accept, start } = setup();
+    dispatch({ type: "add", page_id: "page-1", annotation: syntheticAnnotation("opening", {
+      kind: "penetration", subtype: "rooflight", roi_id: "roi-1", box_2d: [500, 450, 550, 475],
+      proposed_box_2d: [500, 450, 550, 475],
+    }) });
+    receive(); accept(); start();
+    const signature = outletScopeSignature(page()), revision = page().geometry_revision;
+    const drawing = page().drawing, [outline] = drawing.outlines, [hole] = drawing.holes;
+    const changed = change === "small bend" ? { ...drawing, outlines: [{ ...outline,
+      points: [outline.points[0], { x: 250, y: 100.00001 }, ...outline.points.slice(1)] }] }
+      : change === "narrow return" ? { ...drawing, outlines: [{ ...outline, points: [outline.points[0],
+        { x: 250, y: 100 }, { x: 250, y: 100.001 }, { x: 250.001, y: 100.001 }, { x: 250.001, y: 100 }, ...outline.points.slice(1)] }] }
+        : change === "outline ownership" ? { ...drawing, outlines: [{ ...outline, roi_id: null }] }
+          : { ...drawing, holes: [{ ...hole, outline_id: "other-outline" }] };
+    dispatch({ type: "drawing", page_id: "page-1", drawing: changed });
+    expect(page().geometry_revision).toBe(revision + 1);
+    expect(outletScopeSignature(page())).not.toBe(signature);
+    expect(page().pending.rainwater_outlet).toBeUndefined();
+    expect(page().annotations.find(annotation => annotation.id === "opening")?.validity).toBe("needs_review");
+    expect(page().annotations.find(annotation => annotation.id === "outlet-1")?.validity).toBe("needs_review");
+    expect(activePageOutlets(page())).toEqual([]);
+  });
+
   it("uses the concave scope minus manual and accepted penetration openings; accepts the exterior boundary", () => {
     const { page, candidate, dispatch } = setup();
     expect(outletScopes(page())).toHaveLength(1);

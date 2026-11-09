@@ -1,12 +1,12 @@
 import { useRef, useEffect, useState, useCallback, useId, useMemo } from "react";
 import { Point } from "@/types/roof";
 import { floodFill, floodFillPreview, eraseFill, extractMultipleOutlines, extractInteriorHoles, buildEdgeMap, buildRegionMap } from "@/utils/floodFill";
-import { findClosestEdge, findClosestVertex, findVertexMergeTarget, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, rasterizeOutlinesWithHoles, straightenPolygonSide, type OutlineEditResult } from "@/utils/polygonAdjust";
+import { findClosestEdge, findClosestVertex, findVertexMergeTarget, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, prepareVertexInsertion, rasterizeOutlinesWithHoles, straightenPolygonSide, type OutlineEditResult } from "@/utils/polygonAdjust";
 import { Button } from "@/components/ui/button";
 import type { Box2D, RoiAnnotation } from "@/types/roi";
 import { buildRoiFillMask } from "@/utils/roiFillMask";
 import { boxToSource } from "@/utils/roiCoordinates";
-import type { RedrawRegion } from "@/utils/polylineRedraw";
+import { snapToVectors, type RedrawRegion, type VectorSnap } from "@/utils/polylineRedraw";
 import { cutoutRectangle, subtractRectangles, type CutoutRectangle } from "@/utils/rectangleCutout";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 import type { OutlineProposal } from "@/types/outline";
@@ -15,7 +15,7 @@ import { AcceptedOutlineOverlay } from "./AcceptedOutlineOverlay";
 import { useSideFit } from "@/hooks/useSideFit";
 import { usePolylineRedraw } from "@/hooks/usePolylineRedraw";
 import type { VectorSegment } from "@/types/outline";
-import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Undo2, RotateCcw, MousePointer, PaintBucket, Scissors, Move, Loader2, RectangleHorizontal, Ruler, Plus } from "lucide-react";
 
 type PaintTool = "fill" | "cutout" | "rectangle-cutout" | "adjust" | "straighten";
 
@@ -26,6 +26,18 @@ interface SelectionSnapshot {
   outlines: Point[][];
   holes: Point[][];
   restoreDrawing?: () => void;
+}
+
+interface VertexInsertion {
+  outlineIndex: number;
+  edgeIndex: number;
+  point: Point;
+  baseOutlines: Point[][];
+}
+
+interface PendingVertexInsertion extends VertexInsertion {
+  context: string;
+  historyLength: number;
 }
 
 interface PaintBucketCanvasProps {
@@ -59,6 +71,11 @@ const PREVIEW_REMOVE_COLOR = [220, 50, 50, 80] as const;
 const PREVIEW_CUTOUT_COLOR = [255, 140, 0, 100] as const;
 const DEFAULT_CUTOUT_SENSITIVITY = 40;
 const DEFAULT_SELECTION_SENSITIVITY = 45;
+const VERTEX_PDF_SNAP_RADIUS = 10;
+const ADJUST_DRAG_THRESHOLD = 2;
+const INSERT_EDGE_LENGTH = 40;
+const INSERT_VERTEX_CLEARANCE = 18;
+const insertionContext = (outlines: Point[][], holes: Point[][], openings: Point[][]) => JSON.stringify([outlines, holes, openings]);
 
 export const PaintBucketCanvas = ({
   pdfCanvas,
@@ -129,6 +146,7 @@ export const PaintBucketCanvas = ({
   const [hoveredEdge, setHoveredEdge] = useState<{ outlineIndex: number; edgeIndex: number } | null>(null);
   const [hoveredVertex, setHoveredVertex] = useState<{ outlineIndex: number; vertexIndex: number } | null>(null);
   const [, setAdjustmentVersion] = useState(0);
+  const pendingInsertion = useRef<PendingVertexInsertion | null>(null);
   const adjustDragRef = useRef<{
     type: "edge" | "vertex";
     outlineIndex: number;
@@ -142,6 +160,11 @@ export const PaintBucketCanvas = ({
     previewEdit: OutlineEditResult | null;
     previewMask: Uint8Array | null;
     mergeTarget: Point | null;
+    pdfSnap: VectorSnap | null;
+    insertion?: VertexInsertion;
+    creating?: boolean;
+    coalesce?: boolean;
+    context?: string;
   } | null>(null);
   const interiorHolesRef = useRef<Point[][]>([]);
   const sourceGeometry = useRef({ roofOutlines, interiorHoles });
@@ -151,6 +174,7 @@ export const PaintBucketCanvas = ({
   }, [roofOutlines, interiorHoles]);
 
   const saveHistory = useCallback((mask = filledMaskRef.current) => {
+    pendingInsertion.current = null;
     maskHistoryRef.current.push({
       mask: mask?.length ? new Uint8Array(mask) : null,
       cutoutMask: cutoutMaskRef.current ? new Uint8Array(cutoutMaskRef.current) : null,
@@ -219,6 +243,7 @@ export const PaintBucketCanvas = ({
       ? rasterizeOutlinesWithHoles(manual.interiorHoles, [], canvas.width, canvas.height) : null;
     interiorHolesRef.current = manual.interiorHoles.map((hole) => hole.map((point) => ({ ...point })));
     maskHistoryRef.current = [];
+    pendingInsertion.current = null;
     rectangleCutsRef.current = [];
     rectangleDragRef.current = null;
     setFillCount(manual.roofOutlines.length ? 1 : 0);
@@ -283,7 +308,14 @@ export const PaintBucketCanvas = ({
     outlines: adjustDragRef.current?.previewEdit?.outlines ?? roofOutlines,
     holes: adjustDragRef.current?.previewEdit?.holes ?? interiorHoles,
     mergeTarget: adjustDragRef.current?.mergeTarget ?? null,
+    pdfSnap: adjustDragRef.current?.pdfSnap ?? null,
   };
+  const pending = pendingInsertion.current;
+  const liveInsertion = pending && pending.context === insertionContext(roofOutlines, interiorHoles, penetrationHoles)
+    && pending.historyLength === maskHistoryRef.current.length ? pending : null;
+  const insertedVertex = adjustDragRef.current?.insertion && adjustDragRef.current.previewEdit ? {
+    outlineIndex: adjustDragRef.current.outlineIndex, vertexIndex: adjustDragRef.current.insertion.edgeIndex + 1,
+  } : liveInsertion ? { outlineIndex: liveInsertion.outlineIndex, vertexIndex: liveInsertion.edgeIndex + 1 } : null;
 
   // --- Preview logic ---
   const clearPreview = useCallback(() => {
@@ -378,7 +410,7 @@ export const PaintBucketCanvas = ({
     });
   }, [activeTool, cutoutSensitivity, selectionSensitivity, clearPreview, renderPreviewMask]);
 
-  const getCanvasPos = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const getCanvasPos = useCallback((e: Pick<React.MouseEvent, "clientX" | "clientY">) => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
@@ -618,13 +650,13 @@ export const PaintBucketCanvas = ({
     ctx.setLineDash([]);
   }, [getRegionsInRect, buildRegionPreviewMask]);
 
-  const commitAdjustment = useCallback((edit: OutlineEditResult, mask?: Uint8Array | null) => {
+  const commitAdjustment = useCallback((edit: OutlineEditResult, mask?: Uint8Array | null, coalesce = false) => {
     const canvas = canvasRef.current;
     if (!canvas || edit.error) { setSelectionMessage(edit.error); return; }
     const previous = sourceGeometry.current;
     const holesChanged = JSON.stringify(edit.holes) !== JSON.stringify(interiorHolesRef.current);
     if (!holesChanged && JSON.stringify(edit.outlines) === JSON.stringify(previous.roofOutlines)) return;
-    saveHistory();
+    if (!coalesce) saveHistory();
     filledMaskRef.current = mask ?? rasterizeOutlinesWithHoles(edit.outlines, edit.holes, canvas.width, canvas.height);
     if (holesChanged) {
       const previousHoleMask = rasterizeOutlinesWithHoles(interiorHolesRef.current, [], canvas.width, canvas.height);
@@ -645,7 +677,7 @@ export const PaintBucketCanvas = ({
     if (edit.edgeRemap) onOutlinesExtracted(edit.outlines, edit.editedOutlineIndex, edit.edgeRemap);
     else onOutlinesExtracted(edit.outlines, edit.editedOutlineIndex);
     if (holesChanged) onHolesExtracted?.(edit.holes);
-    setFillCount(count => count + 1);
+    setFillCount(count => count + (coalesce ? 0 : 1));
     setSelectionMessage(edit.repaired ? "Existing boundary defects repaired." : null);
   }, [saveHistory, onOutlinesExtracted, onHolesExtracted]);
 
@@ -664,6 +696,7 @@ export const PaintBucketCanvas = ({
     source: pdfCanvas, scale: displayScale, onCommit: commitAdjustment,
     onActivate: () => {
       cancelAdjustment();
+      pendingInsertion.current = null;
       polylineRedraw.cancel();
       setHoveredEdge(null);
       setHoveredVertex(null);
@@ -682,6 +715,7 @@ export const PaintBucketCanvas = ({
     commitBlocked: outlineGeneration ? REDRAW_BLOCKED[outlineGeneration] : null, pendingRegions: pendingRedrawRegions,
     onActivate: () => {
       cancelAdjustment();
+      pendingInsertion.current = null;
       sideFit.cancel();
       setHoveredEdge(null);
       setHoveredVertex(null);
@@ -691,6 +725,7 @@ export const PaintBucketCanvas = ({
 
   const selectTool = (tool: PaintTool) => {
     cancelAdjustment();
+    pendingInsertion.current = null;
     sideFit.cancel();
     polylineRedraw.cancel();
     setHoveredEdge(null);
@@ -727,17 +762,54 @@ export const PaintBucketCanvas = ({
     const vertex = activeTool === "adjust" ? findClosestVertex(position.x, position.y, roofOutlines, 10 / displayScale) : null;
     const edge = vertex ? null : findClosestEdge(position.x, position.y, roofOutlines, 12 / displayScale);
     const outlineIndex = vertex?.outlineIndex ?? edge?.outlineIndex;
-    if (outlineIndex === undefined) return;
+    if (outlineIndex === undefined) { pendingInsertion.current = null; setAdjustmentVersion(version => version + 1); return; }
+    const insertion = liveInsertion && vertex?.outlineIndex === liveInsertion.outlineIndex
+      && vertex.vertexIndex === liveInsertion.edgeIndex + 1 ? liveInsertion : undefined;
+    if (!insertion) pendingInsertion.current = null;
     adjustDragRef.current = {
       type: vertex ? "vertex" : "edge", outlineIndex,
       vertexIndex: vertex?.vertexIndex, edgeIndex: edge?.edgeIndex,
       startX: position.x, startY: position.y, pointerId: event.pointerId,
       originalOutlines: roofOutlines.map(outline => outline.map(point => ({ ...point }))),
       originalHoles: interiorHolesRef.current.map(hole => hole.map(point => ({ ...point }))),
-      previewEdit: null, previewMask: null, mergeTarget: null,
+      previewEdit: null, previewMask: null, mergeTarget: null, pdfSnap: null,
+      ...(insertion ? { insertion, coalesce: true, context: insertionContext(roofOutlines, interiorHoles, penetrationHoles) } : {}),
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
+  };
+
+  const beginInsertion = (target: VertexInsertion, event?: React.PointerEvent<HTMLButtonElement>) => {
+    if (activeTool !== "adjust" || isInitializing || outlineGeneration || adjustDragRef.current) return;
+    const edit = prepareVertexInsertion(roofOutlines, interiorHolesRef.current, penetrationHoles,
+      target.outlineIndex, target.edgeIndex, target.point, pdfCanvas);
+    if (edit.error) { setSelectionMessage(edit.error); return; }
+    if (!event) {
+      commitAdjustment(edit);
+      pendingInsertion.current = { ...target, context: insertionContext(edit.outlines, edit.holes, penetrationHoles),
+        historyLength: maskHistoryRef.current.length };
+      setHoveredEdge(null); setHoveredVertex(null);
+      setSelectionMessage("Drag the new vertex to place it. Insertion and its first move share one Undo.");
+      setAdjustmentVersion(version => version + 1);
+      return;
+    }
+    if (event.button !== 0) return;
+    const position = getCanvasPos(event);
+    if (!position) return;
+    event.preventDefault(); event.stopPropagation();
+    pendingInsertion.current = null;
+    adjustDragRef.current = {
+      type: "vertex", outlineIndex: target.outlineIndex, vertexIndex: target.edgeIndex + 1,
+      startX: position.x, startY: position.y, pointerId: event.pointerId,
+      originalOutlines: edit.outlines, originalHoles: edit.holes,
+      previewEdit: edit, previewMask: null, mergeTarget: null, pdfSnap: null,
+      insertion: target, creating: true, context: insertionContext(roofOutlines, interiorHoles, penetrationHoles),
+    };
+    // The handle disappears during placement; keep capture on the stable interaction canvas.
+    previewCanvasRef.current?.setPointerCapture(event.pointerId);
+    setHoveredEdge(null); setHoveredVertex(null);
+    setSelectionMessage("Drag to place the new vertex; release to add it. Esc cancels.");
+    setAdjustmentVersion(version => version + 1);
   };
 
   const previewAdjustment = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -745,11 +817,41 @@ export const PaintBucketCanvas = ({
     const position = getCanvasPos(event);
     const canvas = canvasRef.current;
     if (!drag || drag.pointerId !== event.pointerId || !position || !canvas) return;
+    if (drag.insertion && drag.context !== insertionContext(roofOutlines, interiorHoles, penetrationHoles)) {
+      cancelAdjustment();
+      setSelectionMessage("The drawing changed during placement. Add the vertex again.");
+      return;
+    }
+    // Grabbing a corner must not move it onto a nearby PDF point before a drag starts.
+    if (drag.type === "vertex" && Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale < ADJUST_DRAG_THRESHOLD) {
+      drag.previewEdit = drag.creating && drag.insertion
+        ? prepareVertexInsertion(drag.insertion.baseOutlines, drag.originalHoles, penetrationHoles,
+          drag.outlineIndex, drag.insertion.edgeIndex, drag.insertion.point, pdfCanvas) : null;
+      drag.previewMask = null;
+      drag.mergeTarget = null;
+      drag.pdfSnap = null;
+      setSelectionMessage(null);
+      setAdjustmentVersion(version => version + 1);
+      return;
+    }
     const original = drag.originalOutlines[drag.outlineIndex];
     const prepare = (candidate: Point[], edgeMove = false): OutlineEditResult => {
       if (candidate.some(point => point.x < 0 || point.y < 0 || point.x > canvas.width || point.y > canvas.height)) {
         return { outlines: drag.originalOutlines, holes: drag.originalHoles, repaired: false,
           error: "Edit blocked: the boundary would extend outside the drawing page." };
+      }
+      if (drag.insertion) {
+        const edit = prepareVertexInsertion(drag.insertion.baseOutlines, drag.originalHoles, penetrationHoles,
+          drag.outlineIndex, drag.insertion.edgeIndex, drag.insertion.point, pdfCanvas, candidate[drag.vertexIndex!]);
+        if (drag.coalesce && edit.edgeRemap) {
+          // The saved drawing already has the split: remap from its two sides, not the unsplit base.
+          const changedSide = edit.edgeRemap[drag.insertion.edgeIndex].length === 0;
+          // Both saved halves already inherited the original marking. Keep each
+          // once when sliding along the side, and drop both if its shape changes.
+          edit.edgeRemap = original.map((_, index) => changedSide
+            && (index === drag.insertion!.edgeIndex || index === drag.insertion!.edgeIndex + 1) ? [] : [index]);
+        }
+        return edit;
       }
       return edgeMove
         ? prepareEdgeEdit(drag.originalOutlines, drag.outlineIndex, drag.edgeIndex!,
@@ -758,15 +860,21 @@ export const PaintBucketCanvas = ({
     };
     let candidate: Point[] | null;
     drag.mergeTarget = null;
+    drag.pdfSnap = null;
     if (activeTool === "straighten") {
       candidate = straightenPolygonSide(original, drag.edgeIndex!);
     } else if (drag.type === "vertex") {
       const vertexIndex = drag.vertexIndex!;
-      let destination = {
-        x: Math.round(original[vertexIndex].x + position.x - drag.startX),
-        y: Math.round(original[vertexIndex].y + position.y - drag.startY),
+      // Snap the vertex's destination, retaining the offset where its handle was grabbed.
+      const movedPosition = {
+        x: original[vertexIndex].x + position.x - drag.startX,
+        y: original[vertexIndex].y + position.y - drag.startY,
       };
-      const target = event.shiftKey ? null : findVertexMergeTarget(original, vertexIndex, destination, 8 / displayScale);
+      let destination = {
+        x: Math.round(movedPosition.x),
+        y: Math.round(movedPosition.y),
+      };
+      const target = drag.insertion || event.shiftKey || event.altKey ? null : findVertexMergeTarget(original, vertexIndex, destination, 8 / displayScale);
       if (target !== null) {
         candidate = mergePolygonVertex(original, vertexIndex, target);
         if (candidate) drag.mergeTarget = original[target];
@@ -786,6 +894,9 @@ export const PaintBucketCanvas = ({
             setAdjustmentVersion(version => version + 1);
             return;
           }
+        } else if (!event.altKey) {
+          drag.pdfSnap = snapToVectors(movedPosition, vectorSegments, VERTEX_PDF_SNAP_RADIUS / displayScale);
+          if (drag.pdfSnap) destination = drag.pdfSnap.point;
         }
         candidate = moved(destination);
       }
@@ -797,11 +908,14 @@ export const PaintBucketCanvas = ({
       drag.previewEdit = null;
       drag.previewMask = null;
       drag.mergeTarget = null;
+      drag.pdfSnap = null;
       setSelectionMessage(edit?.error ?? "This side is not close enough to horizontal or vertical.");
     } else {
       drag.previewEdit = edit;
       drag.previewMask = rasterizeOutlinesWithHoles(edit.outlines, edit.holes, canvas.width, canvas.height);
-      setSelectionMessage(drag.mergeTarget ? "Merge vertex" : edit.repaired ? "Existing boundary defects will be repaired." : null);
+      const targetMessage = drag.mergeTarget ? "Merge vertex" : drag.pdfSnap ? `PDF ${drag.pdfSnap.kind}` : null;
+      setSelectionMessage([targetMessage, edit.repaired ? "Existing boundary defects will be repaired." : null]
+        .filter(Boolean).join(". ") || null);
     }
     setAdjustmentVersion(version => version + 1);
   };
@@ -821,12 +935,20 @@ export const PaintBucketCanvas = ({
     if (!drag || drag.pointerId !== event.pointerId) return;
     const position = getCanvasPos(event);
     if (!position) { cancelAdjustment(); return; }
-    const moved = position && Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale >= 2;
-    if (moved || activeTool === "straighten") previewAdjustment(event);
+    const moved = Math.hypot(position.x - drag.startX, position.y - drag.startY) * displayScale >= ADJUST_DRAG_THRESHOLD;
+    if (moved || activeTool === "straighten" || drag.creating) previewAdjustment(event);
     else { cancelAdjustment(); return; }
+    if (adjustDragRef.current !== drag) return;
     adjustDragRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (drag.previewEdit) commitAdjustment(drag.previewEdit, drag.previewMask);
+    if (drag.previewEdit) {
+      commitAdjustment(drag.previewEdit, drag.previewMask, drag.coalesce);
+      pendingInsertion.current = drag.creating && !moved && drag.insertion ? {
+        ...drag.insertion, context: insertionContext(drag.previewEdit.outlines, drag.previewEdit.holes, penetrationHoles),
+        historyLength: maskHistoryRef.current.length,
+      } : null;
+      if (pendingInsertion.current) setSelectionMessage("Drag the new vertex to place it. Insertion and its first move share one Undo.");
+    }
     setHoveredVertex(null);
     setHoveredEdge(null);
     setAdjustmentVersion(version => version + 1);
@@ -960,7 +1082,8 @@ export const PaintBucketCanvas = ({
     requestAnimationFrame(() => { justDraggedRef.current = false; });
   }, [emitOutlinesAndHoles, clearPreview, redrawCanvas, getRegionsInRect, buildRegionPreviewMask, fillAtPoint, saveHistory]);
 
-  const handleMouseLeave = useCallback(() => {
+  const handleMouseLeave = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (event.relatedTarget instanceof Element && event.relatedTarget.closest("[data-outline-insert-handle]")) return;
     if (rectangleDragRef.current) return; // Pointer capture keeps the rectangle active until release.
     if (adjustDragRef.current) return;
     if (isDraggingRef.current) handleMouseUp();
@@ -1056,6 +1179,8 @@ export const PaintBucketCanvas = ({
   }, [getCanvasPos, emitOutlinesAndHoles, activeTool, cutoutSensitivity, clearPreview, isInitializing, saveHistory]);
 
   const handleUndo = useCallback(() => {
+    cancelAdjustment();
+    pendingInsertion.current = null;
     if (maskHistoryRef.current.length === 0) return;
     const previous = maskHistoryRef.current.pop()!;
     filledMaskRef.current = previous.mask;
@@ -1070,9 +1195,11 @@ export const PaintBucketCanvas = ({
     }
     setSelectionMessage(null);
     clearPreview();
-  }, [onOutlinesExtracted, onHolesExtracted, clearPreview]);
+  }, [onOutlinesExtracted, onHolesExtracted, clearPreview, cancelAdjustment]);
 
   const handleReset = useCallback(() => {
+    cancelAdjustment();
+    pendingInsertion.current = null;
     filledMaskRef.current = null;
     cutoutMaskRef.current = null;
     rectangleCutsRef.current = [];
@@ -1083,7 +1210,7 @@ export const PaintBucketCanvas = ({
     if (onHolesExtracted) onHolesExtracted([]);
     setSelectionMessage(null);
     clearPreview();
-  }, [onOutlinesExtracted, onHolesExtracted, clearPreview]);
+  }, [onOutlinesExtracted, onHolesExtracted, clearPreview, cancelAdjustment]);
 
   const handleZoomIn = () => setDisplayScale(s => Math.min(s + ZOOM_STEP, MAX_ZOOM));
   const handleZoomOut = () => setDisplayScale(s => Math.max(s - ZOOM_STEP, MIN_ZOOM));
@@ -1100,6 +1227,17 @@ export const PaintBucketCanvas = ({
 
   const hasAnyFill = fillCount > 0;
   const canUndo = maskHistoryRef.current.length > 0;
+  let insertionTarget: VertexInsertion | null = null;
+  if (activeTool === "adjust" && hoveredEdge && !hoveredVertex && !adjustDragRef.current && !sideFit.active && !polylineRedraw.active) {
+    const polygon = roofOutlines[hoveredEdge.outlineIndex];
+    const start = polygon?.[hoveredEdge.edgeIndex], end = polygon?.[(hoveredEdge.edgeIndex + 1) % polygon.length];
+    if (start && end && Math.hypot(end.x - start.x, end.y - start.y) * displayScale >= INSERT_EDGE_LENGTH) {
+      const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+      if (roofOutlines.every(ring => ring.every(point => Math.hypot(point.x - midpoint.x, point.y - midpoint.y) * displayScale >= INSERT_VERTEX_CLEARANCE))) {
+        insertionTarget = { ...hoveredEdge, point: midpoint, baseOutlines: roofOutlines };
+      }
+    }
+  }
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -1144,7 +1282,7 @@ export const PaintBucketCanvas = ({
             variant={isAdjustMode ? "default" : "ghost"}
             size="sm"
             onClick={() => selectTool("adjust")}
-            title="Drag edges or vertices; drop onto a neighbouring vertex to merge. Shift aligns a corner."
+            title="Drag vertices to snap to PDF endpoints, intersections or lines. Alt moves freely; Shift aligns a corner. Drop onto a neighbouring vertex to merge."
             aria-pressed={isAdjustMode}
             className="rounded-none"
             disabled={isInitializing || !hasAnyFill}
@@ -1250,7 +1388,7 @@ export const PaintBucketCanvas = ({
           {sideFit.controls}
           {polylineRedraw.controls}
         </div>
-        {!sideFit.active && !polylineRedraw.active && <p role="status" className="text-sm text-muted-foreground">
+        {!sideFit.active && !polylineRedraw.active && <p role="status" className="text-sm text-muted-foreground min-h-5">
           {selectionMessage ?? (activeTool === "straighten" ? "Click a side to align it horizontally or vertically. Esc returns to dragging." : null)}
         </p>}
       </div> : selectionMessage && <p role="status" className="text-sm text-muted-foreground px-1 mb-2">{selectionMessage}</p>}
@@ -1275,7 +1413,8 @@ export const PaintBucketCanvas = ({
               penetrationHoles={penetrationHoles} width={pdfCanvas.width} height={pdfCanvas.height}
               displayScale={displayScale} showVertices={activeTool === "adjust"}
               hoveredEdge={activeTool === "adjust" || activeTool === "straighten" ? hoveredEdge : null}
-              hoveredVertex={activeTool === "adjust" ? hoveredVertex : null} mergeTarget={displayedGeometry.mergeTarget} />
+              hoveredVertex={activeTool === "adjust" ? hoveredVertex : null} mergeTarget={displayedGeometry.mergeTarget}
+              pdfSnap={displayedGeometry.pdfSnap} selectedVertex={insertedVertex} />
           </div>}
           <canvas
             ref={previewCanvasRef}
@@ -1294,6 +1433,22 @@ export const PaintBucketCanvas = ({
             className={`absolute top-2 left-1/2 -translate-x-1/2 ${activeTool === "adjust" ? "cursor-move" : activeTool === "cutout" || activeTool === "straighten" ? "cursor-pointer" : "cursor-crosshair"}`}
             style={{ pointerEvents: "auto", touchAction: activeTool === "rectangle-cutout" || activeTool === "adjust" || activeTool === "straighten" ? "none" : "auto" }}
           />
+          {insertionTarget && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
+            style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
+            <button type="button" data-testid="outline-insert-vertex" data-outline-insert-handle="true"
+              aria-label="Add vertex on this edge" disabled={Boolean(outlineGeneration)}
+              title={outlineGeneration ? outlineGeneration === "running"
+                ? "Finish or cancel outline generation before adding a vertex."
+                : "Use or discard the generated proposal before adding a vertex."
+                : "Add vertex on this edge. Click then drag the new corner, or drag this handle directly. Zoom in for short edges."}
+              className="absolute w-5 h-5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-sky-800 bg-white/95 text-sky-800 pointer-events-auto cursor-crosshair flex items-center justify-center focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:opacity-50"
+              style={{ left: insertionTarget.point.x * displayScale, top: insertionTarget.point.y * displayScale, touchAction: "none" }}
+              onPointerDown={event => beginInsertion(insertionTarget!, event)}
+              onClick={event => { if (event.detail === 0) beginInsertion(insertionTarget!); }}
+              onMouseLeave={() => { if (!adjustDragRef.current) setHoveredEdge(null); }}>
+              <Plus className="w-3 h-3" aria-hidden="true" />
+            </button>
+          </div>}
           {outlineProposals.length > 0 && <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none"
             style={{ width: pdfCanvas.width * displayScale, height: pdfCanvas.height * displayScale }}>
             <OutlineProposalOverlay proposals={outlineProposals} width={pdfCanvas.width} height={pdfCanvas.height} />
@@ -1315,7 +1470,7 @@ export const PaintBucketCanvas = ({
           {activeTool === "rectangle-cutout"
             ? "Drag to preview a rectangular cut; release to apply. Esc cancels. Undo restores the selection."
             : activeTool === "adjust"
-            ? "Drag edges or vertices to adjust — hold Shift to lock to 90° — right-click edge to delete — Ctrl + scroll to zoom"
+            ? `Hover an edge for + to add a vertex; zoom in for short edges — drag edges or vertices${vectorSegments.length ? " — vertices snap to PDF points and lines" : " — no PDF vector lines available"} — Alt moves freely — Shift locks to 90° — right-click edge to delete — Ctrl + scroll to zoom`
             : activeTool === "fill"
             ? "Hover to preview — click or hold & drag to multi-select areas — click filled area to remove — Ctrl + scroll to zoom"
             : "Hover to preview — click inside a filled area to cut out a section — Ctrl + scroll to zoom"}

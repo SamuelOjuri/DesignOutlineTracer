@@ -1,5 +1,6 @@
 import { useId } from "react";
 import type { Point } from "@/types/roof";
+import type { VectorSnap } from "@/utils/polylineRedraw";
 import { OUTLINE_APPEARANCE } from "@/utils/outlineAppearance";
 
 interface AcceptedOutlineOverlayProps {
@@ -13,12 +14,14 @@ interface AcceptedOutlineOverlayProps {
   hoveredEdge: { outlineIndex: number; edgeIndex: number } | null;
   hoveredVertex: { outlineIndex: number; vertexIndex: number } | null;
   mergeTarget: Point | null;
+  pdfSnap?: VectorSnap | null;
+  selectedVertex?: { outlineIndex: number; vertexIndex: number } | null;
 }
 
 const polygonPoints = (points: readonly Point[]) => points.map(point => `${point.x},${point.y}`).join(" ");
 
 export function AcceptedOutlineOverlay({ outlines, holes, penetrationHoles, width, height, displayScale,
-  showVertices, hoveredEdge, hoveredVertex, mergeTarget }: AcceptedOutlineOverlayProps) {
+  showVertices, hoveredEdge, hoveredVertex, mergeTarget, pdfSnap = null, selectedVertex = null }: AcceptedOutlineOverlayProps) {
   const maskId = useId();
   const scale = Math.max(displayScale, 0.01);
   const openings = [...holes, ...penetrationHoles];
@@ -50,11 +53,24 @@ export function AcceptedOutlineOverlay({ outlines, holes, penetrationHoles, widt
       vectorEffect="non-scaling-stroke" data-testid="outline-hovered-edge" />}
     {showVertices && outlines.flatMap((points, outlineIndex) => points.map((point, vertexIndex) => {
       const hovered = hoveredVertex?.outlineIndex === outlineIndex && hoveredVertex.vertexIndex === vertexIndex;
+      const selected = selectedVertex?.outlineIndex === outlineIndex && selectedVertex.vertexIndex === vertexIndex;
       return <circle key={`${outlineIndex}-${vertexIndex}`} cx={point.x} cy={point.y}
-        r={(hovered ? 4.5 : 3) / scale} fill="white" stroke={OUTLINE_APPEARANCE.stroke} strokeWidth={1.5}
-        vectorEffect="non-scaling-stroke" data-outline-vertex={`${outlineIndex}-${vertexIndex}`} />;
+        r={(selected ? 5 : hovered ? 4.5 : 3) / scale} fill={selected ? "none" : "white"}
+        stroke={selected ? "#ec1313" : OUTLINE_APPEARANCE.stroke} strokeWidth={selected ? 1 : 1.5}
+        vectorEffect="non-scaling-stroke" data-outline-vertex={`${outlineIndex}-${vertexIndex}`}
+        data-selected={selected ? "true" : undefined} />;
     }))}
     {mergeTarget && <circle cx={mergeTarget.x} cy={mergeTarget.y} r={8 / scale} fill="none"
       stroke="#00875a" strokeWidth={2} vectorEffect="non-scaling-stroke" data-testid="outline-merge-target" />}
+    {pdfSnap && <>
+      {pdfSnap.segments.map((segment, index) => <line key={index} x1={segment.start.x} y1={segment.start.y}
+        x2={segment.end.x} y2={segment.end.y} stroke="#0f766e" strokeOpacity={0.7} strokeWidth={2}
+        vectorEffect="non-scaling-stroke" data-testid="adjust-pdf-vector" />)}
+      <circle cx={pdfSnap.point.x} cy={pdfSnap.point.y} r={6 / scale} fill="white"
+        stroke="#0f766e" strokeWidth={2} vectorEffect="non-scaling-stroke"
+        data-testid="adjust-pdf-snap" data-snap={pdfSnap.kind} />
+      <text x={pdfSnap.point.x + 10 / scale} y={pdfSnap.point.y - 10 / scale} fontSize={12 / scale}
+        fill="#134e4a" stroke="white" strokeWidth={3 / scale} paintOrder="stroke" fontWeight={600}>PDF {pdfSnap.kind}</text>
+    </>}
   </svg>;
 }

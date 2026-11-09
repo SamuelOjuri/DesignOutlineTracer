@@ -117,6 +117,9 @@ If either port changes, update the corresponding setting. `localhost` and
 | `ROI_MAX_OUTPUT_TOKENS` | Backend | Thinking and output token budget; defaults to `32768`, with a maximum of `65536`. |
 | `ROI_TIMEOUT_SECONDS` | Backend | Overall detection deadline, including retries; defaults to `900`, with a maximum of `900`. |
 | `ROI_OUTLET_CALL_TIMEOUT_SECONDS` | Backend | Deadline for each outlet-detection model call; a stalled call is abandoned and retried once within `ROI_TIMEOUT_SECONDS`. Defaults to `120`, with a maximum of `900`. |
+| `ROI_PENETRATION_CALL_TIMEOUT_SECONDS` | Backend | Deadline for each penetration model call, excluding provider-slot wait; defaults to `120` seconds. Retries share the overall scan deadline and call budget. |
+| `ROI_PENETRATION_CROP_CONCURRENCY` | Backend | Penetration crops dispatched per wave, from `1` to `8`; defaults to `4`. Queued waves stop at the annotation limit. |
+| `ROI_MAX_PROVIDER_CALLS` | Backend | Shared simultaneous model-call limit across ROI, outline, outlet and penetration operations; defaults to `4`, with a maximum of `16`. |
 | `ROI_PAGE_TTL_SECONDS` | Backend | Uploaded-page lifetime; defaults to `1800` seconds to allow room for long detections. |
 | `ROI_ALLOW_LIVE` | Backend | Set to `true` to permit model requests; defaults to `false` in code. |
 | `GOOGLE_API_KEY` | Backend | Server-side credential required for live detection. |
@@ -210,8 +213,26 @@ and refresh/rebuild the frontend to use the new endpoint and controls.
 In Define Roof Area, **Adjust** moves edges or individual red vertices. Drop a
 vertex onto an adjacent vertex on the same roof to merge them. A green ring marks
 a valid merge target within 8 screen pixels; release removes the dragged vertex.
+Vertex drags also snap to PDF vector endpoints and intersections within 10 screen
+pixels, falling back to the nearest point on a PDF line. A teal marker and label
+identify the target; release applies the move as one Undo action. Hold Alt to move
+freely without PDF snapping or merging. Scanned pages without PDF vectors use
+free movement. Existing outline merge targets take priority over PDF snapping.
 Hold Shift during a vertex drag to align a valid horizontal/vertical corner.
-Shift alignment does not merge vertices or collapse intermediate points.
+Shift alignment takes priority over PDF snapping and does not merge vertices or
+collapse intermediate points. Invalid moves remain blocked.
+
+To add a missing outline corner, hover a blue edge in **Adjust** and use its
+small **+** handle (**Add vertex on this edge**). Click to split the edge at its
+midpoint, then drag the new red-ringed vertex to a PDF endpoint or intersection;
+you can also drag directly from **+**. The insertion and first placement share one
+Undo step. Automatic merging is suppressed during that placement, keeping close
+corners distinct while PDF snapping remains available. Only the hovered edge
+shows a handle, and only with sufficient space: zoom in to edit short edges.
+Existing vertices take priority. A straight edge split preserves drainage marks
+and accepted opening/outlet reviews; a changed boundary retains the usual review
+requirements. Placement cannot cross another roof or change a cutout/opening.
+Esc cancels a live drag; a vertex already added by clicking remains undoable.
 
 **Straighten** is separate: click or tap a near-horizontal or near-vertical side
 to align it, including its intermediate vertices. The side is placed halfway
@@ -310,7 +331,12 @@ Phase 5 extends the enabled sequence to
 `upload -> roi -> paint -> penetrations -> outlets -> details`. Penetration review
 supports parent/subtype corrections, manual additions, scope warnings and explicit
 acceptance. In Step 4, select a detection and **Add opening** to cut it out of the
-insulation scope. Drag its box or corner handles to move or resize the opening;
+insulation scope. Review actions stay pinned above **Previous / Next**, with the
+selected penetration and remaining review count visible while the sidebar scrolls.
+**Add opening & next** accepts it and brings the next unreviewed penetration into
+view, skipping added and rejected items and wrapping at the end. Ordinary
+**Add opening** keeps the current selection and drawing view.
+Drag its box or corner handles to move or resize the opening;
 **Reject**, **Delete** and **Undo** also update the cutout. **Manual penetration**
 supports drawing a new box and then adding it. Openings are clipped to the Step 3
 scope and appear in Steps 3, 5 and 6. Project Details includes their polygons and

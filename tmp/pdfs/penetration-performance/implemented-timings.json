@@ -1,0 +1,104 @@
+{
+  "source": "C:\\Users\\SamuelOjuri\\OneDrive - Tapered Plus\\Documents\\Samsdocs\\Roof Plan Docs\\Example 3 - TP17256\\TP17256_25.01 - A - input.pdf",
+  "renderer": "PyMuPDF scale=2; approximates PDF.js source workload",
+  "raster_size": [
+    4768,
+    3369
+  ],
+  "original_png_bytes": 1465578,
+  "scope": "full page upper-bound example; actual accepted outline unavailable",
+  "crops": 6,
+  "crop_limit_reached": false,
+  "upload_prepare": {
+    "median_seconds": 0.3069,
+    "samples_seconds": [
+      0.3069,
+      0.3099,
+      0.2963
+    ]
+  },
+  "all_crop_prepare": {
+    "median_seconds": 1.8536,
+    "samples_seconds": [
+      1.8897,
+      1.852,
+      1.8536
+    ]
+  },
+  "reused_source_all_crop_prepare_including_decode": {
+    "median_seconds": 1.4119,
+    "samples_seconds": [
+      1.3843,
+      1.4152,
+      1.4119
+    ]
+  },
+  "all_crop_png_metadata_and_fitting_raster_identical": true,
+  "vector_filter_and_fit_25_proposals_30000_segments": {
+    "median_seconds": 0.1758,
+    "samples_seconds": [
+      0.1818,
+      0.1758,
+      0.1686
+    ]
+  },
+  "vector_index_build_30000_segments": {
+    "median_seconds": 0.0485,
+    "samples_seconds": [
+      0.0514,
+      0.0485,
+      0.0428
+    ]
+  },
+  "vector_index_build_plus_fit_25_proposals": {
+    "median_seconds": 0.049,
+    "samples_seconds": [
+      0.0488,
+      0.0985,
+      0.049
+    ]
+  },
+  "prebuilt_vector_index_fit_25_proposals": {
+    "median_seconds": 0.0062,
+    "samples_seconds": [
+      0.0069,
+      0.0056,
+      0.0062
+    ]
+  },
+  "vector_fit_result_identical": true,
+  "local_vectors_fit_25_proposals_4_segments": {
+    "median_seconds": 0.0052,
+    "samples_seconds": [
+      0.0052,
+      0.0061,
+      0.005
+    ]
+  },
+  "mocked_provider_note": "Current scheduler, fixed 0.2-second empty provider result, memory storage, six real PDF crop preparations; not live-model speedup",
+  "mocked_scheduler_serial": {
+    "elapsed_seconds": 2.5851,
+    "peak_provider_calls": 1,
+    "attempts": 6,
+    "completed_crops": 6,
+    "annotations": 0,
+    "status": "no_detections",
+    "warnings": [
+      "penetration_coverage_requires_review",
+      "category_policy_pending_domain_review"
+    ]
+  },
+  "mocked_scheduler_four_workers": {
+    "elapsed_seconds": 1.6799,
+    "peak_provider_calls": 4,
+    "attempts": 6,
+    "completed_crops": 6,
+    "annotations": 0,
+    "status": "no_detections",
+    "warnings": [
+      "penetration_coverage_requires_review",
+      "category_policy_pending_domain_review"
+    ]
+  },
+  "live_model_calls": 0
+}

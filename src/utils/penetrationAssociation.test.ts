@@ -46,8 +46,9 @@ describe("penetration association evidence", () => {
     state = roiSessionReducer(state, { type: "add", page_id: "page-1", annotation: child([500, 500, 600, 600]) });
     expect(state.pages["page-1"].annotations.at(-1)?.validity).toBe("needs_review");
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { review_status: "accepted", validity: "current" } });
-    expect(state.pages["page-1"].annotations.at(-1)?.validity).toBe("current");
+    expect(state.pages["page-1"].annotations.at(-1)?.validity).toBe("needs_review");
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { box_2d: [350, 50, 400, 100] } });
+    state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { review_status: "accepted", validity: "current" } });
     expect(state.pages["page-1"].annotations.at(-1)).toMatchObject({ validity: "current", review_status: "accepted", proposed_box_2d: [500, 500, 600, 600] });
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { roi_id: "missing", validity: "current" } });
     state = roiSessionReducer(state, { type: "review", page_id: "page-1", id: "child", patch: { validity: "current" } });

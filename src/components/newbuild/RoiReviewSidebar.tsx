@@ -10,6 +10,7 @@ import type { RoiSessionAction } from "@/utils/roiSession";
 import { acceptedRoofRegions, penetrationAssociationWarnings } from "@/utils/penetrationAssociation";
 import { penetrationFootprint } from "@/utils/penetrationOpenings";
 import { SERVICE_RESTART_MESSAGE, SERVICE_RESTART_RETRYING } from "@/integrations/roi/serviceRestart";
+import { PenetrationBoundaryControls } from "./PenetrationBoundaryControls";
 
 interface RoiReviewSidebarProps {
   kind?: "roof_roi" | "penetration";
@@ -17,6 +18,8 @@ interface RoiReviewSidebarProps {
   selectedId: string | null;
   adding: boolean;
   onSelect: (id: string) => void;
+  /** Select and bring the next unreviewed penetration into view on the drawing. */
+  onSelectNext?: (id: string) => void;
   onAddingChange: (adding: boolean) => void;
   dispatch: (action: RoiSessionAction) => void;
   detection: ReturnType<typeof useRoiDetection>;
@@ -80,6 +83,7 @@ const errorMessages: Record<string, string> = {
   network_error: "The annotation service is unavailable.", request_timeout: "The annotation request timed out.",
   provider_timeout: "The model request timed out.", live_calls_disabled: "Live model calls are disabled on this service.",
   provider_not_configured: "Live model access is not configured on this service.",
+  penetration_scope_required: "Define the insulation scope in Step 3 before detecting penetrations.",
   malformed_output: "The model response could not be validated. No new regions were added.",
   truncated_output: "The model response ended before valid annotations were complete. No new regions were added.",
   call_budget_exceeded: "The model-call budget has been used. Further detection requires an approved budget reset.",
@@ -91,7 +95,26 @@ const errorMessages: Record<string, string> = {
   storage_starting: `${SERVICE_RESTART_MESSAGE} Try again in a minute.`,
 };
 
-export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, onSelect, onAddingChange, dispatch, detection }: RoiReviewSidebarProps) => {
+const penetrationWarnings: Record<string, string> = {
+  category_policy_pending_domain_review: "Check the detected types and boundaries before adding openings.",
+  coverage_not_verified: "Review the entire roof for missed penetrations before continuing.",
+  penetration_coverage_not_verified: "Review the entire roof for missed penetrations before continuing.",
+  penetration_coverage_requires_review: "Review the full roof for missed penetrations.",
+  penetration_scope_incomplete: "Some roof areas have no insulation outline; only outlined areas were scanned.",
+  penetration_boundary_unverified: "Check the proposed opening boundary against the plan.",
+  penetration_boundary_requires_review: "Review and correct the opening boundary before adding it.",
+  penetration_boundary_ambiguous: "More than one boundary could fit this object. Check and correct its outline on the plan.",
+  penetration_type_requires_review: "Choose a penetration type and confirm that this object excludes insulation.",
+  penetration_crosses_scope: "This boundary crosses the insulation scope. Review the clipped opening preview.",
+  penetration_crop_limit_reached: "Some roof details were not scanned. Review the full roof and add any missed penetrations.",
+  penetration_call_budget_reached: "Detection stopped at its call limit. Review the full roof for missed penetrations.",
+  penetration_scan_time_limit_reached: "Detection reached its time limit. Review the full roof for missed penetrations.",
+  penetration_crop_failed: "Some roof details could not be processed. Review those areas and add any missed penetrations.",
+  penetration_annotation_limit_reached: "Detection reached its object limit. Review the full roof for additional penetrations.",
+  possible_truncation: "The result may be incomplete. Review the full roof for missed objects.",
+};
+
+export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, onSelect, onSelectNext, onAddingChange, dispatch, detection }: RoiReviewSidebarProps) => {
   const isPenetration = kind === "penetration";
   const subject = isPenetration ? "penetrations" : "roof areas";
   const itemLabel = isPenetration ? "Penetration" : "Roof area";
@@ -99,17 +122,43 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
   const annotations = page.annotations.filter((annotation) => annotation.kind === kind);
   const selected = annotations.find((annotation) => annotation.id === selectedId);
   const selectedPanel = useRef<HTMLDivElement>(null);
-  useEffect(() => { selectedPanel.current?.scrollIntoView?.({ block: "nearest" }); }, [selectedId]);
+  const scrollPanel = useRef<HTMLDivElement>(null);
+  const selectedItem = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!isPenetration) { selectedPanel.current?.scrollIntoView?.({ block: "nearest" }); return; }
+    const container = scrollPanel.current, item = selectedItem.current;
+    if (!container || !item) return;
+    // Reveal the selected list row without scrolling the details or the whole page to the top.
+    const bounds = container.getBoundingClientRect(), row = item.getBoundingClientRect();
+    const top = bounds.top + container.clientTop, bottom = top + container.clientHeight;
+    if (row.top < top) container.scrollTop += row.top - top;
+    else if (row.bottom > bottom) container.scrollTop += row.bottom - bottom;
+  }, [selectedId, isPenetration]);
   const footprint = isPenetration && selected ? penetrationFootprint(selected, page) : null;
   const associationWarnings = selected ? penetrationAssociationWarnings(selected, page) : [];
   const canAccept = !isPenetration || Boolean(selected && parents.some((parent) => parent.id === selected.roi_id)
-    && penetrationSubtypes.some((subtype) => subtype === selected.subtype) && !footprint?.error);
+    && selected.subtype !== "unknown" && penetrationSubtypes.some((subtype) => subtype === selected.subtype) && !footprint?.error);
   const accepted = annotations.filter((annotation) => annotation.review_status === "accepted" && annotation.validity === "current").length;
+  const unreviewed = annotations.filter(annotation => annotation.review_status !== "rejected"
+    && (annotation.review_status === "suggested" || annotation.validity === "needs_review"));
+  const selectedIndex = annotations.findIndex(annotation => annotation.id === selectedId);
+  const next = [...annotations.slice(selectedIndex + 1), ...annotations.slice(0, selectedIndex)]
+    .find(annotation => unreviewed.includes(annotation));
+  const alreadyAccepted = selected?.review_status === "accepted" && selected.validity === "current";
+  const acceptLabel = selected?.review_status === "accepted" ? alreadyAccepted ? "Opening added" : "Confirm opening" : "Add opening";
   const { feedback, busy, restarting } = detection;
   const review = (review_status: RoiAnnotation["review_status"]) => {
     if (selected) dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch: { review_status, validity: "current" } });
   };
-  return <section aria-label={isPenetration ? "Penetration recommendations" : "Roof area recommendations"} className="min-w-0 space-y-4 break-words">
+  const acceptAndNext = () => {
+    if (!selected || !canAccept || alreadyAccepted || adding) return;
+    review("accepted");
+    if (next) (onSelectNext ?? onSelect)(next.id);
+  };
+  return <section aria-label={isPenetration ? "Penetration recommendations" : "Roof area recommendations"}
+    className={`min-w-0 break-words ${isPenetration ? "flex flex-col flex-1 min-h-0" : ""}`}>
+    <div ref={scrollPanel} data-testid={isPenetration ? "penetration-sidebar-scroll" : undefined}
+      className={`space-y-4 ${isPenetration ? "flex-1 min-h-0 overflow-y-auto overscroll-contain pr-1" : ""}`}>
     <div>
       <h2 className="text-lg font-semibold">{isPenetration ? "Penetrations" : "Roof Areas"}</h2>
       <p className="text-sm text-muted-foreground break-all">{page.source.file_name} / Page {page.source.page_index + 1}</p>
@@ -130,45 +179,56 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
         {!busy && feedback?.status === "partial" && `Partial result. Some ${subject} may be missing.`}
         {!busy && feedback?.status === "cancelled" && "Detection cancelled. Existing work is retained."}
       </div>
+      {!busy && feedback?.durationMs !== undefined && <p className="text-xs text-muted-foreground">
+        {feedback.cached ? "Reused previous recommendations." : `Detection completed in ${(feedback.durationMs / 1000).toFixed(1)} seconds.`}
+      </p>}
       {feedback?.status === "error" && <p role="alert" className="text-sm text-destructive">
         {(errorMessages[feedback.error ?? ""] ?? "Detection failed.").replace("regions", isPenetration ? "penetrations" : "regions")} Existing work is retained. ({feedback.error})
       </p>}
       {feedback?.warnings?.map((warning, index) => <p key={index} className="text-xs text-muted-foreground">{
-        warning === "category_policy_pending_domain_review" ? "Check the detected types and sizes before adding openings." : warning
+        penetrationWarnings[warning] ?? warning
       }</p>)}
       {feedback?.followUpOf && !busy && <Button variant="outline" className="w-full" onClick={() => void detection.detect(feedback.followUpOf)}>
-        <Plus className="w-4 h-4 mr-2" />Request one follow-up</Button>}
+        <Plus className="w-4 h-4 mr-2" />{isPenetration ? "Find missed penetrations" : "Request one follow-up"}</Button>}
     </div>
     <TooltipProvider delayDuration={200}>
       <div className="flex gap-2">
         <Button variant={adding ? "default" : "outline"} className="flex-1" aria-pressed={adding} onClick={() => onAddingChange(!adding)}>
           <Plus className="w-4 h-4 mr-2" />{isPenetration ? "Manual penetration" : "Manual region"}</Button>
-        <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" aria-label="Undo review edit"
+        {!isPenetration && <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" aria-label="Undo review edit"
           disabled={!page.history.length} onClick={() => dispatch({ type: "undo", page_id: page.source.page_id })}>
-          <Undo2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Undo review edit</TooltipContent></Tooltip>
+          <Undo2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Undo review edit</TooltipContent></Tooltip>}
       </div>
       {selected && <div ref={selectedPanel} className="border-t border-border pt-3" aria-label="Selected annotation controls">
         <h3 className="text-sm font-semibold">Selected {isPenetration ? "Penetration" : "Region"}</h3>
         <p className="text-sm mt-1 whitespace-pre-wrap">{selected.label}</p>
         {selected.evidence && <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">{selected.evidence}</p>}
-        {selected.warnings.map((warning, index) => <p key={index} className="text-xs mt-2 font-medium">{warning}</p>)}
+        {selected.warnings.map((warning, index) => <p key={index} className="text-xs mt-2 font-medium">{penetrationWarnings[warning] ?? warning}</p>)}
         {associationWarnings.map((warning) => <p key={warning} className="text-xs mt-2 font-medium">{warning}</p>)}
         {footprint?.error && <p role="status" className="text-sm mt-2">{footprint.error}</p>}
-        {isPenetration && !footprint?.error && <p className="text-xs text-muted-foreground mt-2">
-          The opening is limited to the insulation scope. Accepted boxes can be moved or resized on the plan.
+        {isPenetration && selected.subtype === "unknown" && <p role="status" className="text-sm mt-2">
+          Choose a penetration type before adding this opening. Confirm that this object excludes insulation.
         </p>}
-        <div className="flex flex-wrap gap-2 mt-3">
+        {isPenetration && !footprint?.error && <p className="text-xs text-muted-foreground mt-2">
+          The opening is limited to the insulation scope. Review its boundary on the plan before adding it.
+        </p>}
+        {isPenetration && footprint?.clipped && <p className="text-xs mt-2 font-medium">
+          Part of this boundary falls outside the insulation scope or overlaps a cutout. The opening preview shows the part that will be removed.
+        </p>}
+        {!isPenetration && <div className="flex flex-wrap gap-2 mt-3">
           <Button size="sm" onClick={() => review("accepted")} disabled={!canAccept || (selected.review_status === "accepted" && selected.validity === "current")}>
-            <Check className="w-4 h-4 mr-1" />{isPenetration
-              ? selected.review_status === "accepted" ? selected.validity === "current" ? "Opening added" : "Confirm opening" : "Add opening"
-              : "Accept"}</Button>
+            <Check className="w-4 h-4 mr-1" />Accept</Button>
           <Button size="sm" variant="outline" onClick={() => review("rejected")} disabled={selected.review_status === "rejected"}>
             <X className="w-4 h-4 mr-1" />Reject</Button>
-          <Tooltip><TooltipTrigger asChild><Button size="icon" variant="outline" aria-label={isPenetration ? "Delete penetration" : "Delete region"}
+          <Tooltip><TooltipTrigger asChild><Button size="icon" variant="outline" aria-label="Delete region"
             onClick={() => dispatch({ type: "remove", page_id: page.source.page_id, id: selected.id })}>
-            <Trash2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Delete {isPenetration ? "penetration" : "region"}</TooltipContent></Tooltip>
-        </div>
-        {isPenetration ? <details key={selected.id} className="mt-3 text-sm">
+            <Trash2 className="w-4 h-4" /></Button></TooltipTrigger><TooltipContent>Delete region</TooltipContent></Tooltip>
+        </div>}
+        {isPenetration && <PenetrationBoundaryControls key={`boundary:${selected.id}`} annotation={selected}
+          size={{ width: page.source.source_width, height: page.source.source_height }}
+          onSave={points => dispatch({ type: "review", page_id: page.source.page_id, id: selected.id,
+            patch: { footprint: points } })} />}
+        {isPenetration ? <details key={`details:${selected.id}`} className="mt-3 text-sm">
           <summary className="cursor-pointer font-medium">Edit type, roof area and coordinates</summary>
           <BoxForm key={`${selected.id}:${selected.revision}`} annotation={selected} parents={parents}
             onSave={(patch) => dispatch({ type: "review", page_id: page.source.page_id, id: selected.id, patch })} />
@@ -177,12 +237,14 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
         <details className="mt-3 text-xs text-muted-foreground">
           <summary className="cursor-pointer">Original {selected.origin === "manual" ? "region" : "proposal"}</summary>
           <p className="mt-1 break-all">[{selected.proposed_box_2d.join(", ")}]</p>
+          {selected.proposed_footprint && <p className="mt-1">Original boundary: {selected.proposed_footprint.length} corners.</p>}
         </details>
       </div>}
       {!annotations.length && <p className="text-sm text-muted-foreground">No {isPenetration ? "penetrations" : "regions"} yet.</p>}
       {annotations.length > 0 && <ul className="divide-y border-y border-border" aria-label={isPenetration ? "Penetrations" : "Regions"}>
         {annotations.map((annotation, index) => <li key={annotation.id}>
           <button className={`w-full text-left py-3 px-2 min-w-0 focus-visible:ring-2 focus-visible:ring-primary ${annotation.id === selectedId ? "bg-accent" : "hover:bg-muted"}`}
+            ref={annotation.id === selectedId ? selectedItem : undefined}
             aria-pressed={annotation.id === selectedId} onClick={() => onSelect(annotation.id)}>
             <span className="flex items-center gap-2 text-sm font-medium">
               {annotation.review_status === "accepted" ? <Check className="w-4 h-4 shrink-0" />
@@ -199,5 +261,33 @@ export const RoiReviewSidebar = ({ kind = "roof_roi", page, selectedId, adding, 
       </ul>}
 
     </TooltipProvider>
+    </div>
+    {isPenetration && <section aria-label="Penetration review actions" className="shrink-0 border-t border-border bg-card pt-3 mt-3">
+      {selected ? <>
+        <p className="text-sm font-semibold truncate" title={`Penetration ${selectedIndex + 1} · ${selected.label}`}>
+          Penetration {selectedIndex + 1} · {selected.label}
+        </p>
+        <p role="status" aria-live="polite" className="text-xs text-muted-foreground mt-1 mb-2">
+          <span className="capitalize">{selected.review_status === "accepted" ? alreadyAccepted ? "Opening added" : "Needs confirmation"
+            : selected.review_status}</span> · {unreviewed.length ? `${unreviewed.length} to review` : "All penetrations reviewed."}
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" className="flex-1 min-w-0" onClick={() => review("accepted")} disabled={adding || !canAccept || alreadyAccepted}>
+            <Check className="w-4 h-4 mr-1 shrink-0" />{acceptLabel}</Button>
+          <Button size="sm" variant="outline" onClick={() => review("rejected")} disabled={adding || selected.review_status === "rejected"}>
+            <X className="w-4 h-4 mr-1" />Reject</Button>
+          <TooltipProvider delayDuration={200}><Tooltip><TooltipTrigger asChild>
+            <Button size="icon" className="h-9 w-9 shrink-0" variant="outline" aria-label="Delete penetration" disabled={adding}
+              onClick={() => dispatch({ type: "remove", page_id: page.source.page_id, id: selected.id })}>
+              <Trash2 className="w-4 h-4" /></Button>
+          </TooltipTrigger><TooltipContent>Delete penetration</TooltipContent></Tooltip></TooltipProvider>
+        </div>
+        <Button size="sm" variant="outline" className="w-full mt-2" onClick={acceptAndNext}
+          disabled={adding || !canAccept || alreadyAccepted}>
+          {selected.review_status === "accepted" && !alreadyAccepted ? "Confirm opening & next" : "Add opening & next"}
+        </Button>
+        {adding && <p className="text-xs text-muted-foreground mt-2">Finish or cancel the new boundary before reviewing this opening.</p>}
+      </> : <p className="text-sm text-muted-foreground">Select a penetration to review its opening.</p>}
+    </section>}
   </section>;
 };

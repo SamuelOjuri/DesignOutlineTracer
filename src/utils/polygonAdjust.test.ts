@@ -1,11 +1,84 @@
 import { describe, expect, it } from "vitest";
-import { findClosestEdge, findVertexMergeTarget, isValidOutlineEdit, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, rasterizeOutlinesWithHoles, straightenPolygonSide } from "./polygonAdjust";
+import { findClosestEdge, findVertexMergeTarget, isValidOutlineEdit, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, prepareVertexInsertion, rasterizeOutlinesWithHoles, straightenPolygonSide } from "./polygonAdjust";
 import type { Point } from "@/types/roof";
 import { steppedRoof, trimmedRoof, trimmedRoofWithNotch } from "@/test/roofBoundary";
 import polygonClipping, { type Polygon } from "polygon-clipping";
 
 const rectangle: Point[] = [{ x: 10, y: 10 }, { x: 100, y: 10 }, { x: 100, y: 100 }, { x: 10, y: 100 }];
 const extraPoint = [...rectangle.slice(0, 2), { x: 102, y: 50 }, ...rectangle.slice(2)];
+
+describe("outline vertex insertion", () => {
+  const bounds = { width: 400, height: 300 };
+  const box = (left: number, top: number, right: number, bottom: number): Point[] => [
+    { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom },
+  ];
+
+  it("projects precisely onto a rotated edge, keeps its start and preserves other roofs and cutouts", () => {
+    const rotated = [{ x: 50.25, y: 50.5 }, { x: 150.25, y: 100.5 },
+      { x: 120.25, y: 160.5 }, { x: 20.25, y: 110.5 }];
+    const other = box(220, 20, 300, 100), holes = [box(70, 100, 80, 110)];
+    const edit = prepareVertexInsertion([rotated, other], holes, [], 0, 0, { x: 99.25, y: 77.5 }, bounds);
+    expect(edit.error).toBeNull();
+    expect(edit.outlines[0]).toEqual([rotated[0], { x: 100.25, y: 75.5 }, ...rotated.slice(1)]);
+    expect(edit.outlines[0][0]).toBe(rotated[0]);
+    expect(edit.outlines[1]).toBe(other);
+    expect(edit.holes).toBe(holes);
+    expect(edit.editedOutlineIndex).toBe(0);
+    expect(edit.edgeRemap).toEqual([[0, 1], [2], [3], [4]]);
+    expect(rotated).toHaveLength(4);
+  });
+
+  it("splits closing edges and retains drainage only on unchanged side portions", () => {
+    const split = prepareVertexInsertion([rectangle], [], [], 0, 3, { x: 9, y: 55.25 }, bounds);
+    expect(split.error).toBeNull();
+    expect(split.outlines[0]).toEqual([...rectangle, { x: 10, y: 55.25 }]);
+    expect(split.edgeRemap).toEqual([[0], [1], [2], [3, 4]]);
+    const placed = prepareVertexInsertion([rectangle], [], [], 0, 0, { x: 55, y: 10 }, bounds, { x: 55.125, y: 5.5 });
+    expect(placed.error).toBeNull();
+    expect(placed.outlines[0]).toEqual([rectangle[0], { x: 55.125, y: 5.5 }, ...rectangle.slice(1)]);
+    expect(placed.edgeRemap).toEqual([[], [2], [3], [4]]);
+    const alongSide = prepareVertexInsertion([rectangle], [], [], 0, 0, { x: 55, y: 10 }, bounds, { x: 11.25, y: 10 });
+    expect(alongSide.error).toBeNull();
+    expect(alongSide.edgeRemap![0]).toEqual([0, 1]);
+  });
+
+  it("preserves genuine narrow returns and permits distinct nearby corners without merging", () => {
+    const stepped = [rectangle[0], rectangle[1], { x: 100, y: 10.5 }, { x: 101, y: 10.5 },
+      { x: 101, y: 100 }, rectangle[3]];
+    const edit = prepareVertexInsertion([stepped], [], [], 0, 0, { x: 55, y: 10 }, bounds, { x: 99.5, y: 9.75 });
+    expect(edit.error).toBeNull();
+    expect(edit.outlines[0]).toEqual([stepped[0], { x: 99.5, y: 9.75 }, ...stepped.slice(1)]);
+    expect(edit.outlines[0]).toHaveLength(7);
+  });
+
+  it("keeps clipped openings touching the roof edge intact but blocks changing their coverage", () => {
+    const touchingOpening = box(20, 10, 30, 25), hole = box(45, 40, 65, 55);
+    const sameScope = prepareVertexInsertion([rectangle], [hole], [touchingOpening], 0, 0, { x: 55, y: 10 }, bounds);
+    expect(sameScope.error).toBeNull();
+    expect(sameScope.outlines[0]).toHaveLength(5);
+    expect(sameScope.holes).toEqual([hole]);
+    for (const [holes, openings] of [[[hole], []], [[], [hole]], [[], [touchingOpening]]]) {
+      const changed = prepareVertexInsertion([rectangle], holes, openings, 0, 0, { x: 55, y: 10 }, bounds,
+        { x: 55, y: 85 });
+      expect(changed.error).toContain("cutout or penetration opening");
+      expect(changed.outlines).toEqual([rectangle]);
+      expect(changed.holes).toBe(holes);
+    }
+  });
+
+  it("rejects endpoint duplicates, invalid positions, page overshoot, crossings and contact with another roof", () => {
+    const insert = (point: Point, destination?: Point) => prepareVertexInsertion([rectangle], [], [], 0, 0, point, bounds, destination);
+    expect(insert(rectangle[0]).error).toContain("between");
+    expect(insert({ x: 0, y: 10 }).error).toContain("between");
+    expect(insert({ x: NaN, y: 10 }).error).toContain("valid boundary");
+    expect(insert({ x: 55, y: 10 }, rectangle[1]).error).toContain("distinct");
+    expect(insert({ x: 55, y: 10 }, { x: 55, y: -1 }).error).toContain("outside");
+    expect(insert({ x: 55, y: 10 }, { x: 55, y: 120 }).error).toContain("cross");
+    expect(prepareVertexInsertion([rectangle, box(110, 0, 200, 9)], [], [], 0, 0,
+      { x: 55, y: 10 }, bounds, { x: 150, y: 5 }).error).toContain("roof area 2");
+    expect(prepareVertexInsertion([rectangle], [], [], 0, 4, { x: 55, y: 10 }, bounds).error).toContain("valid boundary");
+  });
+});
 
 describe("inward edge trimming", () => {
   const polygon = (points: Point[]): Polygon => [points.map(point => [point.x, point.y])];

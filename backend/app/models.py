@@ -12,7 +12,7 @@ Coordinate = Annotated[StrictFloat | StrictInt, Field(ge=0, le=1000, allow_inf_n
 Box = tuple[Coordinate, Coordinate, Coordinate, Coordinate]
 SUBTYPES = {
     "roof_roi": (),
-    "penetration": ("rooflight", "vent", "flue", "access_hatch"),
+    "penetration": ("rooflight", "vent", "flue", "access_hatch", "riser", "lift_overrun", "other_upstand", "unknown"),
     "rainwater_outlet": ("internal_outlet", "parapet_outlet", "scupper"),
 }
 
@@ -51,6 +51,30 @@ class AcceptedRoi(Geometry):
     revision: Annotated[StrictInt, Field(ge=1)]
 
 
+Pixel = Annotated[StrictFloat | StrictInt, Field(ge=0, le=10_000_000, allow_inf_nan=False)]
+
+
+class PixelPoint(Contract):
+    x: Pixel
+    y: Pixel
+
+
+Ring = Annotated[list[PixelPoint], Field(min_length=3, max_length=128)]
+ScopeRing = Annotated[list[PixelPoint], Field(min_length=3, max_length=512)]
+
+
+class PenetrationScope(Contract):
+    roi_id: Identifier
+    outline_id: Identifier
+    outer: ScopeRing
+    holes: Annotated[list[ScopeRing], Field(max_length=100)] = Field(default_factory=list)
+
+
+class DetectionVector(Contract):
+    start: PixelPoint
+    end: PixelPoint
+
+
 class DetectionInput(Contract):
     page_id: Identifier
     request_id: Identifier
@@ -60,6 +84,9 @@ class DetectionInput(Contract):
     geometry_revision: Annotated[StrictInt, Field(ge=0)]
     accepted_rois: Annotated[list[AcceptedRoi], Field(max_length=25)] = Field(default_factory=list)
     follow_up_of: Identifier | None = None
+    # Penetration geometry is in original page pixels; boxes remain normalized.
+    scopes: Annotated[list[PenetrationScope], Field(max_length=100)] = Field(default_factory=list)
+    vector_segments: Annotated[list[DetectionVector], Field(max_length=30000)] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def valid_parents(self) -> Self:
@@ -70,6 +97,12 @@ class DetectionInput(Contract):
             raise ValueError("accepted_parents_required")
         if len({parent.id for parent in self.accepted_rois}) != len(self.accepted_rois):
             raise ValueError("duplicate_parents")
+        if self.task != "penetration" and (self.scopes or self.vector_segments):
+            raise ValueError("unexpected_penetration_geometry")
+        if any(scope.roi_id not in {parent.id for parent in self.accepted_rois} for scope in self.scopes):
+            raise ValueError("unknown_scope_parent")
+        if sum(len(ring) for scope in self.scopes for ring in [scope.outer, *scope.holes]) > 8192:
+            raise ValueError("scope_geometry_too_large")
         return self
 
 
@@ -77,6 +110,7 @@ class Proposal(Geometry):
     label: Annotated[str, Field(min_length=1, max_length=240)]
     roi_id: Identifier | None = None
     subtype: str | None = None
+    footprint: Ring | None = None
 
     @model_validator(mode="after")
     def nonblank_label(self) -> Self:
@@ -96,6 +130,9 @@ class Annotation(Proposal):
     revision: Literal[1] = 1
     edits: list = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    proposed_footprint: Ring | None = None
+    footprint_source: Literal["model", "vector", "raster", "manual", "legacy_box"] | None = None
+    outline_id: Identifier | None = None
 
 
 class DetectionRun(Contract):

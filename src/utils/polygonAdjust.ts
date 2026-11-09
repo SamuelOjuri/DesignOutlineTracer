@@ -73,7 +73,7 @@ export interface OutlineEditResult {
   outlines: Point[][];
   holes: Point[][];
   editedOutlineIndex?: number;
-  /** For a local redraw, old edge indices map only to retained boundary portions. */
+  /** Old edge indices map to retained or split boundary portions after a local edit. */
   edgeRemap?: number[][];
   error: string | null;
   repaired: boolean;
@@ -116,6 +116,70 @@ export function prepareOutlineEdit(outlines: Point[][], outlineIndex: number, ca
   } catch {
     return reject("the existing boundary or cutouts could not be processed. Undo the last edit or reselect this area.");
   }
+}
+
+/**
+ * Split one finite side without replacing existing vertices. A destination can
+ * place the added corner in the same edit; only untouched side portions retain
+ * drainage mappings. Cutouts and penetration openings must retain their coverage.
+ */
+export function prepareVertexInsertion(
+  outlines: Point[][], holes: Point[][], openings: Point[][], outlineIndex: number, edgeIndex: number,
+  insertionPoint: Point, bounds: { width: number; height: number }, destination?: Point,
+): OutlineEditResult {
+  const reject = (reason: string): OutlineEditResult => ({ outlines, holes,
+    error: `Add vertex blocked: ${reason}`, repaired: false });
+  const finite = (point: Point) => Number.isFinite(point.x) && Number.isFinite(point.y);
+  const original = outlines[outlineIndex];
+  if (!Number.isInteger(outlineIndex) || !original || original.length < 3 || !Number.isInteger(edgeIndex)
+    || edgeIndex < 0 || edgeIndex >= original.length || !finite(insertionPoint)
+    || original.some(point => !finite(point)) || destination && !finite(destination)
+    || !Number.isFinite(bounds.width) || !Number.isFinite(bounds.height) || bounds.width <= 0 || bounds.height <= 0) {
+    return reject("choose a valid boundary edge and position.");
+  }
+  const start = original[edgeIndex], end = original[(edgeIndex + 1) % original.length];
+  const dx = end.x - start.x, dy = end.y - start.y, lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= 1e-14) return reject("this edge has no length.");
+  const t = ((insertionPoint.x - start.x) * dx + (insertionPoint.y - start.y) * dy) / lengthSquared;
+  if (t <= 0 || t >= 1) return reject("place the new vertex between the edge's existing corners.");
+  const projected = { x: start.x + t * dx, y: start.y + t * dy };
+  const point = destination ?? projected;
+  if (original.some(corner => Math.hypot(corner.x - point.x, corner.y - point.y) <= 1e-7)) {
+    return reject("choose a position distinct from the existing corners.");
+  }
+  const candidate = [...original.slice(0, edgeIndex + 1), point, ...original.slice(edgeIndex + 1)];
+  if (candidate.some(corner => corner.x < 0 || corner.y < 0 || corner.x > bounds.width || corner.y > bounds.height)) {
+    return reject("the boundary would extend outside the drawing page.");
+  }
+  // Validate the complete boundary without reconciling holes into notches or
+  // repairing inherited defects, which would hide changes outside this edit.
+  const edit = prepareOutlineEdit(outlines, outlineIndex, candidate, []);
+  if (edit.error) return { ...edit, holes };
+  if (edit.repaired || edit.outlines.length !== outlines.length
+    || JSON.stringify(edit.outlines[outlineIndex]) !== JSON.stringify(candidate)) {
+    return reject("the insertion would change another part of the boundary.");
+  }
+  const along = ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared;
+  const cross = dx * (point.y - start.y) - dy * (point.x - start.x);
+  const numericTolerance = 8 * Number.EPSILON * Math.max(1, Math.abs(start.x), Math.abs(start.y),
+    Math.abs(end.x), Math.abs(end.y), Math.abs(point.x), Math.abs(point.y));
+  const unchangedSplit = along > 0 && along < 1 && Math.abs(cross) / Math.sqrt(lengthSquared) <= numericTolerance;
+  if (!unchangedSplit) {
+    // A single added vertex changes exactly this triangle once the ring has
+    // passed validity checks. Any overlap would change a protected opening.
+    try {
+      const triangle = asPolygon([start, point, end]);
+      if ([...holes, ...openings].some(opening => polygonClipping.intersection(triangle, asPolygon(opening)).length)) {
+        return reject("the move would change a cutout or penetration opening.");
+      }
+    } catch {
+      return reject("the cutouts or penetration openings could not be checked.");
+    }
+  }
+  const edgeRemap = original.map((_, index) => index === edgeIndex
+    ? unchangedSplit ? [index, index + 1] : []
+    : [index > edgeIndex ? index + 1 : index]);
+  return { outlines: edit.outlines, holes, editedOutlineIndex: outlineIndex, edgeRemap, error: null, repaired: false };
 }
 
 /** Reconcile cutouts and validate the rebuilt boundaries before committing any geometry. */

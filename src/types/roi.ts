@@ -5,7 +5,14 @@ export type Box2D = readonly [ymin: number, xmin: number, ymax: number, xmax: nu
 export type AnnotationKind = "roof_roi" | "penetration" | "rainwater_outlet";
 export type ReviewStatus = "suggested" | "accepted" | "rejected";
 export type AnnotationValidity = "current" | "needs_review";
-export const penetrationSubtypes = ["rooflight", "vent", "flue", "access_hatch"] as const;
+export const penetrationSubtypes = ["rooflight", "vent", "flue", "access_hatch", "riser", "lift_overrun", "other_upstand", "unknown"] as const;
+export type PenetrationSubtype = typeof penetrationSubtypes[number];
+export interface PenetrationScope {
+  roi_id: string;
+  outline_id: string;
+  outer: Point[];
+  holes: Point[][];
+}
 
 export interface PageContext {
   readonly document_id: string;
@@ -36,9 +43,13 @@ export interface RoiAnnotation {
   page_id: string;
   kind: AnnotationKind;
   label: string;
-  subtype?: "rooflight" | "vent" | "flue" | "access_hatch" | "internal_outlet" | "parapet_outlet" | "scupper";
+  subtype?: PenetrationSubtype | "internal_outlet" | "parapet_outlet" | "scupper";
   box_2d: Box2D;
   proposed_box_2d: Box2D;
+  /** Unclosed opening rings in immutable source-page pixels. Boxes remain localization envelopes. */
+  footprint?: Point[];
+  proposed_footprint?: Point[];
+  footprint_source?: "model" | "vector" | "raster" | "manual" | "legacy_box";
   roi_id: string | null;
   origin: "gemini" | "manual";
   review_status: ReviewStatus;
@@ -84,6 +95,9 @@ export interface PagePolygon {
   page_id: string;
   roi_id: string | null;
   points: Point[];
+  /** All clipped pieces retain their penetration identity and owning roof component. */
+  annotation_id?: string;
+  outline_id?: string;
 }
 
 export interface PageOutlet extends Outlet {

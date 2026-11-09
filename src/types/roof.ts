@@ -36,6 +36,9 @@ export interface Point {
   
   export interface Penetration {
     id: string;
+    /** A reviewed penetration can have several clipped boundary parts. */
+    annotation_id?: string;
+    outline_id?: string;
     x: number;
     y: number;
     width: number;
