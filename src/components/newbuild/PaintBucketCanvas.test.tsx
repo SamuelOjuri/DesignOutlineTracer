@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockCanvasContext } from "@/test/canvas";
 import { steppedRoof, trimmedRoof, trimmedRoofWithNotch } from "@/test/roofBoundary";
@@ -51,7 +51,8 @@ const roof: Point[] = [{ x: 40, y: 40 }, { x: 200, y: 40 }, { x: 202, y: 160 }, 
 const otherRoof: Point[] = [{ x: 280, y: 40 }, { x: 360, y: 40 }, { x: 360, y: 260 }, { x: 280, y: 260 }];
 const cutout: Point[] = [{ x: 60, y: 80 }, { x: 90, y: 80 }, { x: 90, y: 110 }, { x: 60, y: 110 }];
 
-async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], vectorSegments: VectorSegment[] = []) {
+async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], vectorSegments: VectorSegment[] = [],
+  options: { outlineGeneration?: "running" | "review" } = {}) {
   const context = mockCanvasContext();
   const width = 400, height = 300;
   Object.assign(context, {
@@ -72,10 +73,13 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], 
   const source = document.createElement("canvas");
   source.width = width; source.height = height;
   const outlinesChanged = vi.fn(), holesChanged = vi.fn();
+  let replaceOutlines: (next: Point[][]) => void;
   function Editor() {
     const [currentOutlines, setOutlines] = useState(outlines);
     const [currentHoles, setHoles] = useState(holes);
+    replaceOutlines = setOutlines;
     return <PaintBucketCanvas pdfCanvas={source} roofOutlines={currentOutlines} interiorHoles={currentHoles} vectorSegments={vectorSegments}
+      outlineGeneration={options.outlineGeneration}
       onOutlinesExtracted={(next, index, edgeRemap) => {
         if (edgeRemap) outlinesChanged(next, index, edgeRemap);
         else outlinesChanged(next, index);
@@ -94,8 +98,143 @@ async function adjustmentEditor(outlines = [roof, otherRoof], holes = [cutout], 
     fireEvent[type](target, { pointerId: 7, button: 0, clientX: bounds.left + x * scale, clientY: bounds.top + y * scale,
       ...(typeof modifiers === "boolean" ? { shiftKey: modifiers } : modifiers) });
   };
-  return { canvas, event, context, outlinesChanged, holesChanged };
+  return { canvas, event, context, outlinesChanged, holesChanged,
+    externalEdit: (next: Point[][]) => act(() => replaceOutlines(next)) };
 }
+
+it.each(["Delete", "Backspace"])("selects a clicked corner without editing, removes that exact vertex with %s and undoes once", async key => {
+  const { canvas, event, outlinesChanged, holesChanged } = await adjustmentEditor();
+  fireEvent.click(screen.getByTitle("Zoom in"));
+  vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({ left: -80, top: -40 } as DOMRect);
+  event("pointerDown", 203, 160);
+  event("pointerUp", 203, 160);
+  expect(canvas).toHaveFocus();
+  const selected = () => screen.getByTestId("accepted-outline-overlay").querySelector("[data-selected=true]");
+  expect(selected()).toHaveAttribute("data-outline-vertex", "0-2");
+  expect(selected()).toHaveAttribute("stroke", "#B000B5");
+  expect(selected()).toHaveAttribute("fill", "none");
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+  fireEvent.keyDown(canvas, { key, repeat: true });
+  fireEvent.keyDown(canvas, { key, ctrlKey: true });
+  fireEvent.keyDown(window, { key });
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  fireEvent.keyDown(canvas, { key });
+  expect(outlinesChanged).toHaveBeenCalledExactlyOnceWith([roof.filter((_, index) => index !== 2), otherRoof], 0,
+    [[0], [], [], [2], [3]]);
+  expect(holesChanged).not.toHaveBeenCalled();
+  expect(selected()).toBeNull();
+  fireEvent.keyDown(canvas, { key });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged).toHaveBeenLastCalledWith([roof, otherRoof], undefined);
+  expect(holesChanged).toHaveBeenLastCalledWith([cutout]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("clears corner selection on Escape, empty space, focus loss and every Adjust tool change", async () => {
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([roof], []);
+  const selected = () => screen.getByTestId("accepted-outline-overlay").querySelector("[data-selected=true]");
+  const actions = [
+    () => fireEvent.keyDown(canvas, { key: "Escape" }),
+    () => { event("pointerDown", 240, 280); event("pointerUp", 240, 280); },
+    () => act(() => canvas.blur()),
+    () => fireEvent(window, new Event("blur")),
+    ...["Select", "Cut Out", "Straighten", "Snap to line", "Redraw"].map(name =>
+      () => fireEvent.click(screen.getByRole("button", { name }))),
+  ];
+  for (const clear of actions) {
+    fireEvent.click(screen.getByRole("button", { name: "Adjust" }));
+    event("pointerDown", 202, 160); event("pointerUp", 202, 160);
+    expect(selected()).not.toBeNull();
+    clear();
+    expect(selected()).toBeNull();
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    expect(outlinesChanged).not.toHaveBeenCalled();
+  }
+});
+
+it("keeps selection across equivalent parent arrays but invalidates it when geometry changes", async () => {
+  const { canvas, event, externalEdit, outlinesChanged } = await adjustmentEditor([roof], []);
+  const selected = () => screen.getByTestId("accepted-outline-overlay").querySelector("[data-selected=true]");
+  event("pointerDown", 202, 160); event("pointerUp", 202, 160);
+  externalEdit([roof.map(point => ({ ...point }))]);
+  expect(selected()).toHaveAttribute("data-outline-vertex", "0-2");
+  externalEdit([roof.slice(1)]);
+  expect(selected()).toBeNull();
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  externalEdit([roof]); // Restoring old coordinates must not revive a stale selection.
+  expect(selected()).toBeNull();
+});
+
+it("rejects deletion from a triangle without changing geometry or adding Undo", async () => {
+  const triangle = [roof[0], roof[1], roof[4]];
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([triangle], []);
+  event("pointerDown", 200, 40); event("pointerUp", 200, 40);
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(screen.getByRole("status")).toHaveTextContent("at least three vertices");
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector("[data-selected=true]"))
+    .toHaveAttribute("data-outline-vertex", "0-1");
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it.each(["running", "review"] as const)("blocks deletion during outline generation %s", async outlineGeneration => {
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([roof], [], [], { outlineGeneration });
+  event("pointerDown", 202, 160); event("pointerUp", 202, 160);
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(screen.getByRole("status")).toHaveTextContent("before deleting a vertex");
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
+
+it("does not delete while dragging or while a text field has focus", async () => {
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([roof], []);
+  event("pointerDown", 202, 160);
+  event("pointerMove", 210, 160, { altKey: true });
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(outlinesChanged).not.toHaveBeenCalled();
+  event("pointerUp", 210, 160, { altKey: true });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  expect(screen.getByTestId("accepted-outline-overlay").querySelector("[data-selected=true]")).toBeNull();
+  event("pointerDown", 210, 160); event("pointerUp", 210, 160);
+  const input = document.createElement("input");
+  document.body.append(input);
+  act(() => input.focus());
+  fireEvent.keyDown(input, { key: "Backspace" });
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  event("pointerDown", 210, 160);
+  event("pointerMove", 225, 160, { altKey: true });
+  act(() => input.focus());
+  event("pointerUp", 225, 160, { altKey: true });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  input.remove();
+});
+
+it("deletes a newly inserted corner as a separate Undo step without losing insertion history", async () => {
+  const { canvas, event, outlinesChanged } = await adjustmentEditor([roof], []);
+  event("pointerMove", 120, 40);
+  fireEvent.click(screen.getByRole("button", { name: "Add vertex on this edge" }));
+  const inserted = [roof[0], { x: 120, y: 40 }, ...roof.slice(1)];
+  event("pointerDown", 120, 40); event("pointerUp", 120, 40);
+  fireEvent.keyDown(canvas, { key: "Escape" });
+  const overlay = screen.getByTestId("accepted-outline-overlay");
+  expect(overlay.querySelector("[data-selected=true]")).toBeNull();
+  expect(overlay.querySelector("[data-placement=true]")).toHaveAttribute("stroke", "#B000B5");
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(outlinesChanged).toHaveBeenCalledTimes(1);
+  event("pointerDown", 120, 40); event("pointerUp", 120, 40);
+  fireEvent.keyDown(canvas, { key: "Delete" });
+  expect(outlinesChanged.mock.lastCall![0]).toEqual([roof]);
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged.mock.lastCall![0]).toEqual([inserted]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+  expect(outlinesChanged.mock.lastCall![0]).toEqual([roof]);
+  expect(screen.getByRole("button", { name: "Undo" })).toBeDisabled();
+});
 
 it("previews a fitted side at zoom, cycles parallel targets and applies with a single undo", async () => {
   const vectors = [195, 198].map(x => ({ start: { x, y: 40 }, end: { x, y: 260 } }));

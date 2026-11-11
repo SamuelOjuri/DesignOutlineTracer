@@ -41,8 +41,20 @@ PDF snapping; otherwise an adjacent outline vertex merge takes priority. Pages
 without extracted PDF vectors retain manual dragging. Geometry checks still block
 crossings, touching roofs and page overshoot.
 
+Click a vertex in **Adjust** to select its deep magenta (`#B000B5`) ring, then
+press **Delete** or **Backspace** to remove it and join its neighbouring corners.
+Selection alone changes no geometry; a drag keeps the existing snapping and
+merging behavior. **Undo** restores the removed corner and drawing metadata.
+Escape, clicking empty space, moving focus away from the drawing, changing tools
+or an external geometry change clears the selection. Deletion only handles keys
+while the drawing has focus, and is unavailable during Snap to line, Redraw,
+Straighten or automatic outline generation/review. Invalid boundaries, fewer
+than three vertices, overlaps with other roofs, and changes to cutout/opening
+coverage are blocked. Unaffected sides keep their drainage markings; the two
+joined sides are cleared for review.
+
 Hover an edge in **Adjust** to reveal **+ / Add vertex on this edge** at its
-midpoint. Click to insert a vertex on the unchanged edge, then drag the new red
+midpoint. Click to insert a vertex on the unchanged edge, then drag the new deep magenta
 ring to place the missing corner; dragging directly from **+** also works.
 Insertion and the first placement form one Undo action. The new vertex ignores
 adjacent-vertex merging during placement while retaining PDF snapping and Alt

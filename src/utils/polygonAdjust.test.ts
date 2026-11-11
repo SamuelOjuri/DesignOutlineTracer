@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findClosestEdge, findVertexMergeTarget, isValidOutlineEdit, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, prepareVertexInsertion, rasterizeOutlinesWithHoles, straightenPolygonSide } from "./polygonAdjust";
+import { findClosestEdge, findVertexMergeTarget, isValidOutlineEdit, mergePolygonVertex, movePolygonEdge, prepareEdgeEdit, prepareOutlineEdit, prepareVertexDeletion, prepareVertexInsertion, rasterizeOutlinesWithHoles, straightenPolygonSide } from "./polygonAdjust";
 import type { Point } from "@/types/roof";
 import { steppedRoof, trimmedRoof, trimmedRoofWithNotch } from "@/test/roofBoundary";
 import polygonClipping, { type Polygon } from "polygon-clipping";
@@ -77,6 +77,88 @@ describe("outline vertex insertion", () => {
     expect(prepareVertexInsertion([rectangle, box(110, 0, 200, 9)], [], [], 0, 0,
       { x: 55, y: 10 }, bounds, { x: 150, y: 5 }).error).toContain("roof area 2");
     expect(prepareVertexInsertion([rectangle], [], [], 0, 4, { x: 55, y: 10 }, bounds).error).toContain("valid boundary");
+  });
+});
+
+describe("outline vertex deletion", () => {
+  const box = (left: number, top: number, right: number, bottom: number): Point[] => [
+    { x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom },
+  ];
+  const notched = [rectangle[0], { x: 40, y: 10 }, { x: 55, y: 40 }, { x: 70, y: 10 }, ...rectangle.slice(1)];
+
+  it("removes only the selected corner and clears both incident drainage sides", () => {
+    const other = box(130, 10, 180, 100), holes = [box(20, 30, 40, 50)];
+    const edit = prepareVertexDeletion([extraPoint, other], holes, [box(60, 60, 80, 80)], 0, 2);
+    expect(edit.error).toBeNull();
+    expect(edit.outlines[0]).toEqual(rectangle);
+    expect(edit.outlines[0][0]).toBe(extraPoint[0]);
+    expect(edit.outlines[1]).toBe(other);
+    expect(edit.holes).toBe(holes);
+    expect(edit.editedOutlineIndex).toBe(0);
+    expect(edit.edgeRemap).toEqual([[0], [], [], [2], [3]]);
+    expect(extraPoint).toHaveLength(5);
+  });
+
+  it.each([
+    [0, [[], [0], [1], [2], []]],
+    [4, [[0], [1], [2], [], []]],
+  ])("maps the closing side correctly when deleting vertex %s", (index, remap) => {
+    const edit = prepareVertexDeletion([extraPoint], [], [], 0, index as number);
+    expect(edit.error).toBeNull();
+    expect(edit.outlines[0]).toEqual(extraPoint.filter((_, pointIndex) => pointIndex !== index));
+    expect(edit.edgeRemap).toEqual(remap);
+  });
+
+  it("preserves edge-touching openings when deleting a collinear corner, including rotated coordinates", () => {
+    const split = [rectangle[0], { x: 55, y: 10 }, ...rectangle.slice(1)];
+    const rotate = (point: Point) => ({ x: 0.8 * point.x - 0.6 * point.y + 100.25,
+      y: 0.6 * point.x + 0.8 * point.y + 20.5 });
+    const outlines = [split.map(rotate)], holes = [box(40, 40, 60, 60).map(rotate)];
+    const openings = [box(45, 10, 65, 20).map(rotate)];
+    const edit = prepareVertexDeletion(outlines, holes, openings, 0, 1);
+    expect(edit.error).toBeNull();
+    expect(edit.outlines[0]).toEqual(rectangle.map(rotate));
+    expect(edit.holes).toBe(holes);
+    expect(edit.edgeRemap).toEqual([[], [], [1], [2], [3]]);
+  });
+
+  it("blocks shrinking or expanding through a cutout or penetration opening without changing their arrays", () => {
+    const shrunkOpening = box(80, 20, 90, 30), expandedOpening = box(50, 15, 60, 20);
+    for (const [outline, vertex, opening] of [[rectangle, 1, shrunkOpening], [notched, 2, expandedOpening]] as const) {
+      for (const [holes, openings] of [[[opening], []], [[], [opening]]]) {
+        const edit = prepareVertexDeletion([outline], holes, openings, 0, vertex);
+        expect(edit.error).toContain("cutout or penetration opening");
+        expect(edit.outlines).toEqual([outline]);
+        expect(edit.holes).toBe(holes);
+        expect(edit.edgeRemap).toBeUndefined();
+      }
+    }
+  });
+
+  it("rejects triangles, invalid indices and coordinates without editing geometry", () => {
+    expect(prepareVertexDeletion([rectangle.slice(0, 3)], [], [], 0, 1).error).toContain("at least three");
+    for (const [outlineIndex, vertexIndex] of [[-1, 0], [1, 0], [0.5, 0], [0, -1], [0, 4], [0, 1.5]]) {
+      const edit = prepareVertexDeletion([rectangle], [], [], outlineIndex, vertexIndex);
+      expect(edit.error).toContain("valid boundary vertex");
+      expect(edit.outlines[0]).toBe(rectangle);
+    }
+    const invalid = rectangle.map((point, index) => index === 1 ? { x: NaN, y: point.y } : point);
+    expect(prepareVertexDeletion([invalid], [], [], 0, 1).error).toContain("valid boundary vertex");
+    const collapsed = [{ x: 10, y: 10 }, { x: 20, y: 10 }, { x: 30, y: 10 }, { x: 20, y: 20 }];
+    expect(prepareVertexDeletion([collapsed], [], [], 0, 3).error).toContain("non-zero area");
+  });
+
+  it("rejects new crossings and overlap with another roof rather than rebuilding the outline", () => {
+    const recessed = [rectangle[0], rectangle[1], rectangle[2], { x: 60, y: 100 },
+      { x: 60, y: 30 }, { x: 40, y: 30 }, { x: 40, y: 100 }, rectangle[3]];
+    expect(prepareVertexDeletion([recessed], [], [], 0, 1).error).toContain("cross, touch or retrace");
+    const other = box(50, 15, 60, 20);
+    const collision = prepareVertexDeletion([notched, other], [], [], 0, 2);
+    expect(collision.error).toContain("roof area 2");
+    expect(collision.outlines).toEqual([notched, other]);
+    const retraced = [rectangle[0], rectangle[1], { x: 100, y: 60 }, { x: 100, y: 40 },
+      { x: 90, y: 40 }, { x: 90, y: 100 }, rectangle[3]];
+    expect(prepareVertexDeletion([retraced], [], [], 0, 2).error).toContain("another part of the boundary");
   });
 });
 

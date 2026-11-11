@@ -16,12 +16,14 @@ interface AcceptedOutlineOverlayProps {
   mergeTarget: Point | null;
   pdfSnap?: VectorSnap | null;
   selectedVertex?: { outlineIndex: number; vertexIndex: number } | null;
+  placementVertex?: { outlineIndex: number; vertexIndex: number } | null;
 }
 
 const polygonPoints = (points: readonly Point[]) => points.map(point => `${point.x},${point.y}`).join(" ");
 
 export function AcceptedOutlineOverlay({ outlines, holes, penetrationHoles, width, height, displayScale,
-  showVertices, hoveredEdge, hoveredVertex, mergeTarget, pdfSnap = null, selectedVertex = null }: AcceptedOutlineOverlayProps) {
+  showVertices, hoveredEdge, hoveredVertex, mergeTarget, pdfSnap = null, selectedVertex = null,
+  placementVertex = null }: AcceptedOutlineOverlayProps) {
   const maskId = useId();
   const scale = Math.max(displayScale, 0.01);
   const openings = [...holes, ...penetrationHoles];
@@ -54,11 +56,13 @@ export function AcceptedOutlineOverlay({ outlines, holes, penetrationHoles, widt
     {showVertices && outlines.flatMap((points, outlineIndex) => points.map((point, vertexIndex) => {
       const hovered = hoveredVertex?.outlineIndex === outlineIndex && hoveredVertex.vertexIndex === vertexIndex;
       const selected = selectedVertex?.outlineIndex === outlineIndex && selectedVertex.vertexIndex === vertexIndex;
+      const placing = placementVertex?.outlineIndex === outlineIndex && placementVertex.vertexIndex === vertexIndex;
+      const highlighted = selected || placing;
       return <circle key={`${outlineIndex}-${vertexIndex}`} cx={point.x} cy={point.y}
-        r={(selected ? 5 : hovered ? 4.5 : 3) / scale} fill={selected ? "none" : "white"}
-        stroke={selected ? "#ec1313" : OUTLINE_APPEARANCE.stroke} strokeWidth={selected ? 1 : 1.5}
+        r={(highlighted ? 5 : hovered ? 4.5 : 3) / scale} fill={highlighted ? "none" : "white"}
+        stroke={highlighted ? "#B000B5" : OUTLINE_APPEARANCE.stroke} strokeWidth={highlighted ? 1 : 1.5}
         vectorEffect="non-scaling-stroke" data-outline-vertex={`${outlineIndex}-${vertexIndex}`}
-        data-selected={selected ? "true" : undefined} />;
+        data-selected={selected ? "true" : undefined} data-placement={placing ? "true" : undefined} />;
     }))}
     {mergeTarget && <circle cx={mergeTarget.x} cy={mergeTarget.y} r={8 / scale} fill="none"
       stroke="#00875a" strokeWidth={2} vectorEffect="non-scaling-stroke" data-testid="outline-merge-target" />}

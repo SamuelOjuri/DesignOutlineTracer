@@ -182,6 +182,54 @@ export function prepareVertexInsertion(
   return { outlines: edit.outlines, holes, editedOutlineIndex: outlineIndex, edgeRemap, error: null, repaired: false };
 }
 
+/** Remove one corner without changing other boundaries or protected openings. */
+export function prepareVertexDeletion(
+  outlines: Point[][], holes: Point[][], openings: Point[][], outlineIndex: number, vertexIndex: number,
+): OutlineEditResult {
+  const reject = (reason: string): OutlineEditResult => ({ outlines, holes,
+    error: `Delete vertex blocked: ${reason}`, repaired: false });
+  const original = outlines[outlineIndex];
+  if (!Number.isInteger(outlineIndex) || !original || !Number.isInteger(vertexIndex)
+    || vertexIndex < 0 || vertexIndex >= original.length
+    || original.some(point => !Number.isFinite(point.x) || !Number.isFinite(point.y))) {
+    return reject("choose a valid boundary vertex.");
+  }
+  if (original.length <= 3) return reject("the roof must retain at least three vertices.");
+  const candidate = original.filter((_, index) => index !== vertexIndex);
+  // Validate before checking coverage; a local deletion must not repair or
+  // rebuild unrelated geometry or fold cutouts into the boundary.
+  const edit = prepareOutlineEdit(outlines, outlineIndex, candidate, []);
+  if (edit.error) return { ...edit, holes };
+  if (edit.repaired || edit.outlines.length !== outlines.length
+    || JSON.stringify(edit.outlines[outlineIndex]) !== JSON.stringify(candidate)) {
+    return reject("the deletion would change another part of the boundary.");
+  }
+  const previousIndex = (vertexIndex + original.length - 1) % original.length;
+  const previous = original[previousIndex], point = original[vertexIndex], next = original[(vertexIndex + 1) % original.length];
+  const dx = next.x - previous.x, dy = next.y - previous.y;
+  const numericTolerance = 8 * Number.EPSILON * Math.max(1, Math.abs(previous.x), Math.abs(previous.y),
+    Math.abs(point.x), Math.abs(point.y), Math.abs(next.x), Math.abs(next.y));
+  const collinear = Math.abs(dx * (point.y - previous.y) - dy * (point.x - previous.x))
+    / Math.hypot(dx, dy) <= numericTolerance;
+  if (!collinear) {
+    // Removing this corner changes exactly the triangle between its old sides
+    // and the new joined side, for both inward and outward corners.
+    try {
+      const triangle = asPolygon([previous, point, next]);
+      if ([...holes, ...openings].some(opening => polygonClipping.intersection(triangle, asPolygon(opening)).length)) {
+        return reject("the deletion would change a cutout or penetration opening.");
+      }
+    } catch {
+      return reject("the cutouts or penetration openings could not be checked.");
+    }
+  }
+  // Neither old incident side represents the complete joined side. Drop both
+  // drainage mappings rather than copying partial or conflicting markings.
+  const edgeRemap = original.map((_, index) => index === previousIndex || index === vertexIndex
+    ? [] : [index > vertexIndex ? index - 1 : index]);
+  return { outlines: edit.outlines, holes, editedOutlineIndex: outlineIndex, edgeRemap, error: null, repaired: false };
+}
+
 /** Reconcile cutouts and validate the rebuilt boundaries before committing any geometry. */
 function reconcileOutlineScope(
   outlines: Point[][], outlineIndex: number, scope: MultiPolygon, holes: Point[][],

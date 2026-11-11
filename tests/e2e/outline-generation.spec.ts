@@ -357,6 +357,85 @@ test("inserts an Adjust edge vertex and snaps it to a native PDF corner with one
   expect(requests).toHaveLength(1); // Insertion, placement and Undo use the existing drawing and native vectors.
 });
 
+test("selects and deletes an Adjust vertex with Delete or Backspace at zoom and scroll, with safe focus and Undo", async ({ page }, testInfo) => {
+  const plan = await createRedrawPlanPdf();
+  const requests: OutlineRequest[] = [];
+  await routeRedrawOutline(page, plan, requests);
+  await applyGeneratedRedrawOutline(page, plan);
+  const adjust = page.getByRole("button", { name: "Adjust", exact: true });
+  await adjust.click();
+  const zoom = page.getByRole("button", { name: "Zoom in", exact: true });
+  for (let count = 0; count < 10 && await zoom.isEnabled(); count++) await zoom.click();
+  const source = page.getByTestId("paint-source-canvas");
+  const scroll = await source.evaluate(element => {
+    const container = element.parentElement!.parentElement!;
+    container.scrollLeft = container.scrollWidth;
+    container.scrollTop = container.scrollHeight;
+    return { x: container.scrollLeft, y: container.scrollTop };
+  });
+  expect(scroll.x).toBeGreaterThan(0);
+  expect(scroll.y).toBeGreaterThan(0);
+  const canvas = page.getByTestId("paint-interaction-canvas");
+  const overlay = page.getByTestId("accepted-outline-overlay");
+  const accepted = overlay.locator("[data-accepted-outline]");
+  const selected = overlay.locator("[data-outline-vertex][data-selected=true]");
+  const before = (await accepted.getAttribute("points"))!;
+  const savedPoints = before.split(" ").map(pair => pair.split(",").map(Number));
+  const clickedPoint = plan.original[2];
+  // Applying a proposal may rotate the ring's starting vertex; target the saved drawing order.
+  const clickedIndex = savedPoints.findIndex(([x, y]) => Math.hypot(x - clickedPoint.x, y - clickedPoint.y) < 1e-7);
+  expect(clickedIndex).toBeGreaterThanOrEqual(0);
+  const undo = page.getByRole("button", { name: "Undo", exact: true });
+  const clickCorner = async () => {
+    const bounds = (await source.boundingBox())!;
+    await page.mouse.click(bounds.x + clickedPoint.x / 600 * bounds.width, bounds.y + clickedPoint.y / 400 * bounds.height);
+    await expect(canvas).toBeFocused();
+    await expect(selected).toHaveAttribute("data-outline-vertex", `0-${clickedIndex}`);
+    await expect(selected).toHaveAttribute("stroke", "#B000B5");
+    await expect(selected).toHaveAttribute("fill", "none");
+    await expect(accepted).toHaveAttribute("points", before);
+    await expect(undo).toBeDisabled();
+  };
+  const withoutCorner = savedPoints.filter((_, index) => index !== clickedIndex).map(([x, y]) => `${x},${y}`).join(" ");
+  for (const key of ["Delete", "Backspace"]) {
+    await clickCorner();
+    if (key === "Delete") await testInfo.attach("selected-adjust-vertex", { body: await page.screenshot(), contentType: "image/png" });
+    // Send keys to the actual focus target so this catches a broken click-to-focus path.
+    await page.keyboard.press(key);
+    await expect(accepted).toHaveAttribute("points", withoutCorner);
+    await expect(selected).toHaveCount(0);
+    await expect(undo).toBeEnabled();
+    await undo.click();
+    await expect(accepted).toHaveAttribute("points", before);
+    await expect(undo).toBeDisabled();
+  }
+
+  await clickCorner();
+  await page.keyboard.press("Escape");
+  await expect(selected).toHaveCount(0);
+  await page.keyboard.press("Delete");
+  await expect(accepted).toHaveAttribute("points", before);
+  await expect(undo).toBeDisabled();
+
+  await clickCorner();
+  await page.getByRole("combobox", { name: "Select roof area to outline", exact: true }).focus();
+  await expect(selected).toHaveCount(0);
+  await page.keyboard.press("Backspace");
+  await expect(accepted).toHaveAttribute("points", before);
+  await expect(undo).toBeDisabled();
+
+  for (const tool of ["Straighten", "Snap to line", "Redraw"]) {
+    await adjust.click();
+    await clickCorner();
+    await page.getByRole("button", { name: tool, exact: true }).click();
+    await expect(selected).toHaveCount(0);
+    await page.keyboard.press("Delete");
+    await expect(accepted).toHaveAttribute("points", before);
+    await expect(undo).toBeDisabled();
+  }
+  expect(requests).toHaveLength(1);
+});
+
 test("snaps an Adjust vertex to a native PDF endpoint after zoom and scroll, with Alt bypass and one Undo", async ({ page }, testInfo) => {
   const plan = await createRedrawPlanPdf();
   const requests: OutlineRequest[] = [];
